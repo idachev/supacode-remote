@@ -19,7 +19,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import com.idachev.supacoderemote.protocol.ProtocolCodec
@@ -45,6 +48,7 @@ fun TerminalWebView(
   onText: (String) -> Unit = {},
   onCopy: (String) -> Unit = {},
   onOverscroll: (up: Boolean) -> Unit = {},
+  onInput: (String) -> Unit = {},
   onSelection: (TerminalSelection?) -> Unit = {},
 ) {
   val context = LocalContext.current
@@ -52,8 +56,11 @@ fun TerminalWebView(
   val currentOnText by rememberUpdatedState(onText)
   val currentOnCopy by rememberUpdatedState(onCopy)
   val currentOnOverscroll by rememberUpdatedState(onOverscroll)
+  val currentOnInput by rememberUpdatedState(onInput)
   val currentOnSelection by rememberUpdatedState(onSelection)
   var ready by remember { mutableStateOf(false) }
+  // Височината на терминала в страницата (dp); до първия доклад WebView-то е цялото място.
+  var pageHeight by remember { mutableStateOf<Int?>(null) }
   val main = remember { Handler(Looper.getMainLooper()) }
 
   val webView = remember {
@@ -124,6 +131,21 @@ fun TerminalWebView(
         fun overscroll(direction: String) {
           main.post { currentOnOverscroll(direction == "up") }
         }
+
+        /**
+         * Височината на терминала (CSS px = dp). WebView-то става точно толкова: така при
+         * zoom видимата част не може да излезе в празното извън терминала.
+         */
+        @JavascriptInterface
+        fun height(dp: Int) {
+          main.post { pageHeight = dp }
+        }
+
+        /** Байтовете на xterm.js за скрола от `supa.wheel` (mouse report или стрелки). */
+        @JavascriptInterface
+        fun input(data: String) {
+          main.post { currentOnInput(data) }
+        }
       }, "SupaBridge")
       installSelectionGesture(this)
       loadUrl("file:///android_asset/terminal/index.html")
@@ -143,7 +165,9 @@ fun TerminalWebView(
     commands.collect { cmd -> webView.evaluateJavascript(cmd.toJs(), null) }
   }
 
-  AndroidView(factory = { webView }, modifier = modifier)
+  // height е предпочитана височина: по-висок терминал взема цялото място и се реже отгоре.
+  val size = pageHeight?.let { Modifier.height(it.dp) } ?: Modifier.fillMaxHeight()
+  AndroidView(factory = { webView }, modifier = modifier.then(size))
 }
 
 private const val TAG = "TerminalWebView"
@@ -192,6 +216,7 @@ private fun TerminalCommand.toJs(): String = when (this) {
   is TerminalCommand.Resize -> "supa.resize($cols,$rows)"
   is TerminalCommand.ScrollPages -> "supa.scrollPages($pages)"
   TerminalCommand.ScrollToBottom -> "supa.scrollToBottom()"
+  is TerminalCommand.Wheel -> "supa.wheel(${if (up) -1 else 1})"
   TerminalCommand.RequestText -> "supa.copyText()"
   is TerminalCommand.Select -> "supa.selectRange(${start.col},${start.row},${end.col},${end.row})"
   TerminalCommand.CopySelection -> "supa.copySelection()"

@@ -1,9 +1,10 @@
 // Мостът между xterm.js и приложението.
 //
-// Kotlin вика supa.init / write / resize / scrollPages / scrollToBottom / copyText;
+// Kotlin вика supa.init / write / resize / scrollPages / scrollToBottom / wheel / copyText;
 // selectStart / selectMove / selectEnd (от дългото натискане в Android), selectRange /
 // copySelection / clearSelection (от лентата за маркиране); страницата вика
-// SupaBridge.ready(), text(), copy(), selection(), selectionGone() и overscroll().
+// SupaBridge.ready(), text(), copy(), selection(), selectionGone(), overscroll(), input()
+// и height().
 //
 // Размерът на терминала е винаги този на Mac-а (cols × rows от `attached` и `size`).
 // Страницата никога не го сменя сама: вместо това подбира шрифта така, че всички колони
@@ -24,7 +25,9 @@
     letterSpacing: 0,
     cursorBlink: false,
     allowProposedApi: false,
-    disableStdin: true,
+    // Входът от xterm.js (onData) не се чете, освен по време на `supa.wheel` (виж там).
+    // disableStdin би спрял и байтовете за скрола, затова е false.
+    disableStdin: false,
     // Mac-ът праща сурови VT байтове; `\n` си е `\n`.
     convertEol: false,
     minimumContrastRatio: 1,
@@ -44,7 +47,7 @@
   // („echchho“). Освен това xterm.js сам отговаря на въпросите на програмата (DA, позиция
   // на курсора) — втори отговор след този на Ghostty би влязъл в PTY-то като текст.
   // Затова единственият път за писане е полето под терминала; тук клавиатурата не се
-  // отваря и onData не се чете.
+  // отваря и onData не се чете (освен байтовете за скрола от `supa.wheel`).
   term.textarea.setAttribute('readonly', 'readonly');
   term.textarea.setAttribute('inputmode', 'none');
 
@@ -107,6 +110,10 @@
     },
     scrollToBottom: function () {
       term.scrollToBottom();
+    },
+    /** Скрол като от колелото / trackpad-а; [dir] е -1 нагоре, 1 надолу. Виж wheel(). */
+    wheel: function (dir) {
+      wheel(dir);
     },
     /**
      * Историята и екранът като обикновен текст, за да се маркира и копира в приложението
@@ -244,22 +251,6 @@
   var lastOverscroll = 0;
 
   /**
-   * Може ли страницата сама да се премести в посоката на пръста, без да покаже нещо извън
-   * терминала. Без zoom — никога (страницата е колкото терминала или по-малка). При zoom
-   * видимата част се мести само докато не излезе под или над терминала: отдолу е празното
-   * място на WebView-то, което иначе изпълва екрана (черният екран).
-   */
-  function pageCanPan(dy) {
-    var vv = window.visualViewport;
-    if (!vv) return false;
-    var rect = term.element.getBoundingClientRect();
-    var top = rect.top + window.scrollY;
-    var bottom = rect.bottom + window.scrollY;
-    if (dy < 0) return vv.pageTop + vv.height < bottom - 1;
-    return vv.pageTop > top + 1;
-  }
-
-  /**
    * Скрол отвъд ръба на историята на телефона: нагоре при най-стария ред (или без история —
    * напр. Claude Code на цял екран) праща PgUp към програмата, надолу при живия край — PgDn.
    * Мъртва зона, за да не стреля обикновен скрол, който само стига ръба, и пауза между
@@ -282,18 +273,18 @@
     }
   }
 
-  // Слуша се на целия документ, за да важи и за празното място под терминала.
+  function startTouch(t) {
+    touch = { lastX: t.clientX, lastY: t.clientY, over: 0, overDir: null };
+  }
+
+  // Слуша се на целия документ, за да важи и за празното място над терминала. Само слуша
+  // (passive): страницата няма какво да скролва, а pinch zoom-ът и местенето при zoom са
+  // изцяло на Chromium — WebView-то е колкото терминала и не показва нищо извън него.
   document.addEventListener('touchstart', function (e) {
-    touch = e.touches.length === 1
-      ? { lastX: e.touches[0].clientX, lastY: e.touches[0].clientY, over: 0, overDir: null }
-      : null;
+    if (e.touches.length === 1) startTouch(e.touches[0]);
+    else touch = null;
   }, { capture: true, passive: true });
 
-  // xterm.js скролва историята сам (scrollTop) и пуска събитието нататък, щом стигне ръба й.
-  // Тогава Chromium мести страницата: при zoom видимата част слиза под терминала и остава
-  // празно. Затова вертикалното плъзгане с един пръст не мести страницата, освен при zoom
-  // в рамките на терминала; вместо това на ръба отива PgUp / PgDn. Хоризонталното плъзгане
-  // при zoom остава на WebView-то. Два пръста (pinch zoom) не се пипат.
   document.addEventListener('touchmove', function (e) {
     if (!touch || e.touches.length !== 1) return;
     var x = e.touches[0].clientX;
@@ -303,18 +294,21 @@
     touch.lastX = x;
     touch.lastY = y;
     if (dy === 0 || Math.abs(dx) > Math.abs(dy)) return;
-    if (pageCanPan(dy)) { touch.over = 0; touch.overDir = null; return; }
-    if (e.cancelable) e.preventDefault();
     trackOverscroll(dy);
-  }, { capture: true, passive: false });
+  }, { capture: true, passive: true });
 
-  function endTouch() { touch = null; }
+  // След pinch единият пръст може да остане: от него започва ново плъзгане.
+  function endTouch(e) {
+    if (e.touches.length === 1) startTouch(e.touches[0]);
+    else touch = null;
+  }
   document.addEventListener('touchend', endTouch, { capture: true, passive: true });
   document.addEventListener('touchcancel', endTouch, { capture: true, passive: true });
 
   // Колелото на мишката (emulator, таблет с мишка): същото правило, натрупано по deltaY.
   var wheelOver = 0, wheelDir = null;
   term.element.addEventListener('wheel', function (e) {
+    if (wheeling) return; // скролът от бутоните не е скрол до ръба
     var buffer = term.buffer.active;
     var dir = null;
     if (e.deltaY < 0 && buffer.viewportY <= 0) dir = 'up';
@@ -329,16 +323,65 @@
     }
   }, { capture: true, passive: true });
 
+  // ---- Скрол като от колелото (плаващите бутони) ----
+  //
+  // Изкуствен WheelEvent на xterm.js: той сам решава какво значи — mouse report в
+  // кодирането на програмата, ако тя следи мишката (Claude Code), стрелки в alternate
+  // буфера без мишка, иначе превърта историята на телефона. Байтовете от onData / onBinary
+  // се пращат само докато трае това събитие (xterm.js ги вдига синхронно); всичко друго от
+  // onData — отговори на DA, клавиатура — пак не стига до PTY-то.
+  var WHEEL_LINES = 3;
+  var wheeling = false;
+
+  function wheel(dir) {
+    var screen = term.element.querySelector('.xterm-screen');
+    var rect = screen.getBoundingClientRect();
+    wheeling = true;
+    try {
+      screen.dispatchEvent(new WheelEvent('wheel', {
+        deltaY: dir * WHEEL_LINES,
+        deltaMode: WheelEvent.DOM_DELTA_LINE,
+        clientX: rect.left + rect.width / 2,
+        clientY: rect.top + rect.height / 2,
+        bubbles: true,
+        cancelable: true,
+      }));
+    } finally {
+      wheeling = false;
+    }
+  }
+
+  term.onData(function (data) {
+    if (wheeling && bridge.input) bridge.input(data);
+  });
+  // X10 кодирането дава байтове над 127, които мостът (низ, UTF-8) би развалил: само ASCII.
+  term.onBinary(function (data) {
+    if (wheeling && bridge.input && !/[^\x00-\x7f]/.test(data)) bridge.input(data);
+  });
+
   // Дългото натискане е наше: без системното меню и маркиране на WebView-то.
   document.addEventListener('contextmenu', function (e) { e.preventDefault(); });
 
-  /** Терминалът стои долу (index.html): body е поне колкото прозореца. */
+  /** body е точно колкото прозореца; терминалът е долу в него (index.html). */
   function layout() {
-    document.body.style.minHeight = window.innerHeight + 'px';
+    // clientHeight, не innerHeight: при zoom innerHeight е само видимата част.
+    document.body.style.height = document.documentElement.clientHeight + 'px';
     fit();
   }
 
+  // Височината на терминала (CSS px = dp) към Kotlin: WebView-то става точно толкова и
+  // долу в мястото си, а празното над него е на Compose, извън страницата.
+  var reportedHeight = 0;
+  function reportHeight() {
+    var h = Math.ceil(term.element.getBoundingClientRect().height);
+    if (!h || h === reportedHeight) return;
+    reportedHeight = h;
+    if (bridge.height) bridge.height(h);
+  }
+  if (window.ResizeObserver) new ResizeObserver(reportHeight).observe(term.element);
+
   window.addEventListener('resize', layout);
   layout();
+  reportHeight();
   bridge.ready();
 })();

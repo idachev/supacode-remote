@@ -131,19 +131,22 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
         commands = vm.commands,
         onReady = vm::onWebReady,
         onGone = vm::onWebGone,
-        modifier = Modifier.fillMaxSize().testTag("terminal-web"),
+        // Долу в мястото: WebView-то е колкото терминала, празното над него е на Box-а.
+        modifier = Modifier.fillMaxWidth().align(Alignment.BottomCenter).testTag("terminal-web"),
         onText = { copyText = it },
         onCopy = { text -> copyToClipboard(context, text, container.notices) },
         onOverscroll = vm::onOverscroll,
+        onInput = vm::onWheelInput,
         onSelection = vm::onSelection,
       )
-      // PgUp / PgDn под палеца, за историята на самата програма (Claude Code).
+      // Скрол под палеца, като от trackpad-а (Claude Code го превърта така). PgUp / PgDn са в
+      // реда с клавиши: в shell те вървят по историята на командите.
       Column(
         verticalArrangement = Arrangement.spacedBy(12.dp),
         modifier = Modifier.align(Alignment.CenterEnd).padding(end = 8.dp),
       ) {
-        RepeatKeyButton("PgUp", tag = "float-pgup") { vm.sendKey(TerminalKeys.PAGE_UP) }
-        RepeatKeyButton("PgDn", tag = "float-pgdn") { vm.sendKey(TerminalKeys.PAGE_DOWN) }
+        RepeatKeyButton("▲", description = "Скрол нагоре", tag = "float-scroll-up") { vm.scrollWheel(up = true) }
+        RepeatKeyButton("▼", description = "Скрол надолу", tag = "float-scroll-down") { vm.scrollWheel(up = false) }
       }
       // Маркираното с дълго натискане: лентата е тук, не в страницата, за да не расте с zoom-а.
       if (state.selection != null) {
@@ -170,14 +173,14 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
  * после след кратка пауза на всеки 150 ms ([repeatPress]).
  */
 @Composable
-private fun RepeatKeyButton(label: String, tag: String, onFire: () -> Unit) {
+private fun RepeatKeyButton(label: String, description: String, tag: String, onFire: () -> Unit) {
   Box(
     contentAlignment = Alignment.Center,
     modifier = Modifier
       .size(52.dp)
       .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f), CircleShape)
       .testTag(tag)
-      .repeatPress(description = null, onFire = onFire),
+      .repeatPress(description = description, onFire = onFire),
   ) {
     Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
   }

@@ -8,15 +8,14 @@
   <link rel="stylesheet" href="xterm.css">
   <style>
     html, body { margin: 0; padding: 0; background: #1e1e1e; overflow-x: hidden; }
-    /* Без отскок и разтягане на страницата на ръба: терминалът не излиза от мястото си. */
+    /* Страницата никога не скролва: WebView-то е точно колкото терминала (височината идва
+       в Kotlin през SupaBridge.height), а по-висок от мястото терминал се реже отгоре и
+       живите редове остават долу. Така и при zoom видимата част не може да излезе от
+       терминала. Височината на body е от terminal.js: в WebView-то 100% и 100vh излизат 0.
+       Без overflow: hidden — той спира и местенето при zoom. */
     html, body { overscroll-behavior: none; }
-    /* Терминалът е по ширината на екрана и често е по-нисък от него: стои долу, до полето
-       за писане, а празното е над него. Минималната височина на body е от terminal.js
-       (височината на прозореца): в WebView-то 100% и 100vh тук излизат 0. min-height, не
-       height — по-висок терминал (отворена клавиатура) расте надолу и се скролва, вместо
-       да се реже отгоре. */
-    body { display: flex; flex-direction: column; }
-    #term { margin-top: auto; align-self: flex-start; }
+    body { display: flex; flex-direction: column; justify-content: flex-end; }
+    #term { flex: none; align-self: flex-start; }
     /* Скролбарът на xterm би отнел ширина от колоните. */
     .xterm .xterm-viewport { scrollbar-width: none; }
     .xterm .xterm-viewport::-webkit-scrollbar { display: none; }

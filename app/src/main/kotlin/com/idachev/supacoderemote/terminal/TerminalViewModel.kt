@@ -43,6 +43,13 @@ sealed interface TerminalCommand {
   /** Обратно до живия край на терминала. */
   data object ScrollToBottom : TerminalCommand
 
+  /**
+   * Скрол като от колелото / trackpad-а: страницата праща WheelEvent на xterm.js и той прави
+   * каквото прави за истинско колело — mouse report, ако програмата следи мишката, стрелки
+   * в alternate буфера, иначе превърта историята на телефона. Байтовете идват през `onInput`.
+   */
+  data class Wheel(val up: Boolean) : TerminalCommand
+
   /** Целият текст на терминала (историята и екрана) обратно към приложението, за копиране. */
   data object RequestText : TerminalCommand
 
@@ -317,6 +324,21 @@ class TerminalViewModel(
   fun onOverscroll(up: Boolean) {
     if (!overscrollToProgram() || _state.value.phase !is AttachPhase.Attached) return
     sendRaw(if (up) TerminalKeys.PAGE_UP else TerminalKeys.PAGE_DOWN)
+  }
+
+  /**
+   * Плаващите бутони „Скрол нагоре / надолу“: скрол като от trackpad-а, не PgUp / PgDn —
+   * в shell PgUp / PgDn вървят по историята на командите. Тихо без attach, както скролът.
+   */
+  fun scrollWheel(up: Boolean) {
+    if (_state.value.phase !is AttachPhase.Attached) return
+    _commands.trySend(TerminalCommand.Wheel(up))
+  }
+
+  /** Байтовете, които xterm.js е произвел за скрола от [scrollWheel] (mouse report, стрелки). */
+  fun onWheelInput(bytes: String) {
+    if (bytes.isEmpty() || _state.value.phase !is AttachPhase.Attached) return
+    sendRaw(bytes)
   }
 
   fun toggleCtrl() = _state.update { it.copy(ctrlSticky = !it.ctrlSticky) }

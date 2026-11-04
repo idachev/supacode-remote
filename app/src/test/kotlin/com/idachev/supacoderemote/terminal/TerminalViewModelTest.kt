@@ -234,6 +234,25 @@ class TerminalViewModelTest {
   }
 
   @Test
+  fun `плаващите бутони искат скрол от страницата, а байтовете му отиват към PTY-то`() = runTest(dispatcher) {
+    link.hostSession.value = 1
+    runCurrent()
+    vm.onWebReady()
+    val commands = collectCommands()
+    vm.scrollWheel(up = true)
+    vm.onWheelInput("")
+    assertTrue("без attach — нищо", commands.none { it is TerminalCommand.Wheel })
+    emit(Attached(1, "c1", 120, 40))
+    vm.scrollWheel(up = true)
+    vm.scrollWheel(up = false)
+    vm.onWheelInput("\u001b[<64;61;21M")
+    vm.onWheelInput("")
+    runCurrent()
+    assertEquals(listOf(TerminalCommand.Wheel(true), TerminalCommand.Wheel(false)), commands.filterIsInstance<TerminalCommand.Wheel>())
+    assertEquals(listOf("\u001b[<64;61;21M"), inputs())
+  }
+
+  @Test
   fun `без attach нищо не се пише`() = runTest(dispatcher) {
     link.hostSession.value = 1
     runCurrent()
