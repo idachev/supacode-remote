@@ -9,14 +9,19 @@
   <style>
     html, body { margin: 0; padding: 0; background: #1e1e1e; }
     /* Страницата не скролва по вертикала: WebView-то е точно колкото терминала (височината
-       идва в Kotlin през SupaBridge.height), а по-висок от мястото терминал се реже отгоре и
-       живите редове остават долу. Височината на body е от terminal.js: в WebView-то 100% и
-       100vh излизат 0. По хоризонтала страницата скролва само при фиксиран размер на текста,
-       по-широк от екрана — точно до краищата на терминала. */
+       идва в Kotlin през SupaBridge.height). По-висок от мястото терминал се реже в #frame
+       (overflow-y: clip), а terminal.js го мести (translateY) така, че редът с курсора да се
+       вижда: при пълен екран последният ред е долу, при съдържание само в горните редове
+       (нов shell) се вижда горната част. Височината на body е от terminal.js: в WebView-то
+       100% и 100vh излизат 0. По хоризонтала страницата скролва само при фиксиран размер на
+       текста, по-широк от екрана — точно до краищата на терминала. clip, а не hidden: hidden
+       би направил #frame скролер и по хоризонтала, а clip не скролва и програмно. */
     html, body { overscroll-behavior: none; }
     html { scrollbar-width: none; }
     html::-webkit-scrollbar { display: none; }
     body { display: flex; flex-direction: column; justify-content: flex-end; }
+    #frame { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;
+      justify-content: flex-end; overflow-x: visible; overflow-y: clip; }
     #term { flex: none; align-self: flex-start; }
     /* Скролбарът на xterm би отнел ширина от колоните. */
     .xterm .xterm-viewport { scrollbar-width: none; }
@@ -26,7 +31,7 @@
   </style>
 </head>
 <body>
-  <div id="term"></div>
+  <div id="frame"><div id="term"></div></div>
   <script src="xterm.js"></script>
   <script src="terminal.js"></script>
 </body>

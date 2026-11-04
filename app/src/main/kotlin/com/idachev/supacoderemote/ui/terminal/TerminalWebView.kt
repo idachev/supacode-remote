@@ -172,7 +172,7 @@ fun TerminalWebView(
     commands.collect { cmd -> webView.evaluateJavascript(cmd.toJs(), null) }
   }
 
-  // height е предпочитана височина: по-висок терминал взема цялото място и се реже отгоре.
+  // height е предпочитана височина: по-висок терминал взема цялото място, а страницата показва частта с курсора.
   val size = pageHeight?.let { Modifier.height(it.dp) } ?: Modifier.fillMaxHeight()
   AndroidView(factory = { webView }, modifier = modifier.then(size))
 }

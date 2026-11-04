@@ -399,7 +399,73 @@
   function layout() {
     document.body.style.height = document.documentElement.clientHeight + 'px';
     fit();
+    follow();
   }
+
+  // ---- По-висок от прозореца терминал: показаната част следва курсора ----
+  //
+  // Mac-ът може да е 50 реда, а на телефона да влизат 30. #frame реже (index.html), а тук
+  // терминалът се мести надолу с translateY, за да се вижда редът с курсора и съдържанието
+  // около него: при пълен екран последният ред е долу, а нов shell (банер и промпт в горните
+  // редове, празно под тях) се вижда отгоре. Ръчен вертикален pan няма: скритите горни редове
+  // при пълен екран се виждат, като се превърти историята.
+
+  /**
+   * Отместването отгоре (px в терминала) на показаната част. [rows] реда по [rowH] px,
+   * [height] px място, [last] е броят редове до последния със съдържание, [cursor] е редът
+   * на курсора в показаните или -1, ако не е на екрана (превъртяна история).
+   */
+  function visibleTop(rows, rowH, height, last, cursor) {
+    var total = rows * rowH;
+    if (total <= height) return 0;
+    if (cursor >= 0) last = Math.max(last, cursor + 1);
+    var top = Math.max(0, Math.min(total - height, last * rowH - height));
+    if (cursor >= 0 && cursor * rowH < top) top = cursor * rowH;
+    return top;
+  }
+
+  /** Броят редове до последния непразен в показаното (с историята, ако е превъртяна). */
+  function lastContentRow() {
+    var buffer = term.buffer.active;
+    for (var r = term.rows - 1; r >= 0; r--) {
+      var line = buffer.getLine(buffer.viewportY + r);
+      if (line && line.translateToString(true) !== '') return r + 1;
+    }
+    return 0;
+  }
+
+  var shift = 0;
+  function follow() {
+    var screen = term.element.querySelector('.xterm-screen');
+    var height = document.documentElement.clientHeight;
+    var total = term.element.getBoundingClientRect().height;
+    var next = 0;
+    if (screen && height && total > height) {
+      var rowH = screen.getBoundingClientRect().height / term.rows;
+      var buffer = term.buffer.active;
+      var cursor = buffer.baseY + buffer.cursorY - buffer.viewportY;
+      if (cursor < 0 || cursor >= term.rows) cursor = -1;
+      var top = visibleTop(term.rows, rowH, height, lastContentRow(), cursor);
+      // Долният край на терминала е долу в #frame; показано е [total − height, total].
+      next = Math.round(total - height - top);
+    }
+    if (next === shift) return;
+    shift = next;
+    term.element.style.transform = shift ? 'translateY(' + shift + 'px)' : '';
+  }
+
+  // onRender хваща изхода, курсора, превъртането на историята и resize; агентските TUI-та
+  // рисуват много пъти в секунда, затова веднъж на кадър.
+  var followQueued = false;
+  term.onRender(function () {
+    if (followQueued) return;
+    followQueued = true;
+    requestAnimationFrame(function () {
+      followQueued = false;
+      follow();
+    });
+  });
+  window.supa.visibleTop = visibleTop; // за проверка от DevTools / тестовете на страницата
 
   // Височината на терминала (CSS px = dp) към Kotlin: WebView-то става точно толкова и
   // долу в мястото си, а празното над него е на Compose, извън страницата.
