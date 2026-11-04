@@ -174,11 +174,11 @@ private fun installSelectionGesture(webView: WebView) {
     }
     when (event.actionMasked) {
       MotionEvent.ACTION_MOVE -> webView.evaluateJavascript("supa.selectMove(${event.x},${event.y})", null)
-      MotionEvent.ACTION_UP -> {
+      // CANCEL също завършва маркирането: лентата трябва да знае докъде е стигнало плъзгането.
+      MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
         selecting = false
         webView.evaluateJavascript("supa.selectEnd(${event.x},${event.y})", null)
       }
-      MotionEvent.ACTION_CANCEL -> selecting = false
     }
     true
   }
