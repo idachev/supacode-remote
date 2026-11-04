@@ -83,6 +83,8 @@ data class TerminalUiState(
   val selection: TerminalSelection? = null,
   /** „Пауза“: байтовете изход, задържани докато има маркирано; `null` — няма пауза. */
   val pausedBytes: Long? = null,
+  /** Горната лента и полето за писане; по подразбиране скрити (терминалът на цял екран). */
+  val bars: TerminalBars = TerminalBars(),
 )
 
 /**
@@ -101,9 +103,11 @@ class TerminalViewModel(
   private val overscrollToProgram: () -> Boolean = { true },
   /** Таванът на „Пауза“; над него паузата спира сама и маркираното се отменя. */
   pauseCapBytes: Long = OutputPause.CAP_BYTES,
+  /** Общата памет за лентите (за процеса): нов таб тръгва както е оставен последният. */
+  private val bars: MutableStateFlow<TerminalBars> = MutableStateFlow(TerminalBars()),
 ) : ViewModel() {
 
-  private val _state = MutableStateFlow(TerminalUiState())
+  private val _state = MutableStateFlow(TerminalUiState(bars = bars.value))
   val state: StateFlow<TerminalUiState> = _state.asStateFlow()
 
   private val _commands = Channel<TerminalCommand>(Channel.UNLIMITED)
@@ -237,6 +241,22 @@ class TerminalViewModel(
 
   fun scrollToBottom() {
     _commands.trySend(TerminalCommand.ScrollToBottom)
+  }
+
+  /** Плаващият бутон горе: показва или скрива горната лента. */
+  fun toggleTopBar() {
+    setBars { it.copy(topBar = !it.topBar) }
+  }
+
+  /** Бутонът с клавиатурата: разпъва или прибира полето за писане с реда с клавиши. */
+  fun setInputShown(shown: Boolean) {
+    setBars { it.copy(input = shown) }
+  }
+
+  private fun setBars(change: (TerminalBars) -> TerminalBars) {
+    val next = change(_state.value.bars)
+    bars.value = next
+    _state.update { it.copy(bars = next) }
   }
 
   /** Иска текста на терминала; идва обратно през `onText` на WebView-то. */

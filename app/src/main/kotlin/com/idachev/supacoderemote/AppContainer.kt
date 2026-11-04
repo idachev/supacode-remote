@@ -12,6 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import com.idachev.supacoderemote.terminal.TerminalBars
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -43,6 +44,9 @@ class AppContainer(context: Context) {
   val sessions: SessionsRepository = SessionsRepository(relay, appScope)
 
   val notices: Notices = Notices()
+
+  /** Показаните ленти на терминала; помнят се, докато процесът живее. */
+  val terminalBars: MutableStateFlow<TerminalBars> = MutableStateFlow(TerminalBars())
 
   /** Дали приложението се вижда. Пише го [SupacodeRemoteApp] от ProcessLifecycleOwner. */
   val appInForeground: MutableStateFlow<Boolean> = MutableStateFlow(false)

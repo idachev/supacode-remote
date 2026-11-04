@@ -10,6 +10,18 @@ import com.idachev.supacoderemote.Notices
 import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.Role
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalFocusManager
@@ -84,17 +96,32 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
       notices = container.notices,
       contentId = key.contentId,
       overscrollToProgram = { container.settingsStore.overscrollToProgram.value },
+      bars = container.terminalBars,
     )
   }
   val state by vm.state.collectAsStateWithLifecycle()
   val textSize by container.settingsStore.textSize.collectAsStateWithLifecycle()
   val context = LocalContext.current
   var copyText by remember { mutableStateOf<String?>(null) }
+  // Расте с всяко докосване на бутона с клавиатурата: само тогава полето взема фокуса и
+  // клавиатурата излиза, а не при всяко показване (напр. при отваряне на таб с разпънато поле).
+  var focusInput by remember { mutableIntStateOf(0) }
+  // Текстът в полето живее тук, а не в InputBar: прибраното поле не губи неизпратеното.
+  val field = rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue("")) }
+  val focusManager = LocalFocusManager.current
+  val keyboard = LocalSoftwareKeyboardController.current
+  val collapseInput = {
+    focusManager.clearFocus()
+    keyboard?.hide()
+    vm.setInputShown(false)
+  }
 
   Scaffold(
     topBar = {
-      Column {
-        TopAppBar(
+      // Скрита горна лента: банерът за връзката остава, под status bar-а.
+      val insets = if (state.bars.topBar) Modifier else Modifier.windowInsetsPadding(WindowInsets.statusBars)
+      Column(insets) {
+        if (state.bars.topBar) TopAppBar(
           title = {
             Column {
               Text(key.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -117,8 +144,10 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
       }
     },
     bottomBar = {
-      InputBar(
+      if (state.bars.input) InputBar(
         vm = vm,
+        focusRequest = focusInput,
+        fieldState = field,
         ctrlSticky = state.ctrlSticky,
         liveKeys = state.liveKeys,
         suggesting = state.suggesting,
@@ -164,6 +193,32 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
       state.pausedBytes?.let { bytes ->
         PauseChip(bytes, modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp))
       }
+      // Горе вдясно: горната лента (заглавие, „Назад“, „Копирай“) се показва само при нужда.
+      FloatingBarButton(
+        icon = if (state.bars.topBar) TerminalIcons.ArrowUp else TerminalIcons.ArrowDown,
+        description = if (state.bars.topBar) "Скрий горната лента" else "Покажи горната лента",
+        tag = "float-top-bar",
+        modifier = Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 8.dp),
+        onClick = vm::toggleTopBar,
+      )
+      // Долу вдясно: полето за писане. Докато има маркирано, бутонът се скрива, за да не
+      // покрива лентата за маркиране.
+      if (state.selection == null) {
+        FloatingBarButton(
+          icon = if (state.bars.input) TerminalIcons.KeyboardHide else TerminalIcons.Keyboard,
+          description = if (state.bars.input) "Скрий полето за писане" else "Покажи полето за писане",
+          tag = "float-input",
+          modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 8.dp, end = 8.dp),
+          onClick = {
+            if (state.bars.input) {
+              collapseInput()
+            } else {
+              vm.setInputShown(true)
+              focusInput++
+            }
+          },
+        )
+      }
       PhaseOverlay(state.phase, onReattach = vm::reattach, modifier = Modifier.align(Alignment.Center))
     }
   }
@@ -185,6 +240,28 @@ private fun RepeatKeyButton(label: String, description: String, tag: String, onF
       .repeatPress(description = description, onFire = onFire),
   ) {
     Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+  }
+}
+
+/** Полупрозрачен кръгъл бутон с икона, със същия размер и вид като ▲ ▼ за скрола. */
+@Composable
+private fun FloatingBarButton(
+  icon: ImageVector,
+  description: String,
+  tag: String,
+  modifier: Modifier = Modifier,
+  onClick: () -> Unit,
+) {
+  Box(
+    contentAlignment = Alignment.Center,
+    modifier = modifier
+      .size(52.dp)
+      .clip(CircleShape)
+      .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
+      .clickable(onClickLabel = description, role = Role.Button, onClick = onClick)
+      .testTag(tag),
+  ) {
+    Icon(icon, contentDescription = description, tint = MaterialTheme.colorScheme.onSurfaceVariant)
   }
 }
 
@@ -241,17 +318,36 @@ private fun OverlayCard(modifier: Modifier, content: @Composable () -> Unit) {
 @Composable
 private fun InputBar(
   vm: TerminalViewModel,
+  /** Расте при всяко разпъване с бутона: полето (или „Живи клавиши“) взема фокуса. */
+  focusRequest: Int,
+  /** Текстът в полето за ред; държи го екранът, за да оцелее прибирането. */
+  fieldState: MutableState<TextFieldValue>,
   ctrlSticky: Boolean,
   liveKeys: Boolean,
   suggesting: Boolean,
   suggestions: List<String>,
   modifier: Modifier = Modifier,
 ) {
-  var field by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue("")) }
+  var field by fieldState
   val focusManager = LocalFocusManager.current
   // Паметта за думата в процес живее с екрана; самото View — само докато режимът е включен.
   val liveKeysInput = remember { LiveKeys(vm::sendLive) }
   var liveView by remember { mutableStateOf<LiveKeysView?>(null) }
+  val fieldFocus = remember { FocusRequester() }
+  val keyboard = LocalSoftwareKeyboardController.current
+
+  // Разпънато с бутона: курсорът в полето и клавиатурата отворена, без второ докосване.
+  LaunchedEffect(focusRequest) {
+    if (focusRequest == 0) return@LaunchedEffect
+    // Полето е добавено в този кадър; фокусът хваща едва след layout-а.
+    withFrameNanos { }
+    if (liveKeys) {
+      liveView?.let { view -> view.post { view.showKeyboard() } }
+    } else {
+      fieldFocus.requestFocus()
+      keyboard?.show()
+    }
+  }
 
   // Включени „Живи клавиши“: клавиатурата пише в невидимото поле, а не в полето за ред.
   LaunchedEffect(liveKeys, liveView) {
@@ -337,7 +433,7 @@ private fun InputBar(
         placeholder = { Text(if (ctrlSticky) "Ctrl + буква…" else "Текст за терминала") },
         textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
         maxLines = 4,
-        modifier = Modifier.weight(1f).testTag("terminal-input"),
+        modifier = Modifier.weight(1f).focusRequester(fieldFocus).testTag("terminal-input"),
         )
       }
       Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {

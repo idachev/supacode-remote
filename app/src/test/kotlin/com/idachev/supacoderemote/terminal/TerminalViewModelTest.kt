@@ -469,4 +469,36 @@ class TerminalViewModelTest {
     store.clear()
     assertEquals(DetachRequest("c1"), link.sent.last())
   }
+
+  @Test
+  fun `по подразбиране двете ленти са скрити и терминалът е на цял екран`() {
+    assertEquals(TerminalBars(topBar = false, input = false), vm.state.value.bars)
+  }
+
+  @Test
+  fun `бутоните показват и скриват лентите, без да пращат нищо към PTY-то`() = runTest(dispatcher) {
+    vm.toggleTopBar()
+    assertTrue(vm.state.value.bars.topBar)
+    vm.setInputShown(true)
+    assertTrue(vm.state.value.bars.input)
+    vm.toggleTopBar()
+    vm.setInputShown(false)
+    assertEquals(TerminalBars(), vm.state.value.bars)
+    runCurrent()
+    assertTrue(link.sent.isEmpty())
+  }
+
+  @Test
+  fun `следващият таб тръгва с лентите, както са оставени в последния`() {
+    val memory = MutableStateFlow(TerminalBars())
+    val first = TerminalViewModel(link, Notices(), "c1", bars = memory)
+    store.put("first", first)
+    first.toggleTopBar()
+    first.setInputShown(true)
+    val second = TerminalViewModel(link, Notices(), "c2", bars = memory)
+    store.put("second", second)
+    assertEquals(TerminalBars(topBar = true, input = true), second.state.value.bars)
+    second.setInputShown(false)
+    assertEquals(TerminalBars(topBar = true, input = false), memory.value)
+  }
 }
