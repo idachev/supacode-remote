@@ -1,0 +1,37 @@
+# Gradle
+.gradle/
+.kotlin/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+local.properties
+
+# Android
+*.apk
+*.aab
+*.ap_
+*.dex
+captures/
+.cxx/
+
+# Signing keys and secrets
+*.jks
+*.keystore
+*.pem
+.env
+.env.*
+
+# IDE
+.idea/
+*.iml
+.DS_Store
+
+# Logs, scratch and local screenshots
+tmp/
+out/
+*.log
+
+# Node (tools/)
+node_modules/
+
+# Local deploy target of scripts/deploy-apk.sh (APK_DIR)
+scripts/deploy-apk.local
