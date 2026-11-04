@@ -1,13 +1,19 @@
 package com.idachev.supacoderemote.relay
 
+import com.idachev.supacoderemote.protocol.AttachRequest
+import com.idachev.supacoderemote.protocol.Attached
 import com.idachev.supacoderemote.protocol.ClientMessage
+import com.idachev.supacoderemote.protocol.DetachRequest
+import com.idachev.supacoderemote.protocol.Detached
 import com.idachev.supacoderemote.protocol.HelloReply
 import com.idachev.supacoderemote.protocol.HelloRequest
+import com.idachev.supacoderemote.protocol.Output
 import com.idachev.supacoderemote.protocol.PING
 import com.idachev.supacoderemote.protocol.ProtocolCodec
 import com.idachev.supacoderemote.protocol.RelayStatus
 import com.idachev.supacoderemote.protocol.RelayUrl
 import com.idachev.supacoderemote.protocol.ServerMessage
+import com.idachev.supacoderemote.protocol.SizeChanged
 import com.idachev.supacoderemote.settings.RelaySettings
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -135,6 +141,12 @@ class RelayClient(
   private var lanOffered = false
 
   /**
+   * Терминалът, закачен по relay сокета (Mac-ът държи по един attach на връзка). Щом се вдигне
+   * LAN, за него тръгва `detach` по relay-а, за да не стрийми Mac-ът по двата пътя.
+   */
+  private var relayAttached: String? = null
+
+  /**
    * Всички съобщения в реда на пристигане. Читателят на OkHttp чака, ако буферът е пълен,
    * вместо да изпусне байтове на терминала.
    */
@@ -196,9 +208,32 @@ class RelayClient(
   /** По LAN, ако е горе, иначе по relay-а. Relay сокетът остава отворен като резерва. */
   override fun send(message: ClientMessage): Boolean {
     val text = ProtocolCodec.encode(message)
+    if (message !is AttachRequest && message !is DetachRequest) return sendText(text)
+    // Под lock-а: смяната към LAN не може да мине между избора на пътя и записа кой е закачен.
+    synchronized(lock) {
+      lan?.let { if (it.send(text)) return true }
+      val sent = socket?.send(text) ?: false
+      if (sent) {
+        when (message) {
+          is AttachRequest -> relayAttached = message.contentId
+          is DetachRequest -> if (relayAttached == message.contentId) relayAttached = null
+        }
+      }
+      return sent
+    }
+  }
+
+  private fun sendText(text: String): Boolean {
     lan?.let { if (it.send(text)) return true }
     return socket?.send(text) ?: false
   }
+
+  /**
+   * Потокът на терминал (`attached`/`out`/`size`/`detached`). Идва само по активния път:
+   * закъснял по другия би удвоил изхода в терминала.
+   */
+  private fun isTerminalStream(message: ServerMessage): Boolean =
+    message is Attached || message is Output || message is SizeChanged || message is Detached
 
   private fun restartLocked() {
     job?.cancel()
@@ -262,6 +297,8 @@ class RelayClient(
         if (finished.get() || attempt != attempts.get()) return
         opened = true
         lastFrameAt = System.currentTimeMillis()
+        // Нова relay връзка: Mac-ът няма attach по нея.
+        synchronized(lock) { relayAttached = null }
         socket = webSocket
         _state.value = ConnectionState.Connected
       }
@@ -278,6 +315,8 @@ class RelayClient(
           }
           else -> Unit
         }
+        // Докато LAN е пътят, терминалът слуша само него (attach-ът по LAN носи екрана).
+        if (lan != null && isTerminalStream(message)) return
         // Чака, ако някой читател изостава: по-добре бавно, отколкото с дупка в терминала.
         runBlocking { _messages.emit(message) }
       }
@@ -396,6 +435,9 @@ class RelayClient(
           lan = session
           lanLastFrameAt = System.currentTimeMillis()
           lanRetryMs = timing.lanRetryFirstMs
+          // Mac-ът спира потока по relay-а; терминалът се закача наново по LAN с новата сесия.
+          relayAttached?.let { socket?.send(ProtocolCodec.encode(DetachRequest(it))) }
+          relayAttached = null
           // hello първо, после новата сесия: по нея терминалът прави attach, а екраните — list.
           session.send(ProtocolCodec.encode(HelloRequest()))
           updateRouteLocked()
@@ -409,6 +451,8 @@ class RelayClient(
     override fun onText(session: LanSession, text: String) {
       lanLastFrameAt = System.currentTimeMillis()
       val message = ProtocolCodec.decode(text) ?: return
+      // Закъснял кадър от вече паднала LAN връзка: терминалът е минал на relay-а.
+      if (lan !== session && isTerminalStream(message)) return
       // `lan` в hello по самия LAN не значи нищо ново.
       if (message is HelloReply) _hostName.value = message.host
       runBlocking { _messages.emit(message) }

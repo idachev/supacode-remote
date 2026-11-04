@@ -1,12 +1,16 @@
 package com.idachev.supacoderemote.relay
 
+import com.idachev.supacoderemote.protocol.AttachRequest
 import com.idachev.supacoderemote.protocol.ListRequest
+import com.idachev.supacoderemote.protocol.Output
+import com.idachev.supacoderemote.protocol.ServerMessage
 import com.idachev.supacoderemote.settings.RelaySettings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import mockwebserver3.MockResponse
@@ -19,10 +23,12 @@ import okhttp3.tls.HandshakeCertificates
 import okhttp3.tls.HeldCertificate
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import java.net.ServerSocket
+import java.util.Collections
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -197,5 +203,146 @@ class RelayLanTest {
       assertEquals(LinkPath.RELAY, relay.path.value)
       acceptor.interrupt()
     }
+  }
+
+  @Volatile private var relaySocket: WebSocket? = null
+
+  /** `out` с текст вместо байтове — по него тестът вижда кой път го е донесъл. */
+  private fun out(contentId: String, marker: String) =
+    """{"t":"out","contentId":"$contentId","b64":"${java.util.Base64.getEncoder().encodeToString(marker.encodeToByteArray())}"}"""
+
+  private fun marker(message: Output): String = String(java.util.Base64.getDecoder().decode(message.b64))
+
+  /** Mac-ът и на двата пътя отговаря на `attach` с `attached` и първия `out` (екрана). */
+  private fun answerAttach(webSocket: WebSocket, text: String, path: String) {
+    if (!text.contains("\"t\":\"attach\"")) return
+    val contentId = Regex("\"contentId\":\"([^\"]+)\"").find(text)!!.groupValues[1]
+    webSocket.send("""{"t":"attached","contentId":"$contentId","cols":80,"rows":24}""")
+    webSocket.send(out(contentId, "$path-screen"))
+  }
+
+  /**
+   * Relay-ят: първият `hello` носи `lan`, но LAN опитът пада (404), за да е терминалът
+   * отворен по relay-а; повторният `hello` след паузата пак носи `lan` и тогава LAN се вдига.
+   */
+  private fun relayHostWithAttach(lan: String): MockResponse = MockResponse.Builder().webSocketUpgrade(object : WebSocketListener() {
+    override fun onOpen(webSocket: WebSocket, response: Response) {
+      openSockets.incrementAndGet()
+      relaySocket = webSocket
+      webSocket.send("""{"t":"relay","hostOnline":true}""")
+    }
+
+    override fun onMessage(webSocket: WebSocket, text: String) {
+      fromClientOnRelay.put(text)
+      if (text.contains("\"hello\"")) webSocket.send("""{"t":"hello","v":1,"host":"Test Mac"$lan}""")
+      answerAttach(webSocket, text, "relay")
+    }
+
+    override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+      webSocket.close(1000, null)
+    }
+
+    override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+      openSockets.decrementAndGet()
+    }
+
+    override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+      openSockets.decrementAndGet()
+    }
+  }).build()
+
+  private fun lanHostWithAttach(): MockResponse = MockResponse.Builder().webSocketUpgrade(object : WebSocketListener() {
+    override fun onOpen(webSocket: WebSocket, response: Response) {
+      openSockets.incrementAndGet()
+      lanSocket = webSocket
+    }
+
+    override fun onMessage(webSocket: WebSocket, text: String) {
+      fromClientOnLan.put(text)
+      if (text.contains("\"hello\"")) webSocket.send("""{"t":"hello","v":1,"host":"Test Mac"}""")
+      answerAttach(webSocket, text, "lan")
+    }
+
+    override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+      webSocket.close(1000, null)
+    }
+
+    override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+      openSockets.decrementAndGet()
+    }
+
+    override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+      openSockets.decrementAndGet()
+    }
+  }).build()
+
+  private fun nextMatching(queue: LinkedBlockingQueue<String>, predicate: (String) -> Boolean): String {
+    while (true) {
+      val text = next(queue)
+      if (predicate(text)) return text
+    }
+  }
+
+  private fun awaitMarker(outputs: List<String>, marker: String) {
+    val deadline = System.currentTimeMillis() + 5_000
+    while (marker !in synchronized(outputs) { outputs.toList() }) {
+      check(System.currentTimeMillis() < deadline) { "няма $marker в $outputs" }
+      Thread.sleep(10)
+    }
+  }
+
+  /** Терминалът по relay-а, после се вдига LAN, после LAN пада: всеки път само един поток. */
+  @Test
+  fun `при смяна на пътя изходът на терминала идва само по единия път`() = runBlocking<Unit> {
+    val lanTiming = timing.copy(lanRetryFirstMs = 1_500)
+    relayServer.enqueue(relayHostWithAttach(lanJson(lanServer.port)))
+    lanServer.enqueue(MockResponse.Builder().code(404).build())
+    lanServer.enqueue(lanHostWithAttach())
+    val relay = RelayClient(OkHttpClient(), scope, lanTiming).also { clients += it }
+    val outputs: MutableList<String> = Collections.synchronizedList(mutableListOf())
+    val collector = scope.launch {
+      relay.messages.collect { message: ServerMessage -> if (message is Output) outputs += marker(message) }
+    }
+    relay.configure(RelaySettings("http://${relayServer.hostName}:${relayServer.port}", key))
+    relay.setForeground(true)
+
+    // 1. Терминалът е отворен по relay-а (първият LAN опит е паднал).
+    withTimeout(5_000) { relay.path.first { it == LinkPath.RELAY } }
+    lanServer.takeRequest()
+    relay.send(AttachRequest(id = 1, contentId = "c1"))
+    nextMatching(fromClientOnRelay) { it.contains("\"t\":\"attach\"") }
+    awaitMarker(outputs, "relay-screen")
+
+    // 2. LAN се вдига: relay attach-ът се спира, терминалът се закача по LAN.
+    withTimeout(5_000) { relay.path.first { it == LinkPath.LAN } }
+    assertEquals("""{"t":"detach","contentId":"c1"}""", nextMatching(fromClientOnRelay) { it.contains("detach") })
+    relay.send(AttachRequest(id = 2, contentId = "c1"))
+    nextMatching(fromClientOnLan) { it.contains("\"t\":\"attach\"") }
+    awaitMarker(outputs, "lan-screen")
+    // Mac-ът е пратил още нещо по relay-а, преди да види detach-а: не стига до терминала.
+    relaySocket!!.send(out("c1", "relay-late"))
+    relaySocket!!.send("""{"t":"size","contentId":"c1","cols":100,"rows":30}""")
+    Thread.sleep(300)
+    lanSocket!!.send(out("c1", "lan-live"))
+    awaitMarker(outputs, "lan-live")
+    Thread.sleep(200)
+    assertFalse("relay out по време на LAN: $outputs", "relay-late" in synchronized(outputs) { outputs.toList() })
+
+    // 3. LAN пада: пак по relay-а; новият attach там носи изхода, само веднъж.
+    lanSocket!!.close(1001, "bye")
+    withTimeout(5_000) { relay.path.first { it == LinkPath.RELAY } }
+    relay.send(AttachRequest(id = 3, contentId = "c1"))
+    // Mac-ът пише екрана от своята нишка: live изходът тръгва след него, както в истината.
+    val deadline = System.currentTimeMillis() + 5_000
+    while (synchronized(outputs) { outputs.count { it == "relay-screen" } } < 2) {
+      check(System.currentTimeMillis() < deadline) { "няма втори relay-screen в $outputs" }
+      Thread.sleep(10)
+    }
+    relaySocket!!.send(out("c1", "relay-live"))
+    awaitMarker(outputs, "relay-live")
+    Thread.sleep(200)
+    val seen = synchronized(outputs) { outputs.toList() }
+    assertEquals(listOf("relay-screen", "lan-screen", "lan-live", "relay-screen", "relay-live"), seen)
+    collector.cancel()
   }
 }
