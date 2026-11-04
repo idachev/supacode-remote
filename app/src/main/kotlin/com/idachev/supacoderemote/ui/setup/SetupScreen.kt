@@ -6,7 +6,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
+import com.idachev.supacoderemote.settings.TextSize
+import kotlin.math.roundToInt
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -90,7 +93,7 @@ private fun NotifyAwaitingRow() {
   }
 }
 
-/** „Скрол стига до агента“: скрол отвъд историята на телефона праща PgUp / PgDn. */
+/** „Скрол стига до агента“: скрол отвъд историята на телефона стига до програмата като от trackpad. */
 @Composable
 private fun OverscrollRow() {
   val store = LocalAppContainer.current.settingsStore
@@ -99,13 +102,40 @@ private fun OverscrollRow() {
     Column(Modifier.weight(1f)) {
       Text("Скрол стига до агента", style = MaterialTheme.typography.bodyLarge)
       Text(
-        "В началото или края на историята на телефона още скрол праща PgUp / PgDn, за да " +
-          "превърти историята на самата програма (напр. Claude Code).",
+        "В началото или края на историята на телефона още скрол стига до програмата като " +
+          "скрол от trackpad-а, за да превърти нейната история (напр. Claude Code).",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
     }
     Switch(checked = enabled, onCheckedChange = store::setOverscrollToProgram, modifier = Modifier.testTag("setup-overscroll"))
+  }
+}
+
+/** „Размер на текста“ в терминала: най-лявото е „По ширина“, после 7–16 px. */
+@Composable
+private fun TextSizeRow() {
+  val store = LocalAppContainer.current.settingsStore
+  val size by store.textSize.collectAsStateWithLifecycle()
+  val fitStep = (TextSize.FIXED.first - 1).toFloat()
+  Column(Modifier.fillMaxWidth()) {
+    Text("Размер на текста: ${TextSize.label(size)}", style = MaterialTheme.typography.bodyLarge)
+    Text(
+      "По ширина: всички колони на Mac-а влизат в екрана. Фиксиран размер: по-широкият " +
+        "терминал се мести с пръст наляво и надясно.",
+      style = MaterialTheme.typography.bodySmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Slider(
+      value = if (size == TextSize.FIT) fitStep else size.toFloat(),
+      onValueChange = { v ->
+        val step = v.roundToInt()
+        store.setTextSize(if (step <= fitStep.toInt()) TextSize.FIT else step)
+      },
+      valueRange = fitStep..TextSize.FIXED.last.toFloat(),
+      steps = TextSize.FIXED.last - TextSize.FIXED.first,
+      modifier = Modifier.testTag("setup-text-size"),
+    )
   }
 }
 
@@ -190,6 +220,7 @@ fun SetupScreen(wrongKey: Boolean, canGoBack: Boolean, onBack: () -> Unit, onSav
       Button(onClick = ::save, modifier = Modifier.fillMaxWidth().testTag("setup-save")) { Text("Запази и свържи") }
       NotifyAwaitingRow()
       OverscrollRow()
+      TextSizeRow()
       Text(
         "Версия ${BuildConfig.VERSION_NAME} · ${BuildConfig.GIT_SHORT_SHA} · ${BuildConfig.BUILD_TIME_UTC}",
         style = MaterialTheme.typography.labelSmall,

@@ -2,18 +2,20 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <!-- Ширината е тази на телефона; pinch zoom е на самата страница, затова терминалът
-       не се преоразмерява при zoom. -->
-  <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=10, user-scalable=yes">
+  <!-- Ширината е тази на телефона, без zoom: размерът на текста е настройка
+       („Размер на текста“), не pinch. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no">
   <link rel="stylesheet" href="xterm.css">
   <style>
-    html, body { margin: 0; padding: 0; background: #1e1e1e; overflow-x: hidden; }
-    /* Страницата никога не скролва: WebView-то е точно колкото терминала (височината идва
-       в Kotlin през SupaBridge.height), а по-висок от мястото терминал се реже отгоре и
-       живите редове остават долу. Така и при zoom видимата част не може да излезе от
-       терминала. Височината на body е от terminal.js: в WebView-то 100% и 100vh излизат 0.
-       Без overflow: hidden — той спира и местенето при zoom. */
+    html, body { margin: 0; padding: 0; background: #1e1e1e; }
+    /* Страницата не скролва по вертикала: WebView-то е точно колкото терминала (височината
+       идва в Kotlin през SupaBridge.height), а по-висок от мястото терминал се реже отгоре и
+       живите редове остават долу. Височината на body е от terminal.js: в WebView-то 100% и
+       100vh излизат 0. По хоризонтала страницата скролва само при фиксиран размер на текста,
+       по-широк от екрана — точно до краищата на терминала. */
     html, body { overscroll-behavior: none; }
+    html { scrollbar-width: none; }
+    html::-webkit-scrollbar { display: none; }
     body { display: flex; flex-direction: column; justify-content: flex-end; }
     #term { flex: none; align-self: flex-start; }
     /* Скролбарът на xterm би отнел ширина от колоните. */

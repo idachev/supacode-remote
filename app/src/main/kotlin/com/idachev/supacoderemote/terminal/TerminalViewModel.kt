@@ -317,13 +317,13 @@ class TerminalViewModel(
   }
 
   /**
-   * Скрол отвъд ръба на историята на телефона: PgUp / PgDn към програмата, която превърта
-   * своята история (Claude Code). Тихо, без съобщение, ако терминалът не е свързан —
-   * скролът е жест, не команда.
+   * Скрол отвъд ръба на историята на телефона (или в TUI без история): същият скрол като
+   * от trackpad-а и плаващите бутони ([scrollWheel]), не PgUp / PgDn. Тихо, без съобщение,
+   * ако терминалът не е свързан — скролът е жест, не команда.
    */
   fun onOverscroll(up: Boolean) {
-    if (!overscrollToProgram() || _state.value.phase !is AttachPhase.Attached) return
-    sendRaw(if (up) TerminalKeys.PAGE_UP else TerminalKeys.PAGE_DOWN)
+    if (!overscrollToProgram()) return
+    scrollWheel(up)
   }
 
   /**

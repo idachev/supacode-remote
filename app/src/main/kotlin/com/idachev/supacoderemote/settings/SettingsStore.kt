@@ -28,10 +28,30 @@ interface SettingsStore {
 
   fun setNotifyAwaiting(value: Boolean)
 
-  /** „Скрол стига до агента“: скрол отвъд историята на телефона праща PgUp / PgDn. */
+  /** „Скрол стига до агента“: скрол отвъд историята на телефона стига до програмата (wheel). */
   val overscrollToProgram: StateFlow<Boolean>
 
   fun setOverscrollToProgram(value: Boolean)
+
+  /** „Размер на текста“ в терминала: [TextSize.FIT] (по ширина) или px от [TextSize.FIXED]. */
+  val textSize: StateFlow<Int>
+
+  fun setTextSize(value: Int)
+}
+
+/**
+ * „Размер на текста“: по подразбиране по ширина — шрифтът, при който колоните на Mac-а
+ * влизат в екрана; иначе фиксиран размер в px. По-широк от екрана терминал се мести
+ * хоризонтално.
+ */
+object TextSize {
+  const val FIT = 0
+  val FIXED = 7..16
+
+  /** Непознато (стара или развалена стойност) е по ширина. */
+  fun sanitize(value: Int): Int = if (value in FIXED) value else FIT
+
+  fun label(value: Int): String = if (sanitize(value) == FIT) "По ширина" else "$value px"
 }
 
 /**
@@ -63,6 +83,15 @@ class KeystoreSettingsStore(context: Context) : SettingsStore {
   override fun setOverscrollToProgram(value: Boolean) {
     prefs.edit().putBoolean(KEY_OVERSCROLL, value).apply()
     _overscroll.value = value
+  }
+
+  private val _textSize = MutableStateFlow(TextSize.sanitize(prefs.getInt(KEY_TEXT_SIZE, TextSize.FIT)))
+  override val textSize: StateFlow<Int> = _textSize.asStateFlow()
+
+  override fun setTextSize(value: Int) {
+    val size = TextSize.sanitize(value)
+    prefs.edit().putInt(KEY_TEXT_SIZE, size).apply()
+    _textSize.value = size
   }
 
   override fun save(value: RelaySettings) {
@@ -121,6 +150,7 @@ class KeystoreSettingsStore(context: Context) : SettingsStore {
     const val KEY_API = "api_key"
     const val KEY_NOTIFY = "notify_awaiting"
     const val KEY_OVERSCROLL = "overscroll_to_program"
+    const val KEY_TEXT_SIZE = "terminal_text_size"
     const val KEYSTORE = "AndroidKeyStore"
     const val ALIAS = "relay_settings_key"
     const val TRANSFORMATION = "AES/GCM/NoPadding"

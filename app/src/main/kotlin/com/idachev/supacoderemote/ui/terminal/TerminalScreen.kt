@@ -87,6 +87,7 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
     )
   }
   val state by vm.state.collectAsStateWithLifecycle()
+  val textSize by container.settingsStore.textSize.collectAsStateWithLifecycle()
   val context = LocalContext.current
   var copyText by remember { mutableStateOf<String?>(null) }
 
@@ -137,6 +138,7 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
         onCopy = { text -> copyToClipboard(context, text, container.notices) },
         onOverscroll = vm::onOverscroll,
         onInput = vm::onWheelInput,
+        fontSize = textSize,
         onSelection = vm::onSelection,
       )
       // Скрол под палеца, като от trackpad-а (Claude Code го превърта така). PgUp / PgDn са в

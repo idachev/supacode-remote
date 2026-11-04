@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import com.idachev.supacoderemote.protocol.ProtocolCodec
+import com.idachev.supacoderemote.settings.TextSize
 import com.idachev.supacoderemote.terminal.Cell
 import com.idachev.supacoderemote.terminal.TerminalCommand
 import com.idachev.supacoderemote.terminal.TerminalSelection
@@ -49,6 +50,7 @@ fun TerminalWebView(
   onCopy: (String) -> Unit = {},
   onOverscroll: (up: Boolean) -> Unit = {},
   onInput: (String) -> Unit = {},
+  fontSize: Int = TextSize.FIT,
   onSelection: (TerminalSelection?) -> Unit = {},
 ) {
   val context = LocalContext.current
@@ -68,9 +70,9 @@ fun TerminalWebView(
       settings.javaScriptEnabled = true
       settings.allowFileAccess = false
       settings.allowContentAccess = false
-      // Pinch zoom на страницата; бутоните за zoom не се показват.
-      settings.setSupportZoom(true)
-      settings.builtInZoomControls = true
+      // Без zoom: размерът на текста е настройка („Размер на текста“).
+      settings.setSupportZoom(false)
+      settings.builtInZoomControls = false
       settings.displayZoomControls = false
       settings.useWideViewPort = true
       settings.loadWithOverviewMode = false
@@ -80,7 +82,7 @@ fun TerminalWebView(
       settings.minimumLogicalFontSize = 1
       settings.textZoom = 100
       setBackgroundColor(android.graphics.Color.rgb(0x1e, 0x1e, 0x1e))
-      // Без glow / разтягане на WebView-то на ръба; скролът отвъд ръба е PgUp / PgDn.
+      // Без glow / разтягане на WebView-то на ръба; скролът отвъд ръба стига до програмата.
       overScrollMode = android.view.View.OVER_SCROLL_NEVER
       webChromeClient = object : WebChromeClient() {
         override fun onConsoleMessage(message: ConsoleMessage): Boolean {
@@ -126,7 +128,7 @@ fun TerminalWebView(
           main.post { currentOnSelection(null) }
         }
 
-        /** Скрол отвъд ръба на историята: "up" → PgUp, "down" → PgDn към програмата. */
+        /** Скрол отвъд ръба на историята: "up" / "down" — скрол като от trackpad-а към програмата. */
         @JavascriptInterface
         fun overscroll(direction: String) {
           main.post { currentOnOverscroll(direction == "up") }
@@ -158,6 +160,11 @@ fun TerminalWebView(
       webView.removeJavascriptInterface("SupaBridge")
       webView.destroy()
     }
+  }
+
+  // „Размер на текста“ — и при всяко ново зареждане на страницата (ready).
+  LaunchedEffect(webView, ready, fontSize) {
+    if (ready) webView.evaluateJavascript("supa.fontSize($fontSize)", null)
   }
 
   LaunchedEffect(webView, ready) {

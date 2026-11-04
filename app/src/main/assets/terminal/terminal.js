@@ -8,7 +8,7 @@
 //
 // Размерът на терминала е винаги този на Mac-а (cols × rows от `attached` и `size`).
 // Страницата никога не го сменя сама: вместо това подбира шрифта така, че всички колони
-// да влязат в ширината на екрана. Zoom-ът с два пръста е zoom на страницата.
+// да влязат в ширината на екрана, или ползва фиксирания от „Размер на текста“. Zoom няма.
 (function () {
   'use strict';
 
@@ -57,7 +57,14 @@
     return screen ? screen.getBoundingClientRect().width : 0;
   }
 
+  // „Размер на текста“: 0 — по ширина (колоните влизат в екрана), иначе точно толкова px.
+  var fixedFont = 0;
+
   function fit() {
+    if (fixedFont > 0) {
+      if (term.options.fontSize !== fixedFont) term.options.fontSize = fixedFont;
+      return;
+    }
     var avail = document.documentElement.clientWidth;
     if (!avail) return;
     var size = term.options.fontSize;
@@ -111,6 +118,11 @@
     scrollToBottom: function () {
       term.scrollToBottom();
     },
+    /** „Размер на текста“: [px] 0 е по ширина. По-широк терминал се мести хоризонтално. */
+    fontSize: function (px) {
+      fixedFont = px > 0 ? px : 0;
+      fit();
+    },
     /** Скрол като от колелото / trackpad-а; [dir] е -1 нагоре, 1 надолу. Виж wheel(). */
     wheel: function (dir) {
       wheel(dir);
@@ -161,7 +173,7 @@
   }
 
   // Бутоните за маркираното („Копирай“, ◀ ▶, „Отказ“) са в Compose над WebView-то, за да
-  // са с еднакъв размер при всеки zoom. Страницата само показва диапазона и казва какъв е.
+  // са с еднакъв размер. Страницата само показва диапазона и казва какъв е.
   var reported = null; // последно докладваното на Kotlin, за да не се праща същото
 
   function reportSelection(a, b) {
@@ -252,7 +264,8 @@
 
   /**
    * Скрол отвъд ръба на историята на телефона: нагоре при най-стария ред (или без история —
-   * напр. Claude Code на цял екран) праща PgUp към програмата, надолу при живия край — PgDn.
+   * напр. Claude Code на цял екран) стига до програмата като скрол от trackpad-а (Kotlin
+   * отговаря със `supa.wheel`), нагоре при най-стария ред, надолу при живия край.
    * Мъртва зона, за да не стреля обикновен скрол, който само стига ръба, и пауза между
    * клавишите.
    */
@@ -277,9 +290,8 @@
     touch = { lastX: t.clientX, lastY: t.clientY, over: 0, overDir: null };
   }
 
-  // Слуша се на целия документ, за да важи и за празното място над терминала. Само слуша
-  // (passive): страницата няма какво да скролва, а pinch zoom-ът и местенето при zoom са
-  // изцяло на Chromium — WebView-то е колкото терминала и не показва нищо извън него.
+  // Само слуша (passive): по вертикала страницата няма какво да скролва (WebView-то е
+  // колкото терминала), а хоризонталното местене на по-широк терминал е на Chromium.
   document.addEventListener('touchstart', function (e) {
     if (e.touches.length === 1) startTouch(e.touches[0]);
     else touch = null;
@@ -297,7 +309,7 @@
     trackOverscroll(dy);
   }, { capture: true, passive: true });
 
-  // След pinch единият пръст може да остане: от него започва ново плъзгане.
+  // От два пръста към един (вдигнат пръст): от оставащия започва ново плъзгане.
   function endTouch(e) {
     if (e.touches.length === 1) startTouch(e.touches[0]);
     else touch = null;
@@ -364,7 +376,6 @@
 
   /** body е точно колкото прозореца; терминалът е долу в него (index.html). */
   function layout() {
-    // clientHeight, не innerHeight: при zoom innerHeight е само видимата част.
     document.body.style.height = document.documentElement.clientHeight + 'px';
     fit();
   }
