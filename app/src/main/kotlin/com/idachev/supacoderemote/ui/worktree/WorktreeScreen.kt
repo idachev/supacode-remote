@@ -33,6 +33,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.idachev.supacoderemote.WorktreeKey
@@ -56,12 +57,25 @@ fun WorktreeScreen(key: WorktreeKey, onBack: () -> Unit, onOpenTab: (Tab) -> Uni
   PollSessionsWhileVisible()
   val worktree = repos?.let { SessionGroups.findWorktree(it, key.repositoryId, key.worktreeId) }
   val newTab: NewTabViewModel = viewModel {
-    NewTabViewModel(container.relay, container.notices, refresh = { container.sessions.refresh() })
+    NewTabViewModel(
+      link = container.relay,
+      notices = container.notices,
+      refresh = { container.sessions.refresh() },
+      appScope = container.appScope,
+    )
   }
   val pendingNewTab by newTab.pendingWorktreeId.collectAsStateWithLifecycle()
+  val openedNewTab by newTab.opened.collectAsStateWithLifecycle()
   val hostSession by container.relay.hostSession.collectAsStateWithLifecycle()
-  LaunchedEffect(newTab) {
-    newTab.opened.collect { reply -> onOpenTab(Tab(id = reply.tabId, contentId = reply.contentId)) }
+  // Терминалът се отваря само докато този екран се вижда; иначе заявката става тиха.
+  LifecycleStartEffect(newTab) {
+    newTab.setVisible(true)
+    onStopOrDispose { newTab.setVisible(false) }
+  }
+  LaunchedEffect(openedNewTab) {
+    val reply = openedNewTab ?: return@LaunchedEffect
+    newTab.consumeOpened()
+    onOpenTab(Tab(id = reply.tabId, contentId = reply.contentId))
   }
 
   Scaffold(

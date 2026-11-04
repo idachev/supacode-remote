@@ -8,10 +8,12 @@ import com.idachev.supacoderemote.protocol.ServerMessage
 import com.idachev.supacoderemote.protocol.TabNewReply
 import com.idachev.supacoderemote.protocol.TabNewRequest
 import com.idachev.supacoderemote.relay.HostLink
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
@@ -54,26 +56,36 @@ class NewTabViewModelTest {
   private val shown = mutableListOf<String>()
   private var refreshes = 0
   private val store = ViewModelStore()
+  private val appScope = CoroutineScope(dispatcher)
 
   @Before
   fun setUp() {
     Dispatchers.setMain(dispatcher)
     link = FakeLink()
     notices = Notices()
-    vm = NewTabViewModel(link, notices, refresh = { refreshes++ }, timeoutMs = 12_000)
+    vm = NewTabViewModel(link, notices, refresh = { refreshes++ }, appScope = appScope, timeoutMs = 12_000)
     store.put("vm", vm)
+    vm.setVisible(true)
   }
 
   @After
   fun tearDown() {
     store.clear()
+    appScope.cancel()
     Dispatchers.resetMain()
   }
 
   /** Събира отворените табове и съобщенията към потребителя до края на теста. */
   private fun TestScope.collect(): List<TabNewReply> {
     val opened = mutableListOf<TabNewReply>()
-    backgroundScope.launch { vm.opened.collect { opened += it } }
+    backgroundScope.launch {
+      vm.opened.collect { reply ->
+        if (reply != null) {
+          opened += reply
+          vm.consumeOpened()
+        }
+      }
+    }
     backgroundScope.launch { notices.messages.collect { shown += it } }
     runCurrent()
     return opened
@@ -156,5 +168,54 @@ class NewTabViewModelTest {
     assertTrue(link.sent.isEmpty())
     assertNull(vm.pendingWorktreeId.value)
     assertEquals(listOf("Няма връзка с Mac-а"), shown)
+  }
+
+  @Test
+  fun `отговор след напуснат екран само опреснява списъка`() = runTest(dispatcher) {
+    val opened = collect()
+    vm.create("w1")
+    runCurrent()
+    // Потребителят отваря друг таб, докато чака: екранът вече не се вижда.
+    vm.setVisible(false)
+    assertNull(vm.pendingWorktreeId.value)
+    link.messages.emit(TabNewReply(id = 1, worktreeId = "w1", tabId = "t9", contentId = "c9"))
+    runCurrent()
+    // Връща се на екрана: нищо не се отваря само, а новият таб е в списъка.
+    vm.setVisible(true)
+    runCurrent()
+    assertTrue(opened.isEmpty())
+    assertEquals(1, refreshes)
+    // Тихата заявка няма таймаут към потребителя.
+    advanceTimeBy(13_000)
+    runCurrent()
+    assertTrue(shown.isEmpty())
+  }
+
+  @Test
+  fun `след Назад закъснелият отговор пак опреснява списъка`() = runTest(dispatcher) {
+    val opened = collect()
+    vm.create("w1")
+    runCurrent()
+    vm.setVisible(false)
+    store.clear()
+    runCurrent()
+    link.messages.emit(TabNewReply(id = 1, worktreeId = "w1", tabId = "t9", contentId = "c9"))
+    runCurrent()
+    assertTrue(opened.isEmpty())
+    assertEquals(1, refreshes)
+  }
+
+  @Test
+  fun `след Назад слушането спира с таймаута`() = runTest(dispatcher) {
+    collect()
+    vm.create("w1")
+    runCurrent()
+    vm.setVisible(false)
+    store.clear()
+    advanceTimeBy(12_001)
+    runCurrent()
+    link.messages.emit(TabNewReply(id = 1, worktreeId = "w1", tabId = "t9", contentId = "c9"))
+    runCurrent()
+    assertEquals(0, refreshes)
   }
 }
