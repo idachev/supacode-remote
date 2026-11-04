@@ -23,7 +23,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import com.idachev.supacoderemote.protocol.ProtocolCodec
+import com.idachev.supacoderemote.terminal.Cell
 import com.idachev.supacoderemote.terminal.TerminalCommand
+import com.idachev.supacoderemote.terminal.TerminalSelection
 import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.builtins.serializer
 
@@ -43,12 +45,14 @@ fun TerminalWebView(
   onText: (String) -> Unit = {},
   onCopy: (String) -> Unit = {},
   onOverscroll: (up: Boolean) -> Unit = {},
+  onSelection: (TerminalSelection?) -> Unit = {},
 ) {
   val context = LocalContext.current
   val currentOnReady by rememberUpdatedState(onReady)
   val currentOnText by rememberUpdatedState(onText)
   val currentOnCopy by rememberUpdatedState(onCopy)
   val currentOnOverscroll by rememberUpdatedState(onOverscroll)
+  val currentOnSelection by rememberUpdatedState(onSelection)
   var ready by remember { mutableStateOf(false) }
   val main = remember { Handler(Looper.getMainLooper()) }
 
@@ -91,10 +95,26 @@ fun TerminalWebView(
           main.post { currentOnText(value) }
         }
 
-        /** „Копирай“ до маркираното с дълго натискане. */
+        /** „Копирай“ от лентата за маркиране: показаният текст. */
         @JavascriptInterface
         fun copy(value: String) {
           main.post { currentOnCopy(value) }
+        }
+
+        /**
+         * Маркираното след дълго натискане: краищата (включително) и размерът на буфера
+         * ([cols] × [rows] с историята), за да не излязат ◀ ▶ извън него.
+         */
+        @JavascriptInterface
+        fun selection(startCol: Int, startRow: Int, endCol: Int, endRow: Int, cols: Int, rows: Int) {
+          val value = TerminalSelection.of(Cell(startCol, startRow), Cell(endCol, endRow), cols, rows)
+          main.post { currentOnSelection(value) }
+        }
+
+        /** Маркираното е изчезнало в страницата (тап, reset): лентата се скрива. */
+        @JavascriptInterface
+        fun selectionGone() {
+          main.post { currentOnSelection(null) }
         }
 
         /** Скрол отвъд ръба на историята: "up" → PgUp, "down" → PgDn към програмата. */
@@ -171,5 +191,8 @@ private fun TerminalCommand.toJs(): String = when (this) {
   is TerminalCommand.ScrollPages -> "supa.scrollPages($pages)"
   TerminalCommand.ScrollToBottom -> "supa.scrollToBottom()"
   TerminalCommand.RequestText -> "supa.copyText()"
+  is TerminalCommand.Select -> "supa.selectRange(${start.col},${start.row},${end.col},${end.row})"
+  TerminalCommand.CopySelection -> "supa.copySelection()"
+  TerminalCommand.ClearSelection -> "supa.clearSelection()"
   is TerminalCommand.Write -> "supa.write(${ProtocolCodec.json.encodeToString(String.serializer(), b64)})"
 }

@@ -4,17 +4,9 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.os.Build
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import com.idachev.supacoderemote.Notices
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.FilterChip
@@ -141,6 +133,7 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
         onText = { copyText = it },
         onCopy = { text -> copyToClipboard(context, text, container.notices) },
         onOverscroll = vm::onOverscroll,
+        onSelection = vm::onSelection,
       )
       // PgUp / PgDn под палеца, за историята на самата програма (Claude Code).
       Column(
@@ -150,6 +143,16 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
         RepeatKeyButton("PgUp", tag = "float-pgup") { vm.sendKey(TerminalKeys.PAGE_UP) }
         RepeatKeyButton("PgDn", tag = "float-pgdn") { vm.sendKey(TerminalKeys.PAGE_DOWN) }
       }
+      // Маркираното с дълго натискане: лентата е тук, не в страницата, за да не расте с zoom-а.
+      if (state.selection != null) {
+        SelectionBar(
+          onMoveStart = vm::moveSelectionStart,
+          onMoveEnd = vm::moveSelectionEnd,
+          onCopy = vm::copySelection,
+          onCancel = vm::clearSelection,
+          modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp),
+        )
+      }
       PhaseOverlay(state.phase, onReattach = vm::reattach, modifier = Modifier.align(Alignment.Center))
     }
   }
@@ -158,41 +161,21 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
 
 /**
  * Полупрозрачен кръгъл бутон за клавиш, който се повтаря, докато се държи: първо веднъж,
- * после след кратка пауза на всеки [REPEAT_MS].
+ * после след кратка пауза на всеки 150 ms ([repeatPress]).
  */
 @Composable
 private fun RepeatKeyButton(label: String, tag: String, onFire: () -> Unit) {
-  val currentOnFire by rememberUpdatedState(onFire)
   Box(
     contentAlignment = Alignment.Center,
     modifier = Modifier
       .size(52.dp)
       .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f), CircleShape)
       .testTag(tag)
-      .pointerInput(Unit) {
-        coroutineScope {
-          awaitEachGesture {
-            awaitFirstDown()
-            currentOnFire()
-            val repeat = launch {
-              delay(REPEAT_FIRST_MS)
-              while (true) {
-                currentOnFire()
-                delay(REPEAT_MS)
-              }
-            }
-            waitForUpOrCancellation()
-            repeat.cancel()
-          }
-        }
-      },
+      .repeatPress(description = null, onFire = onFire),
   ) {
     Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
   }
 }
-
-private const val REPEAT_FIRST_MS = 400L
-private const val REPEAT_MS = 150L
 
 /** В системния clipboard. От Android 13 системата сама показва, че е копирано. */
 private fun copyToClipboard(context: Context, text: String, notices: Notices) {

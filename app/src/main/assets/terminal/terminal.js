@@ -1,8 +1,9 @@
 // Мостът между xterm.js и приложението.
 //
 // Kotlin вика supa.init / write / resize / scrollPages / scrollToBottom / copyText;
-// selectStart / selectMove / selectEnd (от дългото натискане в Android); страницата вика
-// SupaBridge.ready(), text(), copy() и overscroll().
+// selectStart / selectMove / selectEnd (от дългото натискане в Android), selectRange /
+// copySelection / clearSelection (от лентата за маркиране); страницата вика
+// SupaBridge.ready(), text(), copy(), selection(), selectionGone() и overscroll().
 //
 // Размерът на терминала е винаги този на Mac-а (cols × rows от `attached` и `size`).
 // Страницата никога не го сменя сама: вместо това подбира шрифта така, че всички колони
@@ -145,39 +146,17 @@
     term.select(first.col, first.row, length);
   }
 
-  // Плаващите бутони до маркираното: „Копирай“ и „×“.
-  var actions = document.createElement('div');
-  actions.id = 'select-actions';
-  actions.innerHTML = '<button id="sel-copy">Копирай</button><button id="sel-cancel">×</button>';
-  document.body.appendChild(actions);
-
-  function hideActions() {
-    actions.style.display = 'none';
+  // Бутоните за маркираното („Копирай“, ◀ ▶, „Отказ“) са в Compose над WebView-то, за да
+  // са с еднакъв размер при всеки zoom. Страницата само показва диапазона и казва какъв е.
+  function reportSelection(a, b) {
+    if (bridge.selection) {
+      bridge.selection(a.col, a.row, b.col, b.row, term.cols, term.buffer.active.length);
+    }
   }
 
-  function showActions(x, y) {
-    actions.style.display = 'flex';
-    var w = actions.offsetWidth, h = actions.offsetHeight;
-    var left = Math.max(4, Math.min(document.documentElement.clientWidth - w - 4, x - w / 2));
-    var top = y - h - 24 < 4 ? y + 24 : y - h - 24;
-    actions.style.left = (left + window.scrollX) + 'px';
-    actions.style.top = (top + window.scrollY) + 'px';
-  }
-
-  function clearSelection() {
-    term.clearSelection();
-    hideActions();
-  }
-
-  document.getElementById('sel-copy').addEventListener('click', function (e) {
-    e.stopPropagation();
-    var text = term.getSelection();
-    if (text && bridge.copy) bridge.copy(text);
-    clearSelection();
-  });
-  document.getElementById('sel-cancel').addEventListener('click', function (e) {
-    e.stopPropagation();
-    clearSelection();
+  // Маркираното изчезва и от само себе си (тап в терминала, reset): лентата се скрива.
+  term.onSelectionChange(function () {
+    if (!term.hasSelection() && bridge.selectionGone) bridge.selectionGone();
   });
 
   // Маркирането идва от Android: дългото натискане се хваща там (GestureDetector), защото
@@ -192,10 +171,10 @@
   var selectAnchor = null;
 
   window.supa.selectStart = function (x, y) {
-    hideActions();
     var p = clientPoint(x, y);
     selectAnchor = cellAt(p.x, p.y);
     selectBetween(selectAnchor, selectAnchor);
+    reportSelection(selectAnchor, selectAnchor);
   };
   window.supa.selectMove = function (x, y) {
     if (!selectAnchor) return;
@@ -205,9 +184,23 @@
   window.supa.selectEnd = function (x, y) {
     if (!selectAnchor) return;
     var p = clientPoint(x, y);
-    selectBetween(selectAnchor, cellAt(p.x, p.y));
+    var cell = cellAt(p.x, p.y);
+    selectBetween(selectAnchor, cell);
+    reportSelection(selectAnchor, cell);
     selectAnchor = null;
-    if (term.hasSelection()) showActions(p.x, p.y);
+  };
+  /** Точният диапазон от лентата за маркиране (краищата включително, вече подредени). */
+  window.supa.selectRange = function (startCol, startRow, endCol, endRow) {
+    selectBetween({ col: startCol, row: startRow }, { col: endCol, row: endRow });
+  };
+  /** „Копирай“: точно показаното, после маркираното се маха. */
+  window.supa.copySelection = function () {
+    var text = term.getSelection();
+    if (text && bridge.copy) bridge.copy(text);
+    term.clearSelection();
+  };
+  window.supa.clearSelection = function () {
+    term.clearSelection();
   };
 
   var touch = null; // { lastY, over, overDir }
@@ -237,7 +230,6 @@
   }
 
   term.element.addEventListener('touchstart', function (e) {
-    hideActions();
     touch = e.touches.length === 1 ? { lastY: e.touches[0].clientY, over: 0, overDir: null } : null;
   }, { capture: true, passive: true });
 

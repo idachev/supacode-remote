@@ -45,6 +45,14 @@ sealed interface TerminalCommand {
 
   /** Целият текст на терминала (историята и екрана) обратно към приложението, за копиране. */
   data object RequestText : TerminalCommand
+
+  /** Показва точно този диапазон като маркирано (след ◀ ▶ в лентата за маркиране). */
+  data class Select(val start: Cell, val end: Cell) : TerminalCommand
+
+  /** Маркираното в clipboard-а — точно показаното; отговорът идва през `onCopy`. */
+  data object CopySelection : TerminalCommand
+
+  data object ClearSelection : TerminalCommand
 }
 
 sealed interface AttachPhase {
@@ -65,6 +73,8 @@ data class TerminalUiState(
   val liveKeys: Boolean = false,
   val suggesting: Boolean = false,
   val suggestions: List<String> = emptyList(),
+  /** Маркираното с дълго натискане; докато го има, се вижда лентата за маркиране. */
+  val selection: TerminalSelection? = null,
 )
 
 /**
@@ -147,7 +157,8 @@ class TerminalViewModel(
     when (message) {
       is Attached -> if (message.contentId == contentId) {
         attachId = null
-        _state.update { it.copy(phase = AttachPhase.Attached(message.cols, message.rows)) }
+        // Init чисти терминала, а с него и маркираното.
+        _state.update { it.copy(phase = AttachPhase.Attached(message.cols, message.rows), selection = null) }
         _commands.trySend(TerminalCommand.Init(message.cols, message.rows))
       }
       is Output -> if (message.contentId == contentId) {
@@ -202,6 +213,40 @@ class TerminalViewModel(
   /** Иска текста на терминала; идва обратно през `onText` на WebView-то. */
   fun requestText() {
     _commands.trySend(TerminalCommand.RequestText)
+  }
+
+  /**
+   * Страницата докладва маркираното (след дълго натискане и плъзгане). `null` — маркираното
+   * е изчезнало там (докосване, нов attach) и лентата трябва да се скрие.
+   */
+  fun onSelection(selection: TerminalSelection?) {
+    _state.update { it.copy(selection = selection) }
+  }
+
+  /** ◀ ▶ за началото: една клетка назад (минус) или напред, през края на реда. */
+  fun moveSelectionStart(delta: Int) = adjustSelection { it.moveStart(delta) }
+
+  /** ◀ ▶ за края: една клетка назад (минус) или напред, през края на реда. */
+  fun moveSelectionEnd(delta: Int) = adjustSelection { it.moveEnd(delta) }
+
+  private fun adjustSelection(change: (TerminalSelection) -> TerminalSelection) {
+    val current = _state.value.selection ?: return
+    val next = change(current)
+    if (next == current) return
+    _state.update { it.copy(selection = next) }
+    _commands.trySend(TerminalCommand.Select(next.start, next.end))
+  }
+
+  /** „Копирай“ в лентата за маркиране: страницата връща показания текст и маха маркираното. */
+  fun copySelection() {
+    if (_state.value.selection == null) return
+    _state.update { it.copy(selection = null) }
+    _commands.trySend(TerminalCommand.CopySelection)
+  }
+
+  fun clearSelection() {
+    _state.update { it.copy(selection = null) }
+    _commands.trySend(TerminalCommand.ClearSelection)
   }
 
   /**

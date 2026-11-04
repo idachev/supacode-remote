@@ -272,6 +272,60 @@ class TerminalViewModelTest {
   }
 
   @Test
+  fun `маркираното се нагласява с ◀ ▶ и страницата показва точно него`() = runTest(dispatcher) {
+    vm.onWebReady()
+    val commands = collectCommands()
+    vm.onSelection(TerminalSelection(Cell(9, 1), Cell(2, 2), cols = 10, rows = 3))
+    vm.moveSelectionStart(1)
+    vm.moveSelectionEnd(1)
+    runCurrent()
+    val shown = TerminalSelection(Cell(0, 2), Cell(3, 2), cols = 10, rows = 3)
+    assertEquals(shown, vm.state.value.selection)
+    assertEquals(
+      listOf<TerminalCommand>(
+        TerminalCommand.Select(Cell(0, 2), Cell(2, 2)),
+        TerminalCommand.Select(Cell(0, 2), Cell(3, 2)),
+      ),
+      commands,
+    )
+    assertTrue(link.sent.none { it is InputRequest })
+  }
+
+  @Test
+  fun `крачка в стената не праща нищо към страницата`() = runTest(dispatcher) {
+    vm.onWebReady()
+    val commands = collectCommands()
+    vm.onSelection(TerminalSelection(Cell(0, 0), Cell(0, 0), cols = 10, rows = 3))
+    vm.moveSelectionStart(-1)
+    vm.moveSelectionStart(1)
+    vm.moveSelectionEnd(-1)
+    runCurrent()
+    assertTrue(commands.isEmpty())
+  }
+
+  @Test
+  fun `Копирай и Отказ махат лентата, а без маркирано ◀ ▶ не правят нищо`() = runTest(dispatcher) {
+    vm.onWebReady()
+    val commands = collectCommands()
+    vm.moveSelectionEnd(1)
+    vm.copySelection()
+    runCurrent()
+    assertTrue(commands.isEmpty())
+    vm.onSelection(TerminalSelection(Cell(1, 0), Cell(4, 0), cols = 10, rows = 3))
+    vm.copySelection()
+    runCurrent()
+    assertEquals(null, vm.state.value.selection)
+    vm.onSelection(TerminalSelection(Cell(1, 0), Cell(4, 0), cols = 10, rows = 3))
+    vm.clearSelection()
+    runCurrent()
+    assertEquals(null, vm.state.value.selection)
+    assertEquals(listOf(TerminalCommand.CopySelection, TerminalCommand.ClearSelection), commands)
+    vm.onSelection(TerminalSelection(Cell(1, 0), Cell(4, 0), cols = 10, rows = 3))
+    vm.onSelection(null)
+    assertEquals(null, vm.state.value.selection)
+  }
+
+  @Test
   fun `при затваряне на екрана се праща detach`() = runTest(dispatcher) {
     runCurrent()
     store.clear()
