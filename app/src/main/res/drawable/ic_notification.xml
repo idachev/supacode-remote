@@ -1,11 +1,35 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Малката икона на известията: подкана на терминал „>_“. Само бяло, както иска Android. -->
+<!-- Малката икона на известията: същият знак като иконата на приложението (подкана „>_“
+     с две дъги на сигнал), само бяло, както иска Android. Изрязан е около знака
+     (прозорец 52×52 от платното 108), за да изпълва 24 dp. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
-    android:viewportWidth="24"
-    android:viewportHeight="24">
-    <path
-        android:fillColor="#FFFFFFFF"
-        android:pathData="M4,6.4L5.4,5L11.4,11L5.4,17L4,15.6L8.6,11ZM12,17h8v2h-8z" />
+    android:viewportWidth="52"
+    android:viewportHeight="52">
+    <group
+        android:translateX="-24.5"
+        android:translateY="-25">
+        <path
+            android:pathData="M32,40L46,54L32,68"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="7"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+        <path
+            android:pathData="M53,68L69,68"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="7"
+            android:strokeLineCap="round" />
+        <path
+            android:pathData="M49.08,42.18A12,12 0,0 1,58.82 51.92"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="5"
+            android:strokeLineCap="round" />
+        <path
+            android:pathData="M50.65,33.32A21,21 0,0 1,67.68 50.35"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="5"
+            android:strokeLineCap="round" />
+    </group>
 </vector>

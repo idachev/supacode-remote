@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Едноцветният слой за themed icons (Android 13+): системата го оцветява сама.
+     Подкана „>_“, от чийто връх излизат две дъги на сигнал: терминалът, достъпен отдалеч.
+     Знакът е в безопасната зона (кръг с диаметър 66 dp в центъра на 108 dp). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:pivotX="51"
+        android:pivotY="51"
+        android:scaleX="1.12"
+        android:scaleY="1.12"
+        android:translateX="3"
+        android:translateY="3">
+        <path
+            android:pathData="M32,40L46,54L32,68"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="7"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+        <path
+            android:pathData="M53,68L69,68"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="7"
+            android:strokeLineCap="round" />
+        <path
+            android:pathData="M49.08,42.18A12,12 0,0 1,58.82 51.92"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="5"
+            android:strokeLineCap="round" />
+        <path
+            android:pathData="M50.65,33.32A21,21 0,0 1,67.68 50.35"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="5"
+            android:strokeLineCap="round" />
+    </group>
+</vector>
