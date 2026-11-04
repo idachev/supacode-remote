@@ -215,6 +215,24 @@ class TerminalViewModelTest {
   }
 
   @Test
+  fun `скрол отвъд историята праща PgUp и PgDn, само ако е включено`() = runTest(dispatcher) {
+    var enabled = true
+    val vm2 = TerminalViewModel(link, Notices(), "c1", suggestTimeoutMs = 5_000, overscrollToProgram = { enabled })
+    store.put("vm2", vm2)
+    link.hostSession.value = 1
+    runCurrent()
+    vm2.onOverscroll(up = true)
+    assertTrue("без attach — нищо", inputs().isEmpty())
+    vm2.onWebReady()
+    emit(Attached(1, "c1", 120, 40))
+    vm2.onOverscroll(up = true)
+    vm2.onOverscroll(up = false)
+    enabled = false
+    vm2.onOverscroll(up = true)
+    assertEquals(listOf("\u001b[5~", "\u001b[6~"), inputs())
+  }
+
+  @Test
   fun `без attach нищо не се пише`() = runTest(dispatcher) {
     link.hostSession.value = 1
     runCurrent()

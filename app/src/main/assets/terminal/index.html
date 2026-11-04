@@ -12,6 +12,17 @@
     /* Скролбарът на xterm би отнел ширина от колоните. */
     .xterm .xterm-viewport { scrollbar-width: none; }
     .xterm .xterm-viewport::-webkit-scrollbar { display: none; }
+    /* Маркирането е на xterm.js; системното маркиране на страницата би се сбъркало с него. */
+    body { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+    #select-actions {
+      display: none; position: absolute; z-index: 10; gap: 6px;
+      font: 15px sans-serif;
+    }
+    #select-actions button {
+      border: 0; border-radius: 18px; padding: 8px 14px; font: inherit;
+      background: #264f78; color: #ffffff; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+    }
+    #select-actions #sel-cancel { background: #3c3c3c; }
   </style>
 </head>
 <body>

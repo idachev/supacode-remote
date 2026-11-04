@@ -4,6 +4,9 @@ import android.annotation.SuppressLint
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.view.GestureDetector
+import android.view.HapticFeedbackConstants
+import android.view.MotionEvent
 import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
@@ -38,10 +41,14 @@ fun TerminalWebView(
   onGone: () -> Unit,
   modifier: Modifier = Modifier,
   onText: (String) -> Unit = {},
+  onCopy: (String) -> Unit = {},
+  onOverscroll: (up: Boolean) -> Unit = {},
 ) {
   val context = LocalContext.current
   val currentOnReady by rememberUpdatedState(onReady)
   val currentOnText by rememberUpdatedState(onText)
+  val currentOnCopy by rememberUpdatedState(onCopy)
+  val currentOnOverscroll by rememberUpdatedState(onOverscroll)
   var ready by remember { mutableStateOf(false) }
   val main = remember { Handler(Looper.getMainLooper()) }
 
@@ -83,7 +90,20 @@ fun TerminalWebView(
         fun text(value: String) {
           main.post { currentOnText(value) }
         }
+
+        /** „Копирай“ до маркираното с дълго натискане. */
+        @JavascriptInterface
+        fun copy(value: String) {
+          main.post { currentOnCopy(value) }
+        }
+
+        /** Скрол отвъд ръба на историята: "up" → PgUp, "down" → PgDn към програмата. */
+        @JavascriptInterface
+        fun overscroll(direction: String) {
+          main.post { currentOnOverscroll(direction == "up") }
+        }
       }, "SupaBridge")
+      installSelectionGesture(this)
       loadUrl("file:///android_asset/terminal/index.html")
     }
   }
@@ -105,6 +125,44 @@ fun TerminalWebView(
 }
 
 private const val TAG = "TerminalWebView"
+
+/**
+ * Маркиране с дълго натискане. Хваща се тук, а не в страницата: щом Chromium сам познае
+ * дълго натискане, той прекъсва докосването на страницата (touchcancel) и тя не вижда
+ * плъзгането. След дългото натискане WebView-то получава CANCEL (страницата спира да
+ * скролва), а пръстът движи маркирането в xterm.js. Без дълго натискане докосването е
+ * изцяло на WebView-то — скролът и zoom-ът работят както преди.
+ */
+@SuppressLint("ClickableViewAccessibility")
+private fun installSelectionGesture(webView: WebView) {
+  var selecting = false
+  val detector = GestureDetector(webView.context, object : GestureDetector.SimpleOnGestureListener() {
+    override fun onLongPress(e: MotionEvent) {
+      selecting = true
+      webView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+      val cancel = MotionEvent.obtain(e).apply { action = MotionEvent.ACTION_CANCEL }
+      webView.onTouchEvent(cancel)
+      cancel.recycle()
+      webView.evaluateJavascript("supa.selectStart(${e.x},${e.y})", null)
+    }
+  })
+  webView.setOnTouchListener { _, event ->
+    if (!selecting) {
+      detector.onTouchEvent(event)
+      // Дълго натискане тъкмо е започнало: това събитие вече не е за WebView-то.
+      return@setOnTouchListener selecting
+    }
+    when (event.actionMasked) {
+      MotionEvent.ACTION_MOVE -> webView.evaluateJavascript("supa.selectMove(${event.x},${event.y})", null)
+      MotionEvent.ACTION_UP -> {
+        selecting = false
+        webView.evaluateJavascript("supa.selectEnd(${event.x},${event.y})", null)
+      }
+      MotionEvent.ACTION_CANCEL -> selecting = false
+    }
+    true
+  }
+}
 
 /** JS повикването за една команда. Низът се кодира като JSON, за да е винаги валиден литерал. */
 private fun TerminalCommand.toJs(): String = when (this) {

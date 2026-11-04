@@ -1,5 +1,20 @@
 package com.idachev.supacoderemote.ui.terminal
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.os.Build
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
+import com.idachev.supacoderemote.Notices
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.FilterChip
@@ -70,9 +85,15 @@ import com.idachev.supacoderemote.ui.LocalAppContainer
 fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
   val container = LocalAppContainer.current
   val vm: TerminalViewModel = viewModel(key = key.contentId) {
-    TerminalViewModel(container.relay, container.notices, key.contentId)
+    TerminalViewModel(
+      link = container.relay,
+      notices = container.notices,
+      contentId = key.contentId,
+      overscrollToProgram = { container.settingsStore.overscrollToProgram.value },
+    )
   }
   val state by vm.state.collectAsStateWithLifecycle()
+  val context = LocalContext.current
   var copyText by remember { mutableStateOf<String?>(null) }
 
   Scaffold(
@@ -118,11 +139,66 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
         onGone = vm::onWebGone,
         modifier = Modifier.fillMaxSize().testTag("terminal-web"),
         onText = { copyText = it },
+        onCopy = { text -> copyToClipboard(context, text, container.notices) },
+        onOverscroll = vm::onOverscroll,
       )
+      // PgUp / PgDn под палеца, за историята на самата програма (Claude Code).
+      Column(
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = Modifier.align(Alignment.CenterEnd).padding(end = 8.dp),
+      ) {
+        RepeatKeyButton("PgUp", tag = "float-pgup") { vm.sendKey(TerminalKeys.PAGE_UP) }
+        RepeatKeyButton("PgDn", tag = "float-pgdn") { vm.sendKey(TerminalKeys.PAGE_DOWN) }
+      }
       PhaseOverlay(state.phase, onReattach = vm::reattach, modifier = Modifier.align(Alignment.Center))
     }
   }
   copyText?.let { text -> CopyTextDialog(text = text, onDismiss = { copyText = null }) }
+}
+
+/**
+ * Полупрозрачен кръгъл бутон за клавиш, който се повтаря, докато се държи: първо веднъж,
+ * после след кратка пауза на всеки [REPEAT_MS].
+ */
+@Composable
+private fun RepeatKeyButton(label: String, tag: String, onFire: () -> Unit) {
+  val currentOnFire by rememberUpdatedState(onFire)
+  Box(
+    contentAlignment = Alignment.Center,
+    modifier = Modifier
+      .size(52.dp)
+      .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f), CircleShape)
+      .testTag(tag)
+      .pointerInput(Unit) {
+        coroutineScope {
+          awaitEachGesture {
+            awaitFirstDown()
+            currentOnFire()
+            val repeat = launch {
+              delay(REPEAT_FIRST_MS)
+              while (true) {
+                currentOnFire()
+                delay(REPEAT_MS)
+              }
+            }
+            waitForUpOrCancellation()
+            repeat.cancel()
+          }
+        }
+      },
+  ) {
+    Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+  }
+}
+
+private const val REPEAT_FIRST_MS = 400L
+private const val REPEAT_MS = 150L
+
+/** В системния clipboard. От Android 13 системата сама показва, че е копирано. */
+private fun copyToClipboard(context: Context, text: String, notices: Notices) {
+  val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+  clipboard.setPrimaryClip(ClipData.newPlainText("terminal", text))
+  if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) notices.show("Копирано")
 }
 
 @Composable

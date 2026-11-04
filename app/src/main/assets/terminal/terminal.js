@@ -1,7 +1,8 @@
 // Мостът между xterm.js и приложението.
 //
-// Kotlin вика supa.init / write / resize / scrollPages / scrollToBottom; страницата вика
-// SupaBridge.ready().
+// Kotlin вика supa.init / write / resize / scrollPages / scrollToBottom / copyText;
+// selectStart / selectMove / selectEnd (от дългото натискане в Android); страницата вика
+// SupaBridge.ready(), text(), copy() и overscroll().
 //
 // Размерът на терминала е винаги този на Mac-а (cols × rows от `attached` и `size`).
 // Страницата никога не го сменя сама: вместо това подбира шрифта така, че всички колони
@@ -120,6 +121,157 @@
       if (bridge.text) bridge.text(lines.join('\n'));
     },
   };
+
+  // ---- Докосване: маркиране (от Android) и скрол, който стига до програмата ----
+
+  var OVERSCROLL_DEAD_PX = 40;
+  var OVERSCROLL_EVERY_MS = 250;
+
+  /** Клетката под пръста: колона и ред в буфера (с историята над екрана). */
+  function cellAt(x, y) {
+    var screen = term.element.querySelector('.xterm-screen');
+    var rect = screen.getBoundingClientRect();
+    var col = Math.floor((x - rect.left) / (rect.width / term.cols));
+    var row = Math.floor((y - rect.top) / (rect.height / term.rows));
+    col = Math.max(0, Math.min(term.cols - 1, col));
+    row = Math.max(0, Math.min(term.rows - 1, row));
+    return { col: col, row: row + term.buffer.active.viewportY };
+  }
+
+  function selectBetween(a, b) {
+    var first = a, last = b;
+    if (b.row < a.row || (b.row === a.row && b.col < a.col)) { first = b; last = a; }
+    var length = (last.row - first.row) * term.cols + (last.col - first.col) + 1;
+    term.select(first.col, first.row, length);
+  }
+
+  // Плаващите бутони до маркираното: „Копирай“ и „×“.
+  var actions = document.createElement('div');
+  actions.id = 'select-actions';
+  actions.innerHTML = '<button id="sel-copy">Копирай</button><button id="sel-cancel">×</button>';
+  document.body.appendChild(actions);
+
+  function hideActions() {
+    actions.style.display = 'none';
+  }
+
+  function showActions(x, y) {
+    actions.style.display = 'flex';
+    var w = actions.offsetWidth, h = actions.offsetHeight;
+    var left = Math.max(4, Math.min(document.documentElement.clientWidth - w - 4, x - w / 2));
+    var top = y - h - 24 < 4 ? y + 24 : y - h - 24;
+    actions.style.left = (left + window.scrollX) + 'px';
+    actions.style.top = (top + window.scrollY) + 'px';
+  }
+
+  function clearSelection() {
+    term.clearSelection();
+    hideActions();
+  }
+
+  document.getElementById('sel-copy').addEventListener('click', function (e) {
+    e.stopPropagation();
+    var text = term.getSelection();
+    if (text && bridge.copy) bridge.copy(text);
+    clearSelection();
+  });
+  document.getElementById('sel-cancel').addEventListener('click', function (e) {
+    e.stopPropagation();
+    clearSelection();
+  });
+
+  // Маркирането идва от Android: дългото натискане се хваща там (GestureDetector), защото
+  // Chromium прекъсва докосването на страницата (touchcancel), щом сам познае дълго
+  // натискане. Координатите са пиксели на WebView-то; тук стават CSS точки на страницата.
+  function clientPoint(x, y) {
+    var vv = window.visualViewport;
+    var scale = (vv ? vv.scale : 1) * window.devicePixelRatio;
+    return { x: x / scale + (vv ? vv.offsetLeft : 0), y: y / scale + (vv ? vv.offsetTop : 0) };
+  }
+
+  var selectAnchor = null;
+
+  window.supa.selectStart = function (x, y) {
+    hideActions();
+    var p = clientPoint(x, y);
+    selectAnchor = cellAt(p.x, p.y);
+    selectBetween(selectAnchor, selectAnchor);
+  };
+  window.supa.selectMove = function (x, y) {
+    if (!selectAnchor) return;
+    var p = clientPoint(x, y);
+    selectBetween(selectAnchor, cellAt(p.x, p.y));
+  };
+  window.supa.selectEnd = function (x, y) {
+    if (!selectAnchor) return;
+    var p = clientPoint(x, y);
+    selectBetween(selectAnchor, cellAt(p.x, p.y));
+    selectAnchor = null;
+    if (term.hasSelection()) showActions(p.x, p.y);
+  };
+
+  var touch = null; // { lastY, over, overDir }
+  var lastOverscroll = 0;
+
+  /**
+   * Скрол отвъд ръба на историята на телефона: нагоре при най-стария ред (или без история —
+   * напр. Claude Code на цял екран) праща PgUp към програмата, надолу при живия край — PgDn.
+   * Мъртва зона, за да не стреля обикновен скрол, който само стига ръба, и пауза между
+   * клавишите.
+   */
+  function trackOverscroll(dy) {
+    var buffer = term.buffer.active;
+    var atTop = buffer.viewportY <= 0;
+    var atBottom = buffer.viewportY >= buffer.baseY;
+    var dir = null;
+    if (dy > 0 && atTop) dir = 'up';
+    else if (dy < 0 && atBottom) dir = 'down';
+    if (!dir) { touch.over = 0; touch.overDir = null; return; }
+    if (dir !== touch.overDir) { touch.overDir = dir; touch.over = 0; }
+    touch.over += Math.abs(dy);
+    var now = Date.now();
+    if (touch.over >= OVERSCROLL_DEAD_PX && now - lastOverscroll >= OVERSCROLL_EVERY_MS) {
+      lastOverscroll = now;
+      if (bridge.overscroll) bridge.overscroll(dir);
+    }
+  }
+
+  term.element.addEventListener('touchstart', function (e) {
+    hideActions();
+    touch = e.touches.length === 1 ? { lastY: e.touches[0].clientY, over: 0, overDir: null } : null;
+  }, { capture: true, passive: true });
+
+  term.element.addEventListener('touchmove', function (e) {
+    if (!touch || e.touches.length !== 1) return;
+    var y = e.touches[0].clientY;
+    var dy = y - touch.lastY;
+    touch.lastY = y;
+    trackOverscroll(dy);
+  }, { capture: true, passive: true });
+
+  function endTouch() { touch = null; }
+  term.element.addEventListener('touchend', endTouch, { capture: true, passive: true });
+  term.element.addEventListener('touchcancel', endTouch, { capture: true, passive: true });
+
+  // Колелото на мишката (emulator, таблет с мишка): същото правило, натрупано по deltaY.
+  var wheelOver = 0, wheelDir = null;
+  term.element.addEventListener('wheel', function (e) {
+    var buffer = term.buffer.active;
+    var dir = null;
+    if (e.deltaY < 0 && buffer.viewportY <= 0) dir = 'up';
+    else if (e.deltaY > 0 && buffer.viewportY >= buffer.baseY) dir = 'down';
+    if (!dir) { wheelOver = 0; wheelDir = null; return; }
+    if (dir !== wheelDir) { wheelDir = dir; wheelOver = 0; }
+    wheelOver += Math.abs(e.deltaY);
+    var now = Date.now();
+    if (wheelOver >= OVERSCROLL_DEAD_PX && now - lastOverscroll >= OVERSCROLL_EVERY_MS) {
+      lastOverscroll = now;
+      if (bridge.overscroll) bridge.overscroll(dir);
+    }
+  }, { capture: true, passive: true });
+
+  // Дългото натискане е наше: без системното меню и маркиране на WebView-то.
+  document.addEventListener('contextmenu', function (e) { e.preventDefault(); });
 
   window.addEventListener('resize', fit);
   fit();

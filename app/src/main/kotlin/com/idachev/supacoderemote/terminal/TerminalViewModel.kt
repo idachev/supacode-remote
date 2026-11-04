@@ -79,6 +79,8 @@ class TerminalViewModel(
   private val notices: Notices,
   val contentId: String,
   private val suggestTimeoutMs: Long = SUGGEST_TIMEOUT_MS,
+  /** „Скрол стига до агента“ от „Настройка“; чете се при всеки скрол. */
+  private val overscrollToProgram: () -> Boolean = { true },
 ) : ViewModel() {
 
   private val _state = MutableStateFlow(TerminalUiState())
@@ -200,6 +202,16 @@ class TerminalViewModel(
   /** Иска текста на терминала; идва обратно през `onText` на WebView-то. */
   fun requestText() {
     _commands.trySend(TerminalCommand.RequestText)
+  }
+
+  /**
+   * Скрол отвъд ръба на историята на телефона: PgUp / PgDn към програмата, която превърта
+   * своята история (Claude Code). Тихо, без съобщение, ако терминалът не е свързан —
+   * скролът е жест, не команда.
+   */
+  fun onOverscroll(up: Boolean) {
+    if (!overscrollToProgram() || _state.value.phase !is AttachPhase.Attached) return
+    sendRaw(if (up) TerminalKeys.PAGE_UP else TerminalKeys.PAGE_DOWN)
   }
 
   fun toggleCtrl() = _state.update { it.copy(ctrlSticky = !it.ctrlSticky) }

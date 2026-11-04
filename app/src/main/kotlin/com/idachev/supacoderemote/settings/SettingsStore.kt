@@ -27,6 +27,11 @@ interface SettingsStore {
   val notifyAwaiting: StateFlow<Boolean>
 
   fun setNotifyAwaiting(value: Boolean)
+
+  /** „Скрол стига до агента“: скрол отвъд историята на телефона праща PgUp / PgDn. */
+  val overscrollToProgram: StateFlow<Boolean>
+
+  fun setOverscrollToProgram(value: Boolean)
 }
 
 /**
@@ -50,6 +55,14 @@ class KeystoreSettingsStore(context: Context) : SettingsStore {
   override fun setNotifyAwaiting(value: Boolean) {
     prefs.edit().putBoolean(KEY_NOTIFY, value).apply()
     _notifyAwaiting.value = value
+  }
+
+  private val _overscroll = MutableStateFlow(prefs.getBoolean(KEY_OVERSCROLL, true))
+  override val overscrollToProgram: StateFlow<Boolean> = _overscroll.asStateFlow()
+
+  override fun setOverscrollToProgram(value: Boolean) {
+    prefs.edit().putBoolean(KEY_OVERSCROLL, value).apply()
+    _overscroll.value = value
   }
 
   override fun save(value: RelaySettings) {
@@ -107,6 +120,7 @@ class KeystoreSettingsStore(context: Context) : SettingsStore {
     const val KEY_URL = "base_url"
     const val KEY_API = "api_key"
     const val KEY_NOTIFY = "notify_awaiting"
+    const val KEY_OVERSCROLL = "overscroll_to_program"
     const val KEYSTORE = "AndroidKeyStore"
     const val ALIAS = "relay_settings_key"
     const val TRANSFORMATION = "AES/GCM/NoPadding"

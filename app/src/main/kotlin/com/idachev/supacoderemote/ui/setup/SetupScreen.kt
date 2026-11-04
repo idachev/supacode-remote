@@ -90,6 +90,25 @@ private fun NotifyAwaitingRow() {
   }
 }
 
+/** „Скрол стига до агента“: скрол отвъд историята на телефона праща PgUp / PgDn. */
+@Composable
+private fun OverscrollRow() {
+  val store = LocalAppContainer.current.settingsStore
+  val enabled by store.overscrollToProgram.collectAsStateWithLifecycle()
+  Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+    Column(Modifier.weight(1f)) {
+      Text("Скрол стига до агента", style = MaterialTheme.typography.bodyLarge)
+      Text(
+        "В началото или края на историята на телефона още скрол праща PgUp / PgDn, за да " +
+          "превърти историята на самата програма (напр. Claude Code).",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+    }
+    Switch(checked = enabled, onCheckedChange = store::setOverscrollToProgram, modifier = Modifier.testTag("setup-overscroll"))
+  }
+}
+
 /**
  * „Настройка“: ключът за връзка `<relay>/<клиентски ключ>`. Пише се (или се поставя)
  * веднъж, сменя се оттук. Записани по-рано адрес и ключ се показват в същия вид.
@@ -170,6 +189,7 @@ fun SetupScreen(wrongKey: Boolean, canGoBack: Boolean, onBack: () -> Unit, onSav
       error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
       Button(onClick = ::save, modifier = Modifier.fillMaxWidth().testTag("setup-save")) { Text("Запази и свържи") }
       NotifyAwaitingRow()
+      OverscrollRow()
       Text(
         "Версия ${BuildConfig.VERSION_NAME} · ${BuildConfig.GIT_SHORT_SHA} · ${BuildConfig.BUILD_TIME_UTC}",
         style = MaterialTheme.typography.labelSmall,
