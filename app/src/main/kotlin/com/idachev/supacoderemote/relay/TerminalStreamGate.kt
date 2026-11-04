@@ -30,12 +30,19 @@ internal class TerminalStreamGate {
   private var currentContentId: String? = null
   private var pending: Pending? = null
 
+  /**
+   * Последният `attach` за всеки терминал. По жицата `detach` носи само contentId, затова
+   * екран, чийто attach вече е заменен от нов екран със същия терминал, не бива да го праща.
+   */
+  private val latestAttachId = HashMap<String, Int>()
+
   /** Пътищата, по които Mac-ът държи наш attach, и терминалът му. */
   private val attachedOn = LinkedHashMap<Any, String>()
 
   /** `attach` е тръгнал по [via]. Викай преди отговорът да може да бъде обработен. */
   fun attachSent(via: Any, id: Int, contentId: String) {
     pending = Pending(via, id, contentId)
+    latestAttachId[contentId] = id
     attachedOn[via] = contentId
   }
 
@@ -43,10 +50,21 @@ internal class TerminalStreamGate {
   fun detachSent(via: Any, contentId: String): List<Pair<Any, String>> {
     if (pending?.contentId == contentId) pending = null
     if (attachedOn[via] == contentId) attachedOn.remove(via)
+    latestAttachId.remove(contentId)
     // Само detach на текущия терминал спира потока: закъснял detach на предишен екран
-    // (onCleared след attach-а на нов таб) иначе изхвърля целия изход на новия.
-    if (current === via && currentContentId == contentId) clearCurrent()
+    // (onCleared след attach-а на нов таб) иначе изхвърля целия изход на новия. По кой път
+    // е тръгнал, няма значение: той спира терминала и по другите пътища.
+    if (currentContentId == contentId) clearCurrent()
     return takeOthers(except = null, contentId = contentId)
+  }
+
+  /**
+   * `detach` от екран, чийто последен attach е [attachId], е остарял: след него друг екран
+   * е закачил същия терминал (бързо A→B→A), и той би спрял потока на новия екран.
+   */
+  fun isStaleDetach(contentId: String, attachId: Int?): Boolean {
+    val latest = latestAttachId[contentId] ?: return false
+    return latest != attachId
   }
 
   /** Пътят е паднал: Mac-ът е забравил attach-а по него, кадрите му вече не се приемат. */

@@ -5,7 +5,6 @@ import androidx.lifecycle.viewModelScope
 import com.idachev.supacoderemote.Notices
 import com.idachev.supacoderemote.protocol.AttachRequest
 import com.idachev.supacoderemote.protocol.Attached
-import com.idachev.supacoderemote.protocol.DetachRequest
 import com.idachev.supacoderemote.protocol.Detached
 import com.idachev.supacoderemote.protocol.ErrorReply
 import com.idachev.supacoderemote.protocol.InputRequest
@@ -114,6 +113,9 @@ class TerminalViewModel(
 
   private var webReady = false
   private var attachId: Int? = null
+
+  /** Последният изпратен `attach`; `detach`-ът при затваряне е за него. */
+  private var lastAttachId: Int? = null
   private var suggestId: Int? = null
   private var suggestTimeout: Job? = null
   private val pause = OutputPause(pauseCapBytes)
@@ -163,6 +165,7 @@ class TerminalViewModel(
   private fun attach() {
     val id = link.nextId()
     attachId = id
+    lastAttachId = id
     _state.update { it.copy(phase = AttachPhase.Attaching) }
     if (!link.send(AttachRequest(id = id, contentId = contentId))) {
       attachId = null
@@ -414,7 +417,7 @@ class TerminalViewModel(
 
   /** Екранът е затворен (entry-то е махнато от стека): host-ът спира потока. */
   override fun onCleared() {
-    link.send(DetachRequest(contentId))
+    link.detach(contentId, lastAttachId)
   }
 
   companion object {

@@ -65,6 +65,12 @@ interface HostLink {
   /** `false`, ако връзката не е горе: тогава съобщението не е тръгнало. */
   fun send(message: ClientMessage): Boolean
 
+  /**
+   * `detach` от екрана, чийто последен `attach` е [lastAttachId] (`null` — не е правил).
+   * Не тръгва, ако след него друг екран е закачил същия терминал.
+   */
+  fun detach(contentId: String, lastAttachId: Int?): Boolean = send(DetachRequest(contentId))
+
   /** Id за заявка, която чака отговор със същото `id`. */
   fun nextId(): Int
 }
@@ -226,6 +232,14 @@ class RelayClient(
         is DetachRequest -> sendDetaches(gate.detachSent(via, message.contentId))
       }
       return true
+    }
+  }
+
+  override fun detach(contentId: String, lastAttachId: Int?): Boolean {
+    // Под streamLock-а (той е reentrant): нов attach не може да влезе между проверката и detach-а.
+    synchronized(streamLock) {
+      if (gate.isStaleDetach(contentId, lastAttachId)) return true
+      return send(DetachRequest(contentId))
     }
   }
 

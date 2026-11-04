@@ -130,4 +130,26 @@ class TerminalStreamGateTest {
     assertEquals(emptyList<Pair<Any, String>>(), gate.detachSent(relay, "c1"))
     assertTrue(deliver(relay, Output("c2", "new-tab-prompt")))
   }
+
+  /** Бързо A→B→A: закъснелият detach на стария екран A е остарял и не тръгва. */
+  @Test
+  fun `detach от стар екран на същия терминал е остарял`() {
+    attachedOnRelay()
+    gate.attachSent(relay, 3, "c1")
+    assertTrue(gate.isStaleDetach("c1", 1))
+    assertFalse(gate.isStaleDetach("c1", 3))
+    assertTrue(deliver(relay, attached(3)))
+    assertTrue(deliver(relay, out("new-screen")))
+    // Екран без attach за терминал без attach — detach-ът тръгва (безвреден).
+    assertFalse(gate.isStaleDetach("c9", null))
+  }
+
+  /** detach по LAN, докато relay-ят носи потока: relay кадрите вече не минават. */
+  @Test
+  fun `detach по другия път спира и текущия път`() {
+    attachedOnRelay()
+    gate.attachSent(lan, 2, "c1")
+    assertEquals(listOf(relay to "c1"), gate.detachSent(lan, "c1"))
+    assertFalse(deliver(relay, out("relay-late")))
+  }
 }
