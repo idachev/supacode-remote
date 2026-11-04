@@ -82,17 +82,24 @@
 
   window.supa = {
     /** Нов attach: празен терминал с точния размер на Mac-а. */
+    // term.write е асинхронен, а reset и resize — не. Затова те чакат в същата опашка на
+    // xterm.js (празен запис с callback): изходът преди тях, напр. пуснатият след „Пауза“,
+    // се изписва с размера, за който е, и не попада след reset.
     init: function (cols, rows) {
-      term.reset();
-      term.resize(cols, rows);
-      fit();
+      term.write('', function () {
+        term.reset();
+        term.resize(cols, rows);
+        fit();
+      });
     },
     write: function (b64) {
       term.write(decode(b64));
     },
     resize: function (cols, rows) {
-      term.resize(cols, rows);
-      fit();
+      term.write('', function () {
+        term.resize(cols, rows);
+        fit();
+      });
     },
     /** Историята на xterm.js (scrollback); програмата в PTY-то не разбира. */
     scrollPages: function (pages) {
@@ -171,7 +178,12 @@
   // мести маркираното нагоре — или го маха, ако е изрязано, без onSelectionChange. Затова
   // след всеки запис диапазонът се чете наново и Kotlin получава новия.
   term.onWriteParsed(function () {
-    if (reported === null || selectAnchor) return;
+    if (!selectAnchor) rereadSelection();
+  });
+
+  /** Показаното маркирано наново от xterm.js; докладва се само ако се е сменило. */
+  function rereadSelection() {
+    if (reported === null) return;
     var pos = term.getSelectionPosition();
     if (!pos) { reportGone(); return; }
     // Краят от xterm.js е изключителен (x е от 1 до cols): последната клетка е x − 1.
@@ -179,7 +191,7 @@
     var end = { col: pos.end.x - 1, row: pos.end.y };
     var next = [start.col, start.row, end.col, end.row, term.cols, term.buffer.active.length].join(',');
     if (next !== reported) reportSelection(start, end);
-  });
+  }
 
   // Маркирането идва от Android: дългото натискане се хваща там (GestureDetector), защото
   // Chromium прекъсва докосването на страницата (touchcancel), щом сам познае дълго
@@ -206,10 +218,11 @@
   window.supa.selectEnd = function (x, y) {
     if (!selectAnchor) return;
     var p = clientPoint(x, y);
-    var cell = cellAt(p.x, p.y);
-    selectBetween(selectAnchor, cell);
-    reportSelection(selectAnchor, cell);
+    selectBetween(selectAnchor, cellAt(p.x, p.y));
     selectAnchor = null;
+    // Изходът, вече подаден на xterm.js, може да е изрязал историята по време на плъзгането:
+    // докладва се показаното, както е сега, с днешния размер на буфера.
+    rereadSelection();
   };
   /** Точният диапазон от лентата за маркиране (краищата включително, вече подредени). */
   window.supa.selectRange = function (startCol, startRow, endCol, endRow) {
