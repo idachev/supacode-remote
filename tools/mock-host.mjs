@@ -18,12 +18,14 @@
 //   mock-lan-off  — LAN endpoint-ът спира (затваря LAN връзките), `hello` вече няма `lan`;
 //   mock-lan-on   — LAN endpoint-ът тръгва пак.
 //
-// LAN пътят (раздел „LAN shortcut“ в протокола): ws://127.0.0.1:LAN_PORT/lan (8788), от
-// emulator-а 10.0.2.2. Ръкостискане с nonce-и, HKDF-SHA256 върху клиентския ключ, HMAC
-// доказателства и AES-256-GCM кадри. LAN=0 го изключва.
+// LAN пътят (раздел „LAN shortcut“ в протокола): wss://127.0.0.1:LAN_PORT/lan (8788), от
+// emulator-а 10.0.2.2. TLS 1.3 със самоподписан сертификат от паметта, `fp` и `fpMac` в
+// `hello`. LAN=0 го изключва.
 
 import { createServer } from 'node:http';
+import { createServer as createHttpsServer } from 'node:https';
 import crypto from 'node:crypto';
+import selfsigned from 'selfsigned';
 import { chmodSync, existsSync, readdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -289,7 +291,7 @@ function handle(c, msg) {
     case 'hello':
       send(c, {
         t: 'hello', v: 1, host: 'Mock Mac',
-        ...(lanOn && !c.lan ? { lan: { addrs: LAN_ADDRS, port: LAN_PORT } } : {}),
+        ...(lanOn && !c.lan ? { lan: { addrs: LAN_ADDRS, port: LAN_PORT, fp: LAN_FP, fpMac: LAN_FP_MAC } } : {}),
       });
       break;
     case 'list':
@@ -376,71 +378,32 @@ wss.on('connection', (ws) => {
 });
 
 // ---- LAN endpoint ----
+//
+// wss://127.0.0.1:LAN_PORT/lan с TLS 1.3 и самоподписан сертификат, създаден в паметта при
+// всяко пускане (пакетът `selfsigned`; нищо не се пише на диска). `fp` е SHA-256 на DER
+// байтовете на сертификата, `fpMac` — HMAC-SHA256 с клиентския ключ върху
+// "supacode-lan-fp-v1:" + fp. След upgrade-а съобщенията са същият текст като по relay-а.
 
-const LAN_INFO = Buffer.from('supacode-lan-v1');
-const C2S = Buffer.from('c2s\0', 'binary');
-const S2C = Buffer.from('s2c\0', 'binary');
+const lanIdentity = selfsigned.generate([{ name: 'commonName', value: 'supacode-mock-lan' }], {
+  keySize: 2048, days: 3650, algorithm: 'sha256',
+});
+const LAN_FP = crypto.createHash('sha256').update(new crypto.X509Certificate(lanIdentity.cert).raw).digest('hex');
+const LAN_FP_MAC = crypto.createHmac('sha256', Buffer.from(KEY, 'utf8')).update('supacode-lan-fp-v1:' + LAN_FP).digest('hex');
 const lanWss = new WebSocketServer({ noServer: true });
 let lanServer = null;
 
-function lanNonce(direction, counter) {
-  const n = Buffer.alloc(12);
-  direction.copy(n, 0);
-  n.writeBigUInt64BE(BigInt(counter), 4);
-  return n;
-}
-
 lanWss.on('connection', (ws) => {
-  const c = { ws, attached: null, lan: true, id: 'lan-' + Math.random().toString(16).slice(2, 8), state: 'hello' };
-  let keys = null;
-  let sendCounter = 0;
-  let recvCounter = 0;
-  const close = (why) => { log('lan close', c.id, why); ws.terminate(); };
-  c.sendText = (text) => {
-    if (ws.readyState !== ws.OPEN) return;
-    const nonce = lanNonce(S2C, sendCounter++);
-    const cipher = crypto.createCipheriv('aes-256-gcm', keys.s2c, nonce);
-    ws.send(Buffer.concat([nonce, cipher.update(Buffer.from(text, 'utf8')), cipher.final(), cipher.getAuthTag()]));
+  const c = {
+    ws, attached: null, lan: true, id: 'lan-' + Math.random().toString(16).slice(2, 8),
+    sendText: (text) => { if (ws.readyState === ws.OPEN) ws.send(text); },
   };
-  ws.on('message', (data, isBinary) => {
-    if (c.state === 'hello' || c.state === 'auth') {
-      if (isBinary) return close('binary before auth');
-      let msg;
-      try { msg = JSON.parse(data.toString('utf8')); } catch { return close('bad json'); }
-      if (c.state === 'hello') {
-        const clientNonce = Buffer.from(msg.nonce ?? '', 'base64');
-        if (msg.t !== 'lan.hello' || clientNonce.length !== 16) return close('bad hello');
-        const macNonce = crypto.randomBytes(16);
-        const okm = Buffer.from(crypto.hkdfSync('sha256', Buffer.from(KEY, 'utf8'), Buffer.concat([clientNonce, macNonce]), LAN_INFO, 96));
-        keys = { c2s: okm.subarray(0, 32), s2c: okm.subarray(32, 64), proof: okm.subarray(64, 96) };
-        const proof = crypto.createHmac('sha256', keys.proof).update('mac').digest('base64');
-        ws.send(JSON.stringify({ t: 'lan.hello', v: 1, nonce: macNonce.toString('base64'), proof }));
-        c.state = 'auth';
-        return;
-      }
-      const expected = crypto.createHmac('sha256', keys.proof).update('client').digest();
-      const got = Buffer.from(msg.proof ?? '', 'base64');
-      if (msg.t !== 'lan.auth' || got.length !== expected.length || !crypto.timingSafeEqual(got, expected)) {
-        return close('bad proof');
-      }
-      c.state = 'ready';
-      clients.add(c);
-      log('lan connect', c.id);
-      return;
-    }
-    if (!isBinary || data.length < 28) return close('not a frame');
-    const nonce = data.subarray(0, 12);
-    if (!nonce.subarray(0, 4).equals(C2S) || nonce.readBigUInt64BE(4) !== BigInt(recvCounter)) return close('bad nonce');
-    let text;
-    try {
-      const decipher = crypto.createDecipheriv('aes-256-gcm', keys.c2s, nonce);
-      decipher.setAuthTag(data.subarray(data.length - 16));
-      text = Buffer.concat([decipher.update(data.subarray(12, data.length - 16)), decipher.final()]).toString('utf8');
-    } catch { return close('bad tag'); }
-    recvCounter++;
-    if (text === 'ping') { c.sendText('pong'); return; }
+  clients.add(c);
+  log('lan connect', c.id, ws._socket?.getProtocol?.() ?? '');
+  ws.on('message', (data) => {
+    const text = data.toString('utf8');
+    if (text === 'ping') { ws.send('pong'); return; }
     let msg;
-    try { msg = JSON.parse(text); } catch { return close('bad json'); }
+    try { msg = JSON.parse(text); } catch { log('bad json', text); return; }
     if (msg.t !== 'input' && msg.t !== 'list') log('<- lan', c.id, text.slice(0, 200));
     handle(c, msg);
   });
@@ -448,15 +411,22 @@ lanWss.on('connection', (ws) => {
 });
 
 function startLan() {
-  lanServer = createServer((req, res) => res.writeHead(404).end('not found'));
+  lanServer = createHttpsServer({
+    key: lanIdentity.private, cert: lanIdentity.cert, minVersion: 'TLSv1.3', maxVersion: 'TLSv1.3',
+  }, (req, res) => res.writeHead(404).end('not found'));
   lanServer.on('upgrade', (req, socket, head) => {
-    if (new URL(req.url, 'http://x').pathname !== '/lan') {
+    if (new URL(req.url, 'https://x').pathname !== '/lan') {
       socket.end('HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n');
+      return;
+    }
+    if (req.headers.authorization !== `Bearer ${KEY}`) {
+      log('lan 401', req.socket.remoteAddress);
+      socket.end('HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n');
       return;
     }
     lanWss.handleUpgrade(req, socket, head, (ws) => lanWss.emit('connection', ws));
   });
-  lanServer.listen(LAN_PORT, '127.0.0.1', () => log(`LAN endpoint on ws://127.0.0.1:${LAN_PORT}/lan  addrs=${LAN_ADDRS}`));
+  lanServer.listen(LAN_PORT, '127.0.0.1', () => log(`LAN endpoint on wss://127.0.0.1:${LAN_PORT}/lan  addrs=${LAN_ADDRS}  fp=${LAN_FP}`));
 }
 
 function setLan(on) {

@@ -83,6 +83,8 @@ dependencies {
   testImplementation(libs.kotlinx.coroutines.test)
   // Истински WebSocket сървър за теста на RelayClient (401, hello, ping).
   testImplementation(libs.okhttp.mockwebserver)
+  // Самоподписан сертификат за LAN сървъра в теста (TLS 1.3 със заковани отпечатък).
+  testImplementation(libs.okhttp.tls)
 
   // Instrumented tests: jUnit rules and runners
   androidTestImplementation(libs.androidx.test.core)

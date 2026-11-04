@@ -7,6 +7,7 @@
     "mock": "node mock-host.mjs"
   },
   "dependencies": {
+    "selfsigned": "^2.4.1",
     "ws": "^8.18.0"
   },
   "optionalDependencies": {

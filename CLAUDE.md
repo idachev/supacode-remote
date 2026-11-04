@@ -56,16 +56,17 @@ Navigation 3. compileSdk и targetSdk са 36 (template-ът иска 37, но p
 
 ## LAN пътят
 
-- Когато `hello` по relay-а носи `lan`, `RelayClient` пробва `ws://<addr>:<port>/lan` с
-  ръкостискане по раздел „LAN shortcut“ (nonce-и, HKDF-SHA256 върху клиентския ключ, HMAC
-  доказателства, AES-256-GCM кадри; `LanCrypto`, `LanSession`). Ключът не минава по LAN и
-  няма сертификати.
+- Когато `hello` по relay-а носи `lan`, `RelayClient` първо проверява `fpMac` (HMAC-SHA256 с
+  клиентския ключ върху `supacode-lan-fp-v1:` + `fp`, `LanTrust`). Грешен `fpMac` — никакъв
+  опит. После `wss://<addr>:<port>/lan`: само TLS 1.3, сертификатът се приема само при
+  SHA-256 на DER == `fp`, ключът е в `Authorization` (`LanSession`).
 - Успешна LAN връзка поема всички заявки; relay сокетът остава като резерва (само ping).
   Всяка смяна на пътя е нова `hostSession` — терминалът прави `attach` наново. Пътят се
   вижда в чипа „LAN“ / „Relay“.
-- `LanCryptoTest` държи векторите, сверени с Node и с Mac страната. Промяна във формулите
-  иска нови вектори и от двете страни.
-- Mock-ът има LAN endpoint на 8788 (`mock-lan-off` / `mock-lan-on` в таб).
+- `LanTrustTest` държи `fpMac` вектора, изчислен с Node; Mac страната ползва същия.
+- Mock-ът има LAN endpoint на 8788 с TLS 1.3 и сертификат, създаден в паметта при всяко
+  пускане (`selfsigned`); `mock-lan-off` / `mock-lan-on` в таб. Не се пазят ключове и
+  сертификати във файлове.
 
 ## Терминалът
 

@@ -365,9 +365,13 @@ class RelayClient(
    */
   private fun onRelayHello(info: LanInfo?) {
     synchronized(lock) {
-      if (info != null) {
+      val key = settings?.apiKey
+      if (info != null && key != null && LanTrust.fpMacValid(key, info.fp, info.fpMac)) {
         lanOffered = true
         maybeStartLan(info)
+      } else if (info != null) {
+        // Отпечатък без верен fpMac: не е от Mac-а (или relay-ят го е пипал) — без LAN.
+        return
       } else if (lanOffered && lan == null && lanJob?.isActive != true) {
         scheduleLanRetryLocked()
       }
