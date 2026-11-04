@@ -148,15 +148,37 @@
 
   // Бутоните за маркираното („Копирай“, ◀ ▶, „Отказ“) са в Compose над WebView-то, за да
   // са с еднакъв размер при всеки zoom. Страницата само показва диапазона и казва какъв е.
+  var reported = null; // последно докладваното на Kotlin, за да не се праща същото
+
   function reportSelection(a, b) {
-    if (bridge.selection) {
-      bridge.selection(a.col, a.row, b.col, b.row, term.cols, term.buffer.active.length);
-    }
+    var length = term.buffer.active.length;
+    reported = [a.col, a.row, b.col, b.row, term.cols, length].join(',');
+    if (bridge.selection) bridge.selection(a.col, a.row, b.col, b.row, term.cols, length);
+  }
+
+  function reportGone() {
+    if (reported === null) return;
+    reported = null;
+    if (bridge.selectionGone) bridge.selectionGone();
   }
 
   // Маркираното изчезва и от само себе си (тап в терминала, reset): лентата се скрива.
   term.onSelectionChange(function () {
-    if (!term.hasSelection() && bridge.selectionGone) bridge.selectionGone();
+    if (!term.hasSelection()) reportGone();
+  });
+
+  // Нов изход: буферът расте, а при пълна история най-старите редове се режат и xterm.js
+  // мести маркираното нагоре — или го маха, ако е изрязано, без onSelectionChange. Затова
+  // след всеки запис диапазонът се чете наново и Kotlin получава новия.
+  term.onWriteParsed(function () {
+    if (reported === null || selectAnchor) return;
+    var pos = term.getSelectionPosition();
+    if (!pos) { reportGone(); return; }
+    // Краят от xterm.js е изключителен (x е от 1 до cols): последната клетка е x − 1.
+    var start = { col: pos.start.x, row: pos.start.y };
+    var end = { col: pos.end.x - 1, row: pos.end.y };
+    var next = [start.col, start.row, end.col, end.row, term.cols, term.buffer.active.length].join(',');
+    if (next !== reported) reportSelection(start, end);
   });
 
   // Маркирането идва от Android: дългото натискане се хваща там (GestureDetector), защото
@@ -192,6 +214,8 @@
   /** Точният диапазон от лентата за маркиране (краищата включително, вече подредени). */
   window.supa.selectRange = function (startCol, startRow, endCol, endRow) {
     selectBetween({ col: startCol, row: startRow }, { col: endCol, row: endRow });
+    // Kotlin вече знае този диапазон; запомня се, за да не се връща обратно като промяна.
+    reported = [startCol, startRow, endCol, endRow, term.cols, term.buffer.active.length].join(',');
   };
   /** „Копирай“: точно показаното, после маркираното се маха. */
   window.supa.copySelection = function () {

@@ -50,4 +50,12 @@ class TerminalSelectionTest {
     assertEquals(sel(0, 0, 9, 4), clamped)
     assertNull(TerminalSelection.of(Cell(0, 0), Cell(0, 0), 0, 5))
   }
+
+  @Test
+  fun `по-голям буфер от нов доклад пуска края по-надолу`() {
+    val old = sel(0, 4, 9, 4)
+    assertEquals(old, old.moveEnd(1))
+    val grown = TerminalSelection.of(Cell(0, 4), Cell(9, 4), 10, 6)!!
+    assertEquals(Cell(0, 5), grown.moveEnd(1).end)
+  }
 }

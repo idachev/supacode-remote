@@ -326,6 +326,30 @@ class TerminalViewModelTest {
   }
 
   @Test
+  fun `нов изход докладва диапазона наново и ◀ ▶ тръгват от него`() = runTest(dispatcher) {
+    vm.onWebReady()
+    val commands = collectCommands()
+    // Краят е на последния ред: без нов доклад ▶ спира тук.
+    vm.onSelection(TerminalSelection(Cell(2, 4), Cell(9, 4), cols = 10, rows = 5))
+    // Историята е изрязана с 2 реда, а буферът е пораснал: страницата казва новото място.
+    vm.onSelection(TerminalSelection.of(Cell(2, 2), Cell(9, 2), cols = 10, rows = 8))
+    vm.moveSelectionEnd(1)
+    vm.moveSelectionStart(-1)
+    runCurrent()
+    assertEquals(TerminalSelection(Cell(1, 2), Cell(0, 3), cols = 10, rows = 8), vm.state.value.selection)
+    assertEquals(
+      listOf<TerminalCommand>(
+        TerminalCommand.Select(Cell(2, 2), Cell(0, 3)),
+        TerminalCommand.Select(Cell(1, 2), Cell(0, 3)),
+      ),
+      commands,
+    )
+    // Изрязано изцяло: лентата изчезва.
+    vm.onSelection(null)
+    assertEquals(null, vm.state.value.selection)
+  }
+
+  @Test
   fun `при затваряне на екрана се праща detach`() = runTest(dispatcher) {
     runCurrent()
     store.clear()
