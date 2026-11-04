@@ -11,6 +11,12 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.runtime.MutableState
@@ -115,6 +121,9 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
     keyboard?.hide()
     vm.setInputShown(false)
   }
+  // Back първо прибира разпънатото поле (текстът остава), едва следващият напуска терминала.
+  // Отворена клавиатура взема Back преди това, както винаги.
+  BackHandler(enabled = state.bars.input) { collapseInput() }
 
   Scaffold(
     topBar = {
@@ -147,6 +156,7 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
       if (state.bars.input) InputBar(
         vm = vm,
         focusRequest = focusInput,
+        onCollapse = collapseInput,
         fieldState = field,
         ctrlSticky = state.ctrlSticky,
         liveKeys = state.liveKeys,
@@ -170,14 +180,43 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
         fontSize = textSize,
         onSelection = vm::onSelection,
       )
-      // Скрол под палеца, като от trackpad-а (Claude Code го превърта така). PgUp / PgDn са в
-      // реда с клавиши: в shell те вървят по историята на командите.
+      // Плаващите бутони са в една колона вдясно, а не подравнени поотделно: в ниско място
+      // (хоризонтално, с клавиатура) иначе се застъпват и горният прихваща докосванията.
+      // Колоната се реже по мястото на терминала, вместо да излиза върху полето за писане.
       Column(
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-        modifier = Modifier.align(Alignment.CenterEnd).padding(end = 8.dp),
+        horizontalAlignment = Alignment.End,
+        modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight().clipToBounds().padding(8.dp),
       ) {
+        // Горе: горната лента (заглавие, „Назад“, „Копирай“) се показва само при нужда.
+        FloatingBarButton(
+          icon = if (state.bars.topBar) TerminalIcons.ArrowUp else TerminalIcons.ArrowDown,
+          description = if (state.bars.topBar) "Скрий горната лента" else "Покажи горната лента",
+          tag = "float-top-bar",
+          onClick = vm::toggleTopBar,
+        )
+        Spacer(Modifier.weight(1f).heightIn(min = 12.dp))
+        // Скрол под палеца, като от trackpad-а (Claude Code го превърта така). PgUp / PgDn са в
+        // реда с клавиши: в shell те вървят по историята на командите.
         RepeatKeyButton("▲", description = "Скрол нагоре", tag = "float-scroll-up") { vm.scrollWheel(up = true) }
+        Spacer(Modifier.height(12.dp))
         RepeatKeyButton("▼", description = "Скрол надолу", tag = "float-scroll-down") { vm.scrollWheel(up = false) }
+        Spacer(Modifier.weight(1f).heightIn(min = 12.dp))
+        // Долу: разпъва полето за писане. Разпънато се прибира от реда с клавиши (или с Back),
+        // а докато има маркирано, бутонът не се показва, за да не покрива лентата за маркиране.
+        // Празното място остава, за да не скачат ▲ ▼.
+        if (!state.bars.input && state.selection == null) {
+          FloatingBarButton(
+            icon = TerminalIcons.Keyboard,
+            description = "Покажи полето за писане",
+            tag = "float-input",
+            onClick = {
+              vm.setInputShown(true)
+              focusInput++
+            },
+          )
+        } else {
+          Spacer(Modifier.size(52.dp))
+        }
       }
       // Маркираното с дълго натискане: лентата е тук, не в страницата, за да не расте с zoom-а.
       if (state.selection != null) {
@@ -192,32 +231,6 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
       // „Пауза“: изходът се задържа, докато има маркирано; чипът казва колко е чакащото.
       state.pausedBytes?.let { bytes ->
         PauseChip(bytes, modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp))
-      }
-      // Горе вдясно: горната лента (заглавие, „Назад“, „Копирай“) се показва само при нужда.
-      FloatingBarButton(
-        icon = if (state.bars.topBar) TerminalIcons.ArrowUp else TerminalIcons.ArrowDown,
-        description = if (state.bars.topBar) "Скрий горната лента" else "Покажи горната лента",
-        tag = "float-top-bar",
-        modifier = Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 8.dp),
-        onClick = vm::toggleTopBar,
-      )
-      // Долу вдясно: полето за писане. Докато има маркирано, бутонът се скрива, за да не
-      // покрива лентата за маркиране.
-      if (state.selection == null) {
-        FloatingBarButton(
-          icon = if (state.bars.input) TerminalIcons.KeyboardHide else TerminalIcons.Keyboard,
-          description = if (state.bars.input) "Скрий полето за писане" else "Покажи полето за писане",
-          tag = "float-input",
-          modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 8.dp, end = 8.dp),
-          onClick = {
-            if (state.bars.input) {
-              collapseInput()
-            } else {
-              vm.setInputShown(true)
-              focusInput++
-            }
-          },
-        )
       }
       PhaseOverlay(state.phase, onReattach = vm::reattach, modifier = Modifier.align(Alignment.Center))
     }
@@ -320,6 +333,8 @@ private fun InputBar(
   vm: TerminalViewModel,
   /** Расте при всяко разпъване с бутона: полето (или „Живи клавиши“) взема фокуса. */
   focusRequest: Int,
+  /** Прибира полето и клавиатурата; текстът в полето остава. */
+  onCollapse: () -> Unit,
   /** Текстът в полето за ред; държи го екранът, за да оцелее прибирането. */
   fieldState: MutableState<TextFieldValue>,
   ctrlSticky: Boolean,
@@ -387,6 +402,13 @@ private fun InputBar(
       horizontalArrangement = Arrangement.spacedBy(4.dp),
       modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).testTag("key-row"),
     ) {
+      // Прибирането е тук, а не плаващо над терминала: в ниско място бутонът би покрил ▲ ▼.
+      FilledTonalIconButton(
+        onClick = onCollapse,
+        modifier = Modifier.size(36.dp).testTag("input-collapse"),
+      ) {
+        Icon(TerminalIcons.KeyboardHide, contentDescription = "Скрий полето за писане")
+      }
       FilterChip(
         selected = liveKeys,
         onClick = { vm.setLiveKeys(!liveKeys) },
