@@ -259,7 +259,9 @@
     term.clearSelection();
   };
 
-  var touch = null; // { lastX, lastY, over, overDir }
+  var touch = null; // { startX, startY, lastX, lastY, over, overDir, axis }
+  // Под толкова px от началото посоката на жеста още не е решена (виж touchmove).
+  var AXIS_SLOP_PX = 8;
   var lastOverscroll = 0;
 
   /**
@@ -287,11 +289,18 @@
   }
 
   function startTouch(t) {
-    touch = { lastX: t.clientX, lastY: t.clientY, over: 0, overDir: null };
+    touch = {
+      startX: t.clientX, startY: t.clientY, lastX: t.clientX, lastY: t.clientY,
+      over: 0, overDir: null, axis: null,
+    };
   }
 
   // Само слуша (passive): по вертикала страницата няма какво да скролва (WebView-то е
   // колкото терминала), а хоризонталното местене на по-широк терминал е на Chromium.
+  // xterm.js отменя touchmove при всяко вертикално отклонение, щом има история накъдето
+  // да се превърти, и тогава Chromium не мести страницата. Затова при по-широк терминал
+  // жестът се заключва в една посока: докато не е решена и ако е хоризонтална, xterm.js
+  // не вижда движенията (stopPropagation във фазата capture).
   document.addEventListener('touchstart', function (e) {
     if (e.touches.length === 1) startTouch(e.touches[0]);
     else touch = null;
@@ -305,6 +314,12 @@
     var dy = y - touch.lastY;
     touch.lastX = x;
     touch.lastY = y;
+    if (!touch.axis && document.documentElement.scrollWidth > document.documentElement.clientWidth) {
+      var ax = Math.abs(x - touch.startX), ay = Math.abs(y - touch.startY);
+      if (Math.max(ax, ay) < AXIS_SLOP_PX) { e.stopPropagation(); return; }
+      touch.axis = ax > ay ? 'x' : 'y';
+    }
+    if (touch.axis === 'x') { e.stopPropagation(); return; }
     if (dy === 0 || Math.abs(dx) > Math.abs(dy)) return;
     trackOverscroll(dy);
   }, { capture: true, passive: true });
@@ -345,19 +360,23 @@
   var WHEEL_LINES = 3;
   var wheeling = false;
 
+  // По едно събитие на ред: при mouse tracking xterm.js дава един report на събитие,
+  // каквото и да е deltaY, а програмата (Claude Code) брои report-ите като редове.
   function wheel(dir) {
     var screen = term.element.querySelector('.xterm-screen');
     var rect = screen.getBoundingClientRect();
     wheeling = true;
     try {
-      screen.dispatchEvent(new WheelEvent('wheel', {
-        deltaY: dir * WHEEL_LINES,
-        deltaMode: WheelEvent.DOM_DELTA_LINE,
-        clientX: rect.left + rect.width / 2,
-        clientY: rect.top + rect.height / 2,
-        bubbles: true,
-        cancelable: true,
-      }));
+      for (var i = 0; i < WHEEL_LINES; i++) {
+        screen.dispatchEvent(new WheelEvent('wheel', {
+          deltaY: dir,
+          deltaMode: WheelEvent.DOM_DELTA_LINE,
+          clientX: rect.left + rect.width / 2,
+          clientY: rect.top + rect.height / 2,
+          bubbles: true,
+          cancelable: true,
+        }));
+      }
     } finally {
       wheeling = false;
     }
@@ -367,6 +386,8 @@
     if (wheeling && bridge.input) bridge.input(data);
   });
   // X10 кодирането дава байтове над 127, които мостът (низ, UTF-8) би развалил: само ASCII.
+  // Така при X10 и над ~190 колони скролът не стига до програмата; Claude Code и
+  // съвременните TUI-та включват SGR (1006), където всичко е ASCII.
   term.onBinary(function (data) {
     if (wheeling && bridge.input && !/[^\x00-\x7f]/.test(data)) bridge.input(data);
   });
