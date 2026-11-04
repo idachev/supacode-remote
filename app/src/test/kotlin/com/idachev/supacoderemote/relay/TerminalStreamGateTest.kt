@@ -116,4 +116,18 @@ class TerminalStreamGateTest {
     assertEquals(listOf(relay to "c1"), gate.detachSent(lan, "c1"))
     assertFalse(deliver(lan, out("after-detach")))
   }
+
+  /**
+   * Нов таб: екранът му прави attach, преди закъснелият `detach` на предишния терминал
+   * (onCleared) да тръгне по същия път. Този detach е за друг терминал и не бива да спира
+   * потока на новия — иначе входът минава, а изходът се изхвърля до рестарт на аппа.
+   */
+  @Test
+  fun `закъснял detach на друг терминал не спира потока на новия`() {
+    attachedOnRelay()
+    gate.attachSent(relay, 2, "c2")
+    assertTrue(deliver(relay, Attached(id = 2, contentId = "c2", cols = 80, rows = 24)))
+    assertEquals(emptyList<Pair<Any, String>>(), gate.detachSent(relay, "c1"))
+    assertTrue(deliver(relay, Output("c2", "new-tab-prompt")))
+  }
 }

@@ -25,6 +25,9 @@ internal class TerminalStreamGate {
   private data class Pending(val via: Any, val id: Int, val contentId: String)
 
   private var current: Any? = null
+
+  /** Терминалът, чийто `attached` направи [current] текущ. */
+  private var currentContentId: String? = null
   private var pending: Pending? = null
 
   /** Пътищата, по които Mac-ът държи наш attach, и терминалът му. */
@@ -40,14 +43,16 @@ internal class TerminalStreamGate {
   fun detachSent(via: Any, contentId: String): List<Pair<Any, String>> {
     if (pending?.contentId == contentId) pending = null
     if (attachedOn[via] == contentId) attachedOn.remove(via)
-    if (current === via) current = null
+    // Само detach на текущия терминал спира потока: закъснял detach на предишен екран
+    // (onCleared след attach-а на нов таб) иначе изхвърля целия изход на новия.
+    if (current === via && currentContentId == contentId) clearCurrent()
     return takeOthers(except = null, contentId = contentId)
   }
 
   /** Пътят е паднал: Mac-ът е забравил attach-а по него, кадрите му вече не се приемат. */
   fun closed(source: Any) {
     attachedOn.remove(source)
-    if (current === source) current = null
+    if (current === source) clearCurrent()
     if (pending?.via === source) pending = null
   }
 
@@ -59,11 +64,17 @@ internal class TerminalStreamGate {
     ) {
       pending = null
       current = source
+      currentContentId = wait.contentId
       return Decision(deliver = true, detach = takeOthers(except = source, contentId = null))
     }
     if (source !== current) return Decision(deliver = false)
     if (message is Detached && attachedOn[source] == message.contentId) attachedOn.remove(source)
     return Decision(deliver = true)
+  }
+
+  private fun clearCurrent() {
+    current = null
+    currentContentId = null
   }
 
   private fun takeOthers(except: Any?, contentId: String?): List<Pair<Any, String>> {
