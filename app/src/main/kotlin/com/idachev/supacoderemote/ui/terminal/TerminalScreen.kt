@@ -72,6 +72,7 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
     TerminalViewModel(container.relay, container.notices, key.contentId)
   }
   val state by vm.state.collectAsStateWithLifecycle()
+  var copyText by remember { mutableStateOf<String?>(null) }
 
   Scaffold(
     topBar = {
@@ -86,6 +87,13 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
             }
           },
           navigationIcon = { TextButton(onClick = onBack) { Text("Назад") } },
+          actions = {
+            TextButton(
+              onClick = vm::requestText,
+              enabled = state.phase is AttachPhase.Attached,
+              modifier = Modifier.testTag("terminal-copy"),
+            ) { Text("Копирай") }
+          },
         )
         ConnectionBanner()
       }
@@ -107,10 +115,12 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
         onReady = vm::onWebReady,
         onGone = vm::onWebGone,
         modifier = Modifier.fillMaxSize().testTag("terminal-web"),
+        onText = { copyText = it },
       )
       PhaseOverlay(state.phase, onReattach = vm::reattach, modifier = Modifier.align(Alignment.Center))
     }
   }
+  copyText?.let { text -> CopyTextDialog(text = text, onDismiss = { copyText = null }) }
 }
 
 @Composable

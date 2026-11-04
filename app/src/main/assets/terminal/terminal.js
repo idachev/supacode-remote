@@ -99,6 +99,26 @@
     scrollToBottom: function () {
       term.scrollToBottom();
     },
+    /**
+     * Историята и екранът като обикновен текст, за да се маркира и копира в приложението
+     * (докосването в xterm.js не маркира). Пренесените редове се слепват обратно в един.
+     */
+    copyText: function () {
+      var buffer = term.buffer.active;
+      var lines = [];
+      for (var i = 0; i < buffer.length; i++) {
+        var line = buffer.getLine(i);
+        if (!line) continue;
+        var text = line.translateToString(true);
+        if (line.isWrapped && lines.length > 0) {
+          lines[lines.length - 1] += text;
+        } else {
+          lines.push(text);
+        }
+      }
+      while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+      if (bridge.text) bridge.text(lines.join('\n'));
+    },
   };
 
   window.addEventListener('resize', fit);

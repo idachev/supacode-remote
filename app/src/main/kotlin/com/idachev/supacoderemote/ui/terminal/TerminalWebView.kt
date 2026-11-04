@@ -37,9 +37,11 @@ fun TerminalWebView(
   onReady: () -> Unit,
   onGone: () -> Unit,
   modifier: Modifier = Modifier,
+  onText: (String) -> Unit = {},
 ) {
   val context = LocalContext.current
   val currentOnReady by rememberUpdatedState(onReady)
+  val currentOnText by rememberUpdatedState(onText)
   var ready by remember { mutableStateOf(false) }
   val main = remember { Handler(Looper.getMainLooper()) }
 
@@ -75,6 +77,12 @@ fun TerminalWebView(
             currentOnReady()
           }
         }
+
+        /** Отговорът на `supa.copyText()`: текстът на терминала като обикновен текст. */
+        @JavascriptInterface
+        fun text(value: String) {
+          main.post { currentOnText(value) }
+        }
       }, "SupaBridge")
       loadUrl("file:///android_asset/terminal/index.html")
     }
@@ -104,5 +112,6 @@ private fun TerminalCommand.toJs(): String = when (this) {
   is TerminalCommand.Resize -> "supa.resize($cols,$rows)"
   is TerminalCommand.ScrollPages -> "supa.scrollPages($pages)"
   TerminalCommand.ScrollToBottom -> "supa.scrollToBottom()"
+  TerminalCommand.RequestText -> "supa.copyText()"
   is TerminalCommand.Write -> "supa.write(${ProtocolCodec.json.encodeToString(String.serializer(), b64)})"
 }

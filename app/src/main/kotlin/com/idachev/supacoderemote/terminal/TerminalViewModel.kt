@@ -42,6 +42,9 @@ sealed interface TerminalCommand {
 
   /** Обратно до живия край на терминала. */
   data object ScrollToBottom : TerminalCommand
+
+  /** Целият текст на терминала (историята и екрана) обратно към приложението, за копиране. */
+  data object RequestText : TerminalCommand
 }
 
 sealed interface AttachPhase {
@@ -192,6 +195,11 @@ class TerminalViewModel(
 
   fun scrollToBottom() {
     _commands.trySend(TerminalCommand.ScrollToBottom)
+  }
+
+  /** Иска текста на терминала; идва обратно през `onText` на WebView-то. */
+  fun requestText() {
+    _commands.trySend(TerminalCommand.RequestText)
   }
 
   fun toggleCtrl() = _state.update { it.copy(ctrlSticky = !it.ctrlSticky) }

@@ -91,6 +91,16 @@ class TerminalViewModelTest {
     link.sent.filterIsInstance<InputRequest>().map { TerminalBytes.decode(it.b64).decodeToString() }
 
   @Test
+  fun `Копирай иска текста от страницата и не праща нищо към PTY-то`() = runTest(dispatcher) {
+    vm.onWebReady()
+    val commands = collectCommands()
+    vm.requestText()
+    runCurrent()
+    assertEquals(listOf<TerminalCommand>(TerminalCommand.RequestText), commands)
+    assertTrue(link.sent.none { it is InputRequest })
+  }
+
+  @Test
   fun `attach тръгва, щом има и страница, и онлайн host`() = runTest(dispatcher) {
     runCurrent()
     vm.onWebReady()
