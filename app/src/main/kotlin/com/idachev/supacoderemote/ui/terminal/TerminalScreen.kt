@@ -15,6 +15,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.viewinterop.AndroidView
 import com.idachev.supacoderemote.terminal.LiveKeys
+import com.idachev.supacoderemote.terminal.OutputPause
+import androidx.compose.material3.Surface
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -153,6 +155,10 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
           modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp),
         )
       }
+      // „Пауза“: изходът се задържа, докато има маркирано; чипът казва колко е чакащото.
+      state.pausedBytes?.let { bytes ->
+        PauseChip(bytes, modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp))
+      }
       PhaseOverlay(state.phase, onReattach = vm::reattach, modifier = Modifier.align(Alignment.Center))
     }
   }
@@ -174,6 +180,24 @@ private fun RepeatKeyButton(label: String, tag: String, onFire: () -> Unit) {
       .repeatPress(description = null, onFire = onFire),
   ) {
     Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+  }
+}
+
+/** Малкият чип „Пауза · 12 KB“ горе върху терминала; в Compose, за да не расте с zoom-а. */
+@Composable
+private fun PauseChip(bytes: Long, modifier: Modifier = Modifier) {
+  Surface(
+    shape = RoundedCornerShape(12.dp),
+    color = MaterialTheme.colorScheme.tertiaryContainer,
+    shadowElevation = 4.dp,
+    modifier = modifier.testTag("pause-chip"),
+  ) {
+    Text(
+      "Пауза · ${OutputPause.formatSize(bytes)}",
+      style = MaterialTheme.typography.labelLarge,
+      color = MaterialTheme.colorScheme.onTertiaryContainer,
+      modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+    )
   }
 }
 

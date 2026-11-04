@@ -15,6 +15,7 @@ import com.idachev.supacoderemote.protocol.SizeChanged
 import com.idachev.supacoderemote.protocol.SuggestRequest
 import com.idachev.supacoderemote.protocol.Suggestions
 import com.idachev.supacoderemote.protocol.TerminalBytes
+import com.idachev.supacoderemote.protocol.TerminalKeys
 import com.idachev.supacoderemote.relay.HostLink
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -347,6 +348,94 @@ class TerminalViewModelTest {
     // Изрязано изцяло: лентата изчезва.
     vm.onSelection(null)
     assertEquals(null, vm.state.value.selection)
+  }
+
+  private val oneCell = TerminalSelection(Cell(1, 0), Cell(4, 0), cols = 10, rows = 3)
+
+  private fun TestScope.attached(): MutableList<TerminalCommand> {
+    link.hostSession.value = 1
+    runCurrent()
+    vm.onWebReady()
+    val commands = collectCommands()
+    emit(Attached(1, "c1", 10, 3))
+    commands.clear()
+    return commands
+  }
+
+  @Test
+  fun `при маркирано изходът чака и след Копирай се пише по ред`() = runTest(dispatcher) {
+    val commands = attached()
+    vm.onSelection(oneCell)
+    assertEquals(0L, vm.state.value.pausedBytes)
+    emit(Output("c1", "aGk="))
+    emit(Output("c1", "eA=="))
+    assertTrue(commands.isEmpty())
+    advanceTimeBy(TerminalViewModel.PAUSE_TICK_MS + 1)
+    runCurrent()
+    assertEquals(3L, vm.state.value.pausedBytes)
+    vm.copySelection()
+    runCurrent()
+    assertEquals(
+      listOf(TerminalCommand.CopySelection, TerminalCommand.Write("aGk="), TerminalCommand.Write("eA==")),
+      commands,
+    )
+    assertEquals(null, vm.state.value.pausedBytes)
+    emit(Output("c1", "YWJj"))
+    assertEquals(TerminalCommand.Write("YWJj"), commands.last())
+  }
+
+  @Test
+  fun `вход по време на пауза първо пише чакащото и отменя маркираното`() = runTest(dispatcher) {
+    val commands = attached()
+    vm.onSelection(oneCell)
+    emit(Output("c1", "aGk="))
+    vm.sendKey(TerminalKeys.PAGE_UP)
+    runCurrent()
+    assertEquals(listOf(TerminalCommand.ClearSelection, TerminalCommand.Write("aGk=")), commands)
+    assertEquals(null, vm.state.value.selection)
+    assertEquals(null, vm.state.value.pausedBytes)
+    assertEquals(listOf(TerminalKeys.PAGE_UP), inputs())
+  }
+
+  @Test
+  fun `над тавана паузата спира сама и маркираното се отменя`() = runTest(dispatcher) {
+    store.clear()
+    vm = TerminalViewModel(link, Notices(), "c1", suggestTimeoutMs = 5_000, pauseCapBytes = 3)
+    store = ViewModelStore().also { it.put("vm", vm) }
+    val commands = attached()
+    vm.onSelection(oneCell)
+    emit(Output("c1", "YWJj"))
+    assertTrue(commands.isEmpty())
+    emit(Output("c1", "eA=="))
+    assertEquals(
+      listOf(TerminalCommand.ClearSelection, TerminalCommand.Write("YWJj"), TerminalCommand.Write("eA==")),
+      commands,
+    )
+    assertEquals(null, vm.state.value.selection)
+    assertEquals(null, vm.state.value.pausedBytes)
+  }
+
+  @Test
+  fun `size по време на пауза първо пише чакащото, после преоразмерява`() = runTest(dispatcher) {
+    val commands = attached()
+    vm.onSelection(oneCell)
+    emit(Output("c1", "aGk="))
+    emit(SizeChanged("c1", 12, 4))
+    assertEquals(
+      listOf(TerminalCommand.ClearSelection, TerminalCommand.Write("aGk="), TerminalCommand.Resize(12, 4)),
+      commands,
+    )
+    assertEquals(null, vm.state.value.selection)
+  }
+
+  @Test
+  fun `изчезнало маркирано в страницата пуска чакащото`() = runTest(dispatcher) {
+    val commands = attached()
+    vm.onSelection(oneCell)
+    emit(Output("c1", "aGk="))
+    vm.onSelection(null)
+    runCurrent()
+    assertEquals(listOf<TerminalCommand>(TerminalCommand.Write("aGk=")), commands)
   }
 
   @Test

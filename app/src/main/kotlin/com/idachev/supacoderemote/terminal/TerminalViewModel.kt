@@ -75,6 +75,8 @@ data class TerminalUiState(
   val suggestions: List<String> = emptyList(),
   /** Маркираното с дълго натискане; докато го има, се вижда лентата за маркиране. */
   val selection: TerminalSelection? = null,
+  /** „Пауза“: байтовете изход, задържани докато има маркирано; `null` — няма пауза. */
+  val pausedBytes: Long? = null,
 )
 
 /**
@@ -91,6 +93,8 @@ class TerminalViewModel(
   private val suggestTimeoutMs: Long = SUGGEST_TIMEOUT_MS,
   /** „Скрол стига до агента“ от „Настройка“; чете се при всеки скрол. */
   private val overscrollToProgram: () -> Boolean = { true },
+  /** Таванът на „Пауза“; над него паузата спира сама и маркираното се отменя. */
+  pauseCapBytes: Long = OutputPause.CAP_BYTES,
 ) : ViewModel() {
 
   private val _state = MutableStateFlow(TerminalUiState())
@@ -105,6 +109,8 @@ class TerminalViewModel(
   private var attachId: Int? = null
   private var suggestId: Int? = null
   private var suggestTimeout: Job? = null
+  private val pause = OutputPause(pauseCapBytes)
+  private var pauseTicker: Job? = null
 
   init {
     viewModelScope.launch { link.messages.collect(::onMessage) }
@@ -127,6 +133,10 @@ class TerminalViewModel(
   fun onWebReady() {
     webReady = true
     while (_commands.tryReceive().isSuccess) Unit
+    // Новата страница е празна и маркирано няма; задържаното ще дойде наново с attach.
+    pause.end()
+    stopPauseTicker()
+    _state.update { it.copy(selection = null) }
     if (link.hostSession.value != null) attach()
   }
 
@@ -156,15 +166,24 @@ class TerminalViewModel(
   private fun onMessage(message: ServerMessage) {
     when (message) {
       is Attached -> if (message.contentId == contentId) {
+        endPause(OutputPause.EndReason.Reattach)
         attachId = null
         // Init чисти терминала, а с него и маркираното.
         _state.update { it.copy(phase = AttachPhase.Attached(message.cols, message.rows), selection = null) }
         _commands.trySend(TerminalCommand.Init(message.cols, message.rows))
       }
       is Output -> if (message.contentId == contentId) {
-        _commands.trySend(TerminalCommand.Write(message.b64))
+        if (!pause.offer(message.b64)) {
+          _commands.trySend(TerminalCommand.Write(message.b64))
+        } else if (pause.overCap) {
+          endPause(OutputPause.EndReason.Overflow)
+          notices.show("Пауза спря: над ${OutputPause.formatSize(OutputPause.CAP_BYTES)} нов изход, маркирането е отменено")
+        } else {
+          schedulePauseChip()
+        }
       }
       is SizeChanged -> if (message.contentId == contentId) {
+        endPause(OutputPause.EndReason.Resize)
         _state.update { it.copy(phase = AttachPhase.Attached(message.cols, message.rows)) }
         _commands.trySend(TerminalCommand.Resize(message.cols, message.rows))
       }
@@ -221,6 +240,45 @@ class TerminalViewModel(
    */
   fun onSelection(selection: TerminalSelection?) {
     _state.update { it.copy(selection = selection) }
+    if (selection != null && !pause.paused) startPause()
+    if (selection == null) endPause(OutputPause.EndReason.SelectionGone)
+  }
+
+  /** Маркирането започна: изходът спира да се пише, за да не избута маркирания текст. */
+  private fun startPause() {
+    pause.start()
+    _state.update { it.copy(pausedBytes = 0) }
+  }
+
+  /** Чипът се обновява най-много веднъж на [PAUSE_TICK_MS], не при всяко `out`. */
+  private fun schedulePauseChip() {
+    if (pauseTicker != null) return
+    pauseTicker = viewModelScope.launch {
+      delay(PAUSE_TICK_MS)
+      pauseTicker = null
+      if (pause.paused) _state.update { it.copy(pausedBytes = pause.queuedBytes) }
+    }
+  }
+
+  /**
+   * Край на паузата: задържаният изход се пише по ред, наведнъж. Без [OutputPause.EndReason.Copied]
+   * и [OutputPause.EndReason.SelectionGone] маркираното се отменя първо — изходът го мести.
+   */
+  private fun endPause(reason: OutputPause.EndReason) {
+    if (!pause.paused) return
+    val cancel = reason != OutputPause.EndReason.Copied && reason != OutputPause.EndReason.SelectionGone
+    if (cancel && _state.value.selection != null) {
+      _state.update { it.copy(selection = null) }
+      _commands.trySend(TerminalCommand.ClearSelection)
+    }
+    stopPauseTicker()
+    pause.end().forEach { _commands.trySend(TerminalCommand.Write(it)) }
+  }
+
+  private fun stopPauseTicker() {
+    pauseTicker?.cancel()
+    pauseTicker = null
+    _state.update { it.copy(pausedBytes = null) }
   }
 
   /** ◀ ▶ за началото: една клетка назад (минус) или напред, през края на реда. */
@@ -242,11 +300,13 @@ class TerminalViewModel(
     if (_state.value.selection == null) return
     _state.update { it.copy(selection = null) }
     _commands.trySend(TerminalCommand.CopySelection)
+    endPause(OutputPause.EndReason.Copied)
   }
 
   fun clearSelection() {
     _state.update { it.copy(selection = null) }
     _commands.trySend(TerminalCommand.ClearSelection)
+    endPause(OutputPause.EndReason.Cancelled)
   }
 
   /**
@@ -286,6 +346,9 @@ class TerminalViewModel(
   }
 
   private fun sendRaw(text: String): Boolean {
+    // Вход към програмата: първо се показва задържаният изход, иначе отговорът ѝ идва
+    // след стария екран.
+    endPause(OutputPause.EndReason.Input)
     if (_state.value.phase !is AttachPhase.Attached) {
       notices.show("Терминалът не е свързан")
       return false
@@ -335,5 +398,8 @@ class TerminalViewModel(
   companion object {
     /** Моделът на Mac-а има до 90 s; малко отгоре за relay-а. */
     const val SUGGEST_TIMEOUT_MS = 100_000L
+
+    /** Колко често чипът „Пауза“ показва нов размер. */
+    const val PAUSE_TICK_MS = 250L
   }
 }
