@@ -13,10 +13,17 @@
 //   mock-resize   — host-ът сменя размера на 100x30 и праща `size`;
 //   mock-await    — агентът на този таб чака вход (`awaitingInput`), за известията;
 //   mock-busy     — агентът пак работи (`busy`);
-//   mock-offline  — host-ът „изчезва“ за 5 s (`relay hostOnline:false`, после true), а
-//                   WebSocket-ът на телефона остава; host-ът забравя attach-овете.
+//   mock-offline  — host-ът „изчезва“ от relay-а за 5 s (`relay hostOnline:false`, после
+//                   true), а WebSocket-ът на телефона остава; host-ът забравя attach-овете;
+//   mock-lan-off  — LAN endpoint-ът спира (затваря LAN връзките), `hello` вече няма `lan`;
+//   mock-lan-on   — LAN endpoint-ът тръгва пак.
+//
+// LAN пътят (раздел „LAN shortcut“ в протокола): ws://127.0.0.1:LAN_PORT/lan (8788), от
+// emulator-а 10.0.2.2. Ръкостискане с nonce-и, HKDF-SHA256 върху клиентския ключ, HMAC
+// доказателства и AES-256-GCM кадри. LAN=0 го изключва.
 
 import { createServer } from 'node:http';
+import crypto from 'node:crypto';
 import { chmodSync, existsSync, readdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -25,6 +32,9 @@ import { WebSocketServer } from 'ws';
 
 const PORT = Number(process.env.PORT ?? 8787);
 const KEY = process.env.KEY ?? 'test-key';
+const LAN_PORT = Number(process.env.LAN_PORT ?? 8788);
+const LAN_ADDRS = (process.env.LAN_ADDRS ?? '10.0.2.2').split(',');
+let lanOn = process.env.LAN !== '0';
 const COLS = 120;
 const ROWS = 40;
 const SCREEN_BUFFER_BYTES = 64 * 1024;
@@ -228,6 +238,10 @@ function watchLine(contentId, s, text) {
         for (const c of clients) if (c.attached === contentId) send(c, { t: 'size', contentId, cols: s.cols, rows: s.rows });
       } else if (line.endsWith('mock-await') || line.endsWith('mock-busy')) {
         setActivity(contentId, line.endsWith('mock-await') ? 'awaitingInput' : 'busy');
+      } else if (line.endsWith('mock-lan-off')) {
+        setLan(false);
+      } else if (line.endsWith('mock-lan-on')) {
+        setLan(true);
       } else if (line.endsWith('mock-offline')) {
         setHostOnline(false);
         setTimeout(() => setHostOnline(true), 5000);
@@ -254,25 +268,29 @@ function setHostOnline(online) {
   hostOnline = online;
   log('hostOnline', online);
   for (const c of clients) {
+    if (c.lan) continue; // LAN не минава през relay-а.
     if (!online) c.attached = null; // Host-ът си е отишъл — потоците му са спрели.
     send(c, { t: 'relay', hostOnline: online });
   }
 }
 
 function send(c, msg) {
-  if (c.ws.readyState === c.ws.OPEN) c.ws.send(JSON.stringify(msg));
+  c.sendText(JSON.stringify(msg));
 }
 
 // ---- Съобщенията от клиента ----
 
 function handle(c, msg) {
-  if (!hostOnline) {
+  if (!hostOnline && !c.lan) {
     send(c, { t: 'error', id: msg.id ?? null, message: 'host offline' });
     return;
   }
   switch (msg.t) {
     case 'hello':
-      send(c, { t: 'hello', v: 1, host: 'Mock Mac' });
+      send(c, {
+        t: 'hello', v: 1, host: 'Mock Mac',
+        ...(lanOn && !c.lan ? { lan: { addrs: LAN_ADDRS, port: LAN_PORT } } : {}),
+      });
       break;
     case 'list':
       send(c, listMessage(msg.id));
@@ -339,7 +357,10 @@ server.on('upgrade', (req, socket, head) => {
 });
 
 wss.on('connection', (ws) => {
-  const c = { ws, attached: null, id: Math.random().toString(16).slice(2, 10) };
+  const c = {
+    ws, attached: null, lan: false, id: Math.random().toString(16).slice(2, 10),
+    sendText: (text) => { if (ws.readyState === ws.OPEN) ws.send(text); },
+  };
   clients.add(c);
   log('connect', c.id);
   send(c, { t: 'relay', hostOnline });
@@ -353,5 +374,104 @@ wss.on('connection', (ws) => {
   });
   ws.on('close', () => { clients.delete(c); log('close', c.id); });
 });
+
+// ---- LAN endpoint ----
+
+const LAN_INFO = Buffer.from('supacode-lan-v1');
+const C2S = Buffer.from('c2s\0', 'binary');
+const S2C = Buffer.from('s2c\0', 'binary');
+const lanWss = new WebSocketServer({ noServer: true });
+let lanServer = null;
+
+function lanNonce(direction, counter) {
+  const n = Buffer.alloc(12);
+  direction.copy(n, 0);
+  n.writeBigUInt64BE(BigInt(counter), 4);
+  return n;
+}
+
+lanWss.on('connection', (ws) => {
+  const c = { ws, attached: null, lan: true, id: 'lan-' + Math.random().toString(16).slice(2, 8), state: 'hello' };
+  let keys = null;
+  let sendCounter = 0;
+  let recvCounter = 0;
+  const close = (why) => { log('lan close', c.id, why); ws.terminate(); };
+  c.sendText = (text) => {
+    if (ws.readyState !== ws.OPEN) return;
+    const nonce = lanNonce(S2C, sendCounter++);
+    const cipher = crypto.createCipheriv('aes-256-gcm', keys.s2c, nonce);
+    ws.send(Buffer.concat([nonce, cipher.update(Buffer.from(text, 'utf8')), cipher.final(), cipher.getAuthTag()]));
+  };
+  ws.on('message', (data, isBinary) => {
+    if (c.state === 'hello' || c.state === 'auth') {
+      if (isBinary) return close('binary before auth');
+      let msg;
+      try { msg = JSON.parse(data.toString('utf8')); } catch { return close('bad json'); }
+      if (c.state === 'hello') {
+        const clientNonce = Buffer.from(msg.nonce ?? '', 'base64');
+        if (msg.t !== 'lan.hello' || clientNonce.length !== 16) return close('bad hello');
+        const macNonce = crypto.randomBytes(16);
+        const okm = Buffer.from(crypto.hkdfSync('sha256', Buffer.from(KEY, 'utf8'), Buffer.concat([clientNonce, macNonce]), LAN_INFO, 96));
+        keys = { c2s: okm.subarray(0, 32), s2c: okm.subarray(32, 64), proof: okm.subarray(64, 96) };
+        const proof = crypto.createHmac('sha256', keys.proof).update('mac').digest('base64');
+        ws.send(JSON.stringify({ t: 'lan.hello', v: 1, nonce: macNonce.toString('base64'), proof }));
+        c.state = 'auth';
+        return;
+      }
+      const expected = crypto.createHmac('sha256', keys.proof).update('client').digest();
+      const got = Buffer.from(msg.proof ?? '', 'base64');
+      if (msg.t !== 'lan.auth' || got.length !== expected.length || !crypto.timingSafeEqual(got, expected)) {
+        return close('bad proof');
+      }
+      c.state = 'ready';
+      clients.add(c);
+      log('lan connect', c.id);
+      return;
+    }
+    if (!isBinary || data.length < 28) return close('not a frame');
+    const nonce = data.subarray(0, 12);
+    if (!nonce.subarray(0, 4).equals(C2S) || nonce.readBigUInt64BE(4) !== BigInt(recvCounter)) return close('bad nonce');
+    let text;
+    try {
+      const decipher = crypto.createDecipheriv('aes-256-gcm', keys.c2s, nonce);
+      decipher.setAuthTag(data.subarray(data.length - 16));
+      text = Buffer.concat([decipher.update(data.subarray(12, data.length - 16)), decipher.final()]).toString('utf8');
+    } catch { return close('bad tag'); }
+    recvCounter++;
+    if (text === 'ping') { c.sendText('pong'); return; }
+    let msg;
+    try { msg = JSON.parse(text); } catch { return close('bad json'); }
+    if (msg.t !== 'input' && msg.t !== 'list') log('<- lan', c.id, text.slice(0, 200));
+    handle(c, msg);
+  });
+  ws.on('close', () => { clients.delete(c); log('lan close', c.id); });
+});
+
+function startLan() {
+  lanServer = createServer((req, res) => res.writeHead(404).end('not found'));
+  lanServer.on('upgrade', (req, socket, head) => {
+    if (new URL(req.url, 'http://x').pathname !== '/lan') {
+      socket.end('HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n');
+      return;
+    }
+    lanWss.handleUpgrade(req, socket, head, (ws) => lanWss.emit('connection', ws));
+  });
+  lanServer.listen(LAN_PORT, '127.0.0.1', () => log(`LAN endpoint on ws://127.0.0.1:${LAN_PORT}/lan  addrs=${LAN_ADDRS}`));
+}
+
+function setLan(on) {
+  if (on === lanOn) return;
+  lanOn = on;
+  log('lan', on ? 'on' : 'off');
+  if (on) {
+    startLan();
+  } else {
+    for (const c of clients) if (c.lan) c.ws.terminate();
+    lanServer?.close();
+    lanServer = null;
+  }
+}
+
+if (lanOn) startLan();
 
 server.listen(PORT, '127.0.0.1', () => log(`mock host on http://127.0.0.1:${PORT}  emulator connection key: http://10.0.2.2:${PORT}/${KEY}  pty=${pty ? 'node-pty' : 'script'}`));

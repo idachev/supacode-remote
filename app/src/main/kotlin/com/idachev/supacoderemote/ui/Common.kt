@@ -29,6 +29,8 @@ import com.idachev.supacoderemote.AppContainer
 import com.idachev.supacoderemote.protocol.AgentActivity
 import com.idachev.supacoderemote.protocol.AgentBadge
 import com.idachev.supacoderemote.relay.ConnectionState
+import com.idachev.supacoderemote.relay.LinkPath
+import androidx.compose.ui.platform.testTag
 import kotlinx.coroutines.delay
 
 val LocalAppContainer = staticCompositionLocalOf<AppContainer> { error("AppContainer не е подаден") }
@@ -62,6 +64,9 @@ fun ConnectionBanner(modifier: Modifier = Modifier) {
   val relay = LocalAppContainer.current.relay
   val state by relay.state.collectAsStateWithLifecycle()
   val hostOnline by relay.hostOnline.collectAsStateWithLifecycle()
+  val path by relay.path.collectAsStateWithLifecycle()
+  // По LAN Mac-ът е там, каквото и да казва relay-ът.
+  if (path == LinkPath.LAN) return
   val text: String = when (val s = state) {
     ConnectionState.Idle -> return
     ConnectionState.Connecting -> "Свързване с relay-а…"
@@ -88,6 +93,27 @@ fun ConnectionBanner(modifier: Modifier = Modifier) {
       }
     }
   }
+}
+
+/** По кой път вървят заявките: „LAN“ (пряко до Mac-а) или „Relay“. Без връзка го няма. */
+@Composable
+fun PathChip(modifier: Modifier = Modifier) {
+  val path by LocalAppContainer.current.relay.path.collectAsStateWithLifecycle()
+  val colors = MaterialTheme.colorScheme
+  val (label, bg, fg) = when (path) {
+    LinkPath.NONE -> return
+    LinkPath.LAN -> Triple("LAN", colors.primary, colors.onPrimary)
+    LinkPath.RELAY -> Triple("Relay", colors.surfaceVariant, colors.onSurfaceVariant)
+  }
+  Text(
+    label,
+    style = MaterialTheme.typography.labelMedium,
+    color = fg,
+    modifier = modifier
+      .background(bg, RoundedCornerShape(8.dp))
+      .padding(horizontal = 8.dp, vertical = 2.dp)
+      .testTag("path-chip"),
+  )
 }
 
 /** Малкото въртящо се кръгче за „работи“. */

@@ -61,6 +61,7 @@ import com.idachev.supacoderemote.terminal.AttachPhase
 import com.idachev.supacoderemote.terminal.TerminalViewModel
 import com.idachev.supacoderemote.terminal.TextDiff
 import com.idachev.supacoderemote.ui.ConnectionBanner
+import com.idachev.supacoderemote.ui.PathChip
 import com.idachev.supacoderemote.ui.LocalAppContainer
 
 /** „Терминал“: живият таб от Mac-а, полето за писане, клавишите и „Предложи“. */
@@ -88,6 +89,7 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
           },
           navigationIcon = { TextButton(onClick = onBack) { Text("Назад") } },
           actions = {
+            PathChip()
             TextButton(
               onClick = vm::requestText,
               enabled = state.phase is AttachPhase.Attached,

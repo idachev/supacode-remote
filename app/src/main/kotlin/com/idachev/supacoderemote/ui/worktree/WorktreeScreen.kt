@@ -33,6 +33,7 @@ import com.idachev.supacoderemote.protocol.Tab
 import com.idachev.supacoderemote.sessions.SessionGroups
 import com.idachev.supacoderemote.ui.AgentBadges
 import com.idachev.supacoderemote.ui.ConnectionBanner
+import com.idachev.supacoderemote.ui.PathChip
 import com.idachev.supacoderemote.ui.LocalAppContainer
 import com.idachev.supacoderemote.ui.PollSessionsWhileVisible
 import com.idachev.supacoderemote.ui.WorkingIndicator
@@ -58,6 +59,7 @@ fun WorktreeScreen(key: WorktreeKey, onBack: () -> Unit, onOpenTab: (Tab) -> Uni
             }
           },
           navigationIcon = { TextButton(onClick = onBack) { Text("Назад") } },
+          actions = { PathChip(Modifier.padding(end = 12.dp)) },
         )
         ConnectionBanner()
       }

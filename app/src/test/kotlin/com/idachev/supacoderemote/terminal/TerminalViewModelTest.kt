@@ -145,6 +145,18 @@ class TerminalViewModelTest {
   }
 
   @Test
+  fun `смяна на пътя LAN към relay без прекъсване пак прави attach`() = runTest(dispatcher) {
+    link.hostSession.value = 1
+    runCurrent()
+    vm.onWebReady()
+    emit(Attached(1, "c1", 120, 40))
+    // RelayClient вдига сесията направо от 1 на 2, когато LAN падне, а relay-ът е горе.
+    link.hostSession.value = 2
+    runCurrent()
+    assertEquals(2, link.sent.filterIsInstance<AttachRequest>().size)
+  }
+
+  @Test
   fun `detached показва причината и „Свържи отново“ прави нов attach`() = runTest(dispatcher) {
     link.hostSession.value = 1
     runCurrent()

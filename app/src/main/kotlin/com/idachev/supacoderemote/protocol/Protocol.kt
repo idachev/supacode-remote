@@ -1,5 +1,6 @@
 package com.idachev.supacoderemote.protocol
 
+import com.idachev.supacoderemote.relay.LanInfo
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
@@ -49,7 +50,12 @@ sealed interface ServerMessage
 data class RelayStatus(val hostOnline: Boolean) : ServerMessage
 
 @Serializable
-data class HelloReply(val v: Int = PROTOCOL_VERSION, val host: String? = null) : ServerMessage
+data class HelloReply(
+  val v: Int = PROTOCOL_VERSION,
+  val host: String? = null,
+  /** Mac-ът е в същата мрежа и слуша там (раздел „LAN shortcut“). */
+  val lan: LanInfo? = null,
+) : ServerMessage
 
 /**
  * Отговорът на `list`. [sections] е sidebar-ът на Supacode по ред (Active, Pinned, групи,

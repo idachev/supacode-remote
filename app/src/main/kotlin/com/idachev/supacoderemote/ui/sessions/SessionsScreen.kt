@@ -38,6 +38,7 @@ import com.idachev.supacoderemote.sessions.SessionGroups
 import com.idachev.supacoderemote.sessions.SessionRow
 import com.idachev.supacoderemote.ui.AgentBadges
 import com.idachev.supacoderemote.ui.ConnectionBanner
+import com.idachev.supacoderemote.ui.PathChip
 import com.idachev.supacoderemote.ui.LocalAppContainer
 import com.idachev.supacoderemote.ui.PollSessionsWhileVisible
 import com.idachev.supacoderemote.ui.WorkingIndicator
@@ -64,7 +65,10 @@ fun SessionsScreen(onOpenWorktree: (repositoryId: String, Worktree) -> Unit, onO
               hostName?.let { Text(it, style = MaterialTheme.typography.labelMedium) }
             }
           },
-          actions = { TextButton(onClick = onOpenSettings) { Text("Настройка") } },
+          actions = {
+            PathChip()
+            TextButton(onClick = onOpenSettings) { Text("Настройка") }
+          },
         )
         ConnectionBanner()
       }

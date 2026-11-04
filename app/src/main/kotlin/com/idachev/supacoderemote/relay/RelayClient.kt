@@ -26,9 +26,13 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import java.time.Duration
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.min
+
+/** По кой път вървят заявките към host-а в момента. */
+enum class LinkPath { NONE, RELAY, LAN }
 
 /** Състоянието на WebSocket-а към relay-а. Дали Mac-ът е там, е отделно: [RelayClient.hostOnline]. */
 sealed interface ConnectionState {
@@ -86,6 +90,11 @@ class RelayClient(
     val silenceLimitMs: Long = 75_000,
     val firstRetryMs: Long = 1_000,
     val maxRetryMs: Long = 30_000,
+    /** Таймаут за свързване към всеки LAN адрес. */
+    val lanConnectTimeoutMs: Long = 2_500,
+    /** След паднал или неуспешен LAN опит: нов `hello` по relay-а след толкова, двойно до max. */
+    val lanRetryFirstMs: Long = 10_000,
+    val lanRetryMaxMs: Long = 300_000,
   )
 
   private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
@@ -105,6 +114,25 @@ class RelayClient(
   private val _hostSession = MutableStateFlow<Int?>(null)
   override val hostSession: StateFlow<Int?> = _hostSession.asStateFlow()
   private var hostSessionCounter = 0
+
+  /**
+   * LAN, ако е отворена удостоверена LAN връзка към Mac-а, иначе Relay, ако relay-ът казва,
+   * че Mac-ът е там. Всяка смяна на пътя е нова [hostSession]: host-ът не знае за `attach`-а
+   * по другия път, затова терминалът го прави наново.
+   */
+  private val _path = MutableStateFlow(LinkPath.NONE)
+  val path: StateFlow<LinkPath> = _path.asStateFlow()
+
+  @Volatile private var lan: LanSession? = null
+  @Volatile private var lanLastFrameAt = 0L
+  private var lanJob: Job? = null
+  private var lanKeepalive: Job? = null
+  private var lanRetry: Job? = null
+  private var lanRetryMs = timing.lanRetryFirstMs
+  /** Расте при restart: закъснял LAN опит от старите настройки не се приема. */
+  private var lanGeneration = 0
+  /** Mac-ът е предлагал LAN в тази връзка — значи сме в една мрежа и си струва да опитваме. */
+  private var lanOffered = false
 
   /**
    * Всички съобщения в реда на пристигане. Читателят на OkHttp чака, ако буферът е пълен,
@@ -165,7 +193,12 @@ class RelayClient(
     synchronized(lock) { restartLocked() }
   }
 
-  override fun send(message: ClientMessage): Boolean = socket?.send(ProtocolCodec.encode(message)) ?: false
+  /** По LAN, ако е горе, иначе по relay-а. Relay сокетът остава отворен като резерва. */
+  override fun send(message: ClientMessage): Boolean {
+    val text = ProtocolCodec.encode(message)
+    lan?.let { if (it.send(text)) return true }
+    return socket?.send(text) ?: false
+  }
 
   private fun restartLocked() {
     job?.cancel()
@@ -174,8 +207,9 @@ class RelayClient(
     // пипат състоянието, а `send` не тръгва по затварящия се сокет.
     attempts.incrementAndGet()
     socket = null
+    closeLanLocked()
     _hostOnline.value = false
-    _hostSession.value = null
+    updateRouteLocked()
     val current = settings
     if (current == null || !activeLocked()) {
       _state.value = ConnectionState.Idle
@@ -238,7 +272,10 @@ class RelayClient(
         val message = ProtocolCodec.decode(text) ?: return
         when (message) {
           is RelayStatus -> onHostOnline(webSocket, message.hostOnline, attempt)
-          is HelloReply -> _hostName.value = message.host
+          is HelloReply -> {
+            _hostName.value = message.host
+            onRelayHello(message.lan)
+          }
           else -> Unit
         }
         // Чака, ако някой читател изостава: по-добре бавно, отколкото с дупка в терминала.
@@ -298,14 +335,131 @@ class RelayClient(
   private fun setHostOnline(online: Boolean, attempt: Int) {
     synchronized(lock) {
       if (attempt != attempts.get()) return
-      val wasOnline = _hostOnline.value
       _hostOnline.value = online
-      if (online && !wasOnline) {
-        hostSessionCounter += 1
-        _hostSession.value = hostSessionCounter
-      } else if (!online) {
-        _hostSession.value = null
+      updateRouteLocked()
+    }
+  }
+
+  private fun updateRouteLocked() {
+    val route = when {
+      lan != null -> LinkPath.LAN
+      _hostOnline.value -> LinkPath.RELAY
+      else -> LinkPath.NONE
+    }
+    if (route == _path.value) return
+    _path.value = route
+    if (route == LinkPath.NONE) {
+      _hostSession.value = null
+    } else {
+      hostSessionCounter += 1
+      _hostSession.value = hostSessionCounter
+    }
+  }
+
+  // ---- LAN пътят ----
+
+  /**
+   * `hello` по relay-а. С `lan` — опит за пряка връзка. Без `lan`, но след като LAN вече е
+   * бил предложен в тази връзка (напр. Mac-ът го е спрял за малко) — нов `hello` по-късно,
+   * с растяща пауза, за да се върнем на LAN, щом пак е там.
+   */
+  private fun onRelayHello(info: LanInfo?) {
+    synchronized(lock) {
+      if (info != null) {
+        lanOffered = true
+        maybeStartLan(info)
+      } else if (lanOffered && lan == null && lanJob?.isActive != true) {
+        scheduleLanRetryLocked()
       }
     }
+  }
+
+  /** `hello` по relay-а донесе `lan`: опит за пряка връзка, ако вече няма такава. */
+  private fun maybeStartLan(info: LanInfo) {
+    synchronized(lock) {
+      if (lan != null || lanJob?.isActive == true || info.addrs.isEmpty()) return
+      val key = settings?.apiKey ?: return
+      val generation = lanGeneration
+      lanRetry?.cancel()
+      lanJob = scope.launch {
+        val session = LanSession.connect(http, info, key, lanListener, Duration.ofMillis(timing.lanConnectTimeoutMs))
+        synchronized(lock) {
+          if (generation != lanGeneration || session == null || session.closed) {
+            session?.close()
+            if (generation == lanGeneration) scheduleLanRetryLocked()
+            return@launch
+          }
+          lan = session
+          lanLastFrameAt = System.currentTimeMillis()
+          lanRetryMs = timing.lanRetryFirstMs
+          // hello първо, после новата сесия: по нея терминалът прави attach, а екраните — list.
+          session.send(ProtocolCodec.encode(HelloRequest()))
+          updateRouteLocked()
+          lanKeepalive = scope.launch { keepLanAlive(session) }
+        }
+      }
+    }
+  }
+
+  private val lanListener = object : LanSession.Listener {
+    override fun onText(session: LanSession, text: String) {
+      lanLastFrameAt = System.currentTimeMillis()
+      val message = ProtocolCodec.decode(text) ?: return
+      // `lan` в hello по самия LAN не значи нищо ново.
+      if (message is HelloReply) _hostName.value = message.host
+      runBlocking { _messages.emit(message) }
+    }
+
+    override fun onClosed(session: LanSession, reason: String) {
+      synchronized(lock) {
+        if (lan !== session) return
+        lan = null
+        lanKeepalive?.cancel()
+        // Обратно на relay-а: нова сесия, терминалът прави attach наново там.
+        updateRouteLocked()
+        scheduleLanRetryLocked()
+      }
+    }
+  }
+
+  private suspend fun keepLanAlive(session: LanSession) {
+    while (true) {
+      delay(timing.pingIntervalMs)
+      if (lan !== session) return
+      if (System.currentTimeMillis() - lanLastFrameAt > timing.silenceLimitMs) {
+        session.cancel()
+        return
+      }
+      session.send(PING)
+    }
+  }
+
+  /**
+   * Следващият `hello` по relay-а — неговият отговор носи `lan`, ако Mac-ът още е в същата
+   * мрежа. Паузата расте, за да не се чука постоянно в LAN, който не отговаря.
+   */
+  private fun scheduleLanRetryLocked() {
+    lanRetry?.cancel()
+    val wait = lanRetryMs
+    lanRetryMs = min(lanRetryMs * 2, timing.lanRetryMaxMs)
+    val generation = lanGeneration
+    lanRetry = scope.launch {
+      delay(wait)
+      synchronized(lock) {
+        if (generation != lanGeneration || lan != null || !_hostOnline.value) return@launch
+        socket?.send(ProtocolCodec.encode(HelloRequest()))
+      }
+    }
+  }
+
+  private fun closeLanLocked() {
+    lanGeneration += 1
+    lanJob?.cancel()
+    lanKeepalive?.cancel()
+    lanRetry?.cancel()
+    lanRetryMs = timing.lanRetryFirstMs
+    lanOffered = false
+    lan?.close()
+    lan = null
   }
 }
