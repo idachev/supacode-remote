@@ -240,8 +240,24 @@
     term.clearSelection();
   };
 
-  var touch = null; // { lastY, over, overDir }
+  var touch = null; // { lastX, lastY, over, overDir }
   var lastOverscroll = 0;
+
+  /**
+   * Може ли страницата сама да се премести в посоката на пръста, без да покаже нещо извън
+   * терминала. Без zoom — никога (страницата е колкото терминала или по-малка). При zoom
+   * видимата част се мести само докато не излезе под или над терминала: отдолу е празното
+   * място на WebView-то, което иначе изпълва екрана (черният екран).
+   */
+  function pageCanPan(dy) {
+    var vv = window.visualViewport;
+    if (!vv) return false;
+    var rect = term.element.getBoundingClientRect();
+    var top = rect.top + window.scrollY;
+    var bottom = rect.bottom + window.scrollY;
+    if (dy < 0) return vv.pageTop + vv.height < bottom - 1;
+    return vv.pageTop > top + 1;
+  }
 
   /**
    * Скрол отвъд ръба на историята на телефона: нагоре при най-стария ред (или без история —
@@ -266,21 +282,35 @@
     }
   }
 
-  term.element.addEventListener('touchstart', function (e) {
-    touch = e.touches.length === 1 ? { lastY: e.touches[0].clientY, over: 0, overDir: null } : null;
+  // Слуша се на целия документ, за да важи и за празното място под терминала.
+  document.addEventListener('touchstart', function (e) {
+    touch = e.touches.length === 1
+      ? { lastX: e.touches[0].clientX, lastY: e.touches[0].clientY, over: 0, overDir: null }
+      : null;
   }, { capture: true, passive: true });
 
-  term.element.addEventListener('touchmove', function (e) {
+  // xterm.js скролва историята сам (scrollTop) и пуска събитието нататък, щом стигне ръба й.
+  // Тогава Chromium мести страницата: при zoom видимата част слиза под терминала и остава
+  // празно. Затова вертикалното плъзгане с един пръст не мести страницата, освен при zoom
+  // в рамките на терминала; вместо това на ръба отива PgUp / PgDn. Хоризонталното плъзгане
+  // при zoom остава на WebView-то. Два пръста (pinch zoom) не се пипат.
+  document.addEventListener('touchmove', function (e) {
     if (!touch || e.touches.length !== 1) return;
+    var x = e.touches[0].clientX;
     var y = e.touches[0].clientY;
+    var dx = x - touch.lastX;
     var dy = y - touch.lastY;
+    touch.lastX = x;
     touch.lastY = y;
+    if (dy === 0 || Math.abs(dx) > Math.abs(dy)) return;
+    if (pageCanPan(dy)) { touch.over = 0; touch.overDir = null; return; }
+    if (e.cancelable) e.preventDefault();
     trackOverscroll(dy);
-  }, { capture: true, passive: true });
+  }, { capture: true, passive: false });
 
   function endTouch() { touch = null; }
-  term.element.addEventListener('touchend', endTouch, { capture: true, passive: true });
-  term.element.addEventListener('touchcancel', endTouch, { capture: true, passive: true });
+  document.addEventListener('touchend', endTouch, { capture: true, passive: true });
+  document.addEventListener('touchcancel', endTouch, { capture: true, passive: true });
 
   // Колелото на мишката (emulator, таблет с мишка): същото правило, натрупано по deltaY.
   var wheelOver = 0, wheelDir = null;
@@ -302,7 +332,13 @@
   // Дългото натискане е наше: без системното меню и маркиране на WebView-то.
   document.addEventListener('contextmenu', function (e) { e.preventDefault(); });
 
-  window.addEventListener('resize', fit);
-  fit();
+  /** Терминалът стои долу (index.html): body е поне колкото прозореца. */
+  function layout() {
+    document.body.style.minHeight = window.innerHeight + 'px';
+    fit();
+  }
+
+  window.addEventListener('resize', layout);
+  layout();
   bridge.ready();
 })();

@@ -73,6 +73,8 @@ fun TerminalWebView(
       settings.minimumLogicalFontSize = 1
       settings.textZoom = 100
       setBackgroundColor(android.graphics.Color.rgb(0x1e, 0x1e, 0x1e))
+      // Без glow / разтягане на WebView-то на ръба; скролът отвъд ръба е PgUp / PgDn.
+      overScrollMode = android.view.View.OVER_SCROLL_NEVER
       webChromeClient = object : WebChromeClient() {
         override fun onConsoleMessage(message: ConsoleMessage): Boolean {
           Log.d(TAG, "js: ${message.message()} (${message.sourceId()}:${message.lineNumber()})")

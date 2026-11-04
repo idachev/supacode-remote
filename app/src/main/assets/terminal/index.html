@@ -8,7 +8,15 @@
   <link rel="stylesheet" href="xterm.css">
   <style>
     html, body { margin: 0; padding: 0; background: #1e1e1e; overflow-x: hidden; }
-    #term { display: inline-block; }
+    /* Без отскок и разтягане на страницата на ръба: терминалът не излиза от мястото си. */
+    html, body { overscroll-behavior: none; }
+    /* Терминалът е по ширината на екрана и често е по-нисък от него: стои долу, до полето
+       за писане, а празното е над него. Минималната височина на body е от terminal.js
+       (височината на прозореца): в WebView-то 100% и 100vh тук излизат 0. min-height, не
+       height — по-висок терминал (отворена клавиатура) расте надолу и се скролва, вместо
+       да се реже отгоре. */
+    body { display: flex; flex-direction: column; }
+    #term { margin-top: auto; align-self: flex-start; }
     /* Скролбарът на xterm би отнел ширина от колоните. */
     .xterm .xterm-viewport { scrollbar-width: none; }
     .xterm .xterm-viewport::-webkit-scrollbar { display: none; }
