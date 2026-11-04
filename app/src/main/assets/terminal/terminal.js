@@ -97,6 +97,7 @@
     // се изписва с размера, за който е, и не попада след reset.
     init: function (cols, rows) {
       term.write('', function () {
+        releasePan();
         term.reset();
         term.resize(cols, rows);
         fit();
@@ -107,6 +108,7 @@
     },
     resize: function (cols, rows) {
       term.write('', function () {
+        releasePan();
         term.resize(cols, rows);
         fit();
       });
@@ -116,6 +118,7 @@
       term.scrollPages(pages);
     },
     scrollToBottom: function () {
+      releasePan();
       term.scrollToBottom();
     },
     /** „Размер на текста“: [px] 0 е по ширина. По-широк терминал се мести хоризонтално. */
@@ -321,6 +324,14 @@
     }
     if (touch.axis === 'x') { e.stopPropagation(); return; }
     if (dy === 0 || Math.abs(dx) > Math.abs(dy)) return;
+    // Първо скритите редове на по-висок от екрана терминал (виж panBy); мъртвата зона за
+    // скрола до програмата почва от ръба.
+    if (panBy(dy)) {
+      e.stopPropagation();
+      touch.over = 0;
+      touch.overDir = null;
+      return;
+    }
     trackOverscroll(dy);
   }, { capture: true, passive: true });
 
@@ -407,8 +418,8 @@
   // Mac-ът може да е 50 реда, а на телефона да влизат 30. #frame реже (index.html), а тук
   // терминалът се мести надолу с translateY, за да се вижда редът с курсора и съдържанието
   // около него: при пълен екран последният ред е долу, а нов shell (банер и промпт в горните
-  // редове, празно под тях) се вижда отгоре. Ръчен вертикален pan няма: скритите горни редове
-  // при пълен екран се виждат, като се превърти историята.
+  // редове, празно под тях) се вижда отгоре. Вертикално плъзгане първо мести показаното по
+  // скритите редове (panBy), а чак от ръба превърта историята и стига до програмата.
 
   /**
    * Отместването отгоре (px в терминала) на показаната част. [rows] реда по [rowH] px,
@@ -435,24 +446,73 @@
   }
 
   var shift = 0;
-  function follow() {
-    var screen = term.element.querySelector('.xterm-screen');
+  var shownTop = 0; // отместването отгоре на показаната част сега (px в терминала)
+  // Ръчно местене с пръст (виж panBy): докато не е null, показаната част е там, а не по курсора.
+  var panTop = null;
+  var panCursor = null; // курсорът при местенето; изход, който го мести, връща следването
+
+  function cursorKey() {
+    var buffer = term.buffer.active;
+    return buffer.type + ',' + (buffer.baseY + buffer.cursorY) + ',' + buffer.cursorX;
+  }
+
+  /** Мястото и височината на терминала; null, ако целият се вижда. */
+  function overflow() {
     var height = document.documentElement.clientHeight;
     var total = term.element.getBoundingClientRect().height;
-    var next = 0;
-    if (screen && height && total > height) {
-      var rowH = screen.getBoundingClientRect().height / term.rows;
-      var buffer = term.buffer.active;
-      var cursor = buffer.baseY + buffer.cursorY - buffer.viewportY;
-      if (cursor < 0 || cursor >= term.rows) cursor = -1;
-      var top = visibleTop(term.rows, rowH, height, lastContentRow(), cursor);
-      // Долният край на терминала е долу в #frame; показано е [total − height, total].
-      next = Math.round(total - height - top);
+    if (!height || total <= height) return null;
+    return { height: height, total: total };
+  }
+
+  function follow() {
+    var screen = term.element.querySelector('.xterm-screen');
+    var box = overflow();
+    var top = 0;
+    if (screen && box) {
+      if (panTop !== null) {
+        top = Math.max(0, Math.min(box.total - box.height, panTop));
+      } else {
+        var rowH = screen.getBoundingClientRect().height / term.rows;
+        var buffer = term.buffer.active;
+        var cursor = buffer.baseY + buffer.cursorY - buffer.viewportY;
+        if (cursor < 0 || cursor >= term.rows) cursor = -1;
+        top = visibleTop(term.rows, rowH, box.height, lastContentRow(), cursor);
+      }
     }
+    shownTop = top;
+    // Долният край на терминала е долу в #frame; показано е [total − height, total].
+    var next = box ? Math.round(box.total - box.height - top) : 0;
     if (next === shift) return;
     shift = next;
     term.element.style.transform = shift ? 'translateY(' + shift + 'px)' : '';
   }
+
+  /**
+   * Вертикално местене с пръст на показаната част по редовете на терминала, до краищата му.
+   * Връща false, ако накъдето е жестът няма скрити редове: тогава той продължава към
+   * историята и скрола до програмата, както при терминал, който се вижда целият.
+   */
+  function panBy(dy) {
+    var box = overflow();
+    if (!box) return false;
+    var next = Math.max(0, Math.min(box.total - box.height, shownTop - dy));
+    if (Math.abs(next - shownTop) < 0.5) return false;
+    panTop = next;
+    panCursor = cursorKey();
+    follow();
+    return true;
+  }
+
+  function releasePan() {
+    panTop = null;
+    panCursor = null;
+  }
+
+  // Ръчното местене се държи до изход, който мести курсора (ехо от писане, нов ред, нов
+  // промпт). Изход, който го оставя на място (spinner на агента), не го връща.
+  term.onWriteParsed(function () {
+    if (panTop !== null && cursorKey() !== panCursor) releasePan();
+  });
 
   // onRender хваща изхода, курсора, превъртането на историята и resize; агентските TUI-та
   // рисуват много пъти в секунда, затова веднъж на кадър.
