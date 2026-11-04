@@ -43,6 +43,11 @@ data class InputRequest(val contentId: String, val b64: String) : ClientMessage
 @SerialName("suggest")
 data class SuggestRequest(val id: Int, val contentId: String) : ClientMessage
 
+/** Нов терминален таб в worktree [worktreeId]; отговорът е [TabNewReply] или `error` със същото [id]. */
+@Serializable
+@SerialName("tab.new")
+data class TabNewRequest(val id: Int, val worktreeId: String) : ClientMessage
+
 /** Съобщение към телефона: от relay-а (`relay`, `error`) или от host-а. */
 sealed interface ServerMessage
 
@@ -105,6 +110,11 @@ data class Detached(val contentId: String, val reason: String? = null) : ServerM
 
 @Serializable
 data class Suggestions(val id: Int? = null, val contentId: String, val suggestions: List<String> = emptyList()) :
+  ServerMessage
+
+/** Mac-ът е отворил новия таб; телефонът сам прави `attach` към [contentId]. */
+@Serializable
+data class TabNewReply(val id: Int? = null, val worktreeId: String = "", val tabId: String = "", val contentId: String) :
   ServerMessage
 
 @Serializable
@@ -204,7 +214,7 @@ object ProtocolCodec {
 
   /**
    * Връща `null` за `pong`, за непознат тип и за счупен JSON: нищо от relay-а не бива
-   * да спира връзката. Типът се чете ръчно, защото `list` и `suggest` имат едно и също
+   * да спира връзката. Типът се чете ръчно, защото `list`, `suggest` и `tab.new` имат едно и също
    * `t` в двете посоки.
    */
   fun decode(text: String): ServerMessage? {
@@ -220,6 +230,7 @@ object ProtocolCodec {
         "size" -> SizeChanged.serializer()
         "detached" -> Detached.serializer()
         "suggest" -> Suggestions.serializer()
+        "tab.new" -> TabNewReply.serializer()
         "error" -> ErrorReply.serializer()
         else -> return null
       }

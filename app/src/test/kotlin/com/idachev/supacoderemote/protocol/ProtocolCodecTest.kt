@@ -171,4 +171,24 @@ class ProtocolCodecTest {
     assertSameJson("""{"t":"input","contentId":"c","b64":"DQ=="}""", ProtocolCodec.encode(InputRequest("c", "DQ==")))
     assertSameJson("""{"t":"suggest","id":3,"contentId":"c"}""", ProtocolCodec.encode(SuggestRequest(3, "c")))
   }
+
+  @Test
+  fun `tab new заявката е точно като в протокола`() {
+    assertSameJson("""{"t":"tab.new","id":4,"worktreeId":"w1"}""", ProtocolCodec.encode(TabNewRequest(4, "w1")))
+  }
+
+  @Test
+  fun `tab new отговорът носи tabId и contentId`() {
+    assertEquals(
+      TabNewReply(id = 4, worktreeId = "w1", tabId = "t9", contentId = "c9"),
+      ProtocolCodec.decode("""{"t":"tab.new","id":4,"worktreeId":"w1","tabId":"t9","contentId":"c9"}"""),
+    )
+    // Грешката за tab.new е обикновен `error` със същото id.
+    assertEquals(
+      ErrorReply(4, "unknown worktree"),
+      ProtocolCodec.decode("""{"t":"error","id":4,"message":"unknown worktree"}"""),
+    )
+    // Без contentId отговорът е безполезен — пропуска се, вместо да отвори празен терминал.
+    assertNull(ProtocolCodec.decode("""{"t":"tab.new","id":4,"worktreeId":"w1","tabId":"t9"}"""))
+  }
 }
