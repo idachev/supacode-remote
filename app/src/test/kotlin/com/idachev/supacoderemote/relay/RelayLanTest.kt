@@ -217,7 +217,8 @@ class RelayLanTest {
   private fun answerAttach(webSocket: WebSocket, text: String, path: String) {
     if (!text.contains("\"t\":\"attach\"")) return
     val contentId = Regex("\"contentId\":\"([^\"]+)\"").find(text)!!.groupValues[1]
-    webSocket.send("""{"t":"attached","contentId":"$contentId","cols":80,"rows":24}""")
+    val id = Regex("\"id\":(\\d+)").find(text)!!.groupValues[1]
+    webSocket.send("""{"t":"attached","id":$id,"contentId":"$contentId","cols":80,"rows":24}""")
     webSocket.send(out(contentId, "$path-screen"))
   }
 
@@ -313,12 +314,12 @@ class RelayLanTest {
     nextMatching(fromClientOnRelay) { it.contains("\"t\":\"attach\"") }
     awaitMarker(outputs, "relay-screen")
 
-    // 2. LAN се вдига: relay attach-ът се спира, терминалът се закача по LAN.
+    // 2. LAN се вдига: терминалът се закача по LAN; relay attach-ът спира след LAN `attached`.
     withTimeout(5_000) { relay.path.first { it == LinkPath.LAN } }
-    assertEquals("""{"t":"detach","contentId":"c1"}""", nextMatching(fromClientOnRelay) { it.contains("detach") })
     relay.send(AttachRequest(id = 2, contentId = "c1"))
     nextMatching(fromClientOnLan) { it.contains("\"t\":\"attach\"") }
     awaitMarker(outputs, "lan-screen")
+    assertEquals("""{"t":"detach","contentId":"c1"}""", nextMatching(fromClientOnRelay) { it.contains("detach") })
     // Mac-ът е пратил още нещо по relay-а, преди да види detach-а: не стига до терминала.
     relaySocket!!.send(out("c1", "relay-late"))
     relaySocket!!.send("""{"t":"size","contentId":"c1","cols":100,"rows":30}""")
