@@ -176,8 +176,56 @@ class TerminalViewModelTest {
     vm.onWebReady()
     emit(Attached(1, "c1", 120, 40))
     assertTrue(vm.sendLine("echo здравей 👋"))
+    advanceUntilIdle()
     vm.sendKey("\u0003")
-    assertEquals(listOf("echo здравей 👋\r", "\u0003"), inputs())
+    assertEquals(listOf("echo здравей 👋", "\r", "\u0003"), inputs())
+  }
+
+  @Test
+  fun `Enter след текста от полето тръгва отделно и по-късно`() = runTest(dispatcher) {
+    link.hostSession.value = 1
+    runCurrent()
+    vm.onWebReady()
+    emit(Attached(1, "c1", 120, 40))
+    assertTrue(vm.sendLine("hi"))
+    runCurrent()
+    assertEquals(listOf("hi"), inputs())
+    advanceTimeBy(TerminalViewModel.ENTER_DELAY_MS + 1)
+    assertEquals(listOf("hi", "\r"), inputs())
+  }
+
+  @Test
+  fun `клавиш преди чакащия Enter не го изпреварва`() = runTest(dispatcher) {
+    link.hostSession.value = 1
+    runCurrent()
+    vm.onWebReady()
+    emit(Attached(1, "c1", 120, 40))
+    vm.sendLine("hi")
+    vm.sendKey("\u0003")
+    advanceUntilIdle()
+    assertEquals(listOf("hi", "\r", "\u0003"), inputs())
+  }
+
+  @Test
+  fun `чакащ Enter тръгва при затваряне на екрана, преди detach`() = runTest(dispatcher) {
+    link.hostSession.value = 1
+    runCurrent()
+    vm.onWebReady()
+    emit(Attached(1, "c1", 120, 40))
+    vm.sendLine("hi")
+    store.clear()
+    assertEquals(listOf("hi", "\r"), inputs())
+    assertEquals(DetachRequest("c1"), link.sent.last())
+  }
+
+  @Test
+  fun `празно поле праща само Enter веднага`() = runTest(dispatcher) {
+    link.hostSession.value = 1
+    runCurrent()
+    vm.onWebReady()
+    emit(Attached(1, "c1", 120, 40))
+    assertTrue(vm.sendLine(""))
+    assertEquals(listOf("\r"), inputs())
   }
 
   @Test
@@ -489,16 +537,14 @@ class TerminalViewModelTest {
   }
 
   @Test
-  fun `следващият таб тръгва с лентите, както са оставени в последния`() {
-    val memory = MutableStateFlow(TerminalBars())
-    val first = TerminalViewModel(link, Notices(), "c1", bars = memory)
+  fun `следващият таб тръгва със скрити ленти, дори предишният да е оставен с показани`() {
+    val first = TerminalViewModel(link, Notices(), "c1")
     store.put("first", first)
     first.toggleTopBar()
     first.setInputShown(true)
-    val second = TerminalViewModel(link, Notices(), "c2", bars = memory)
+    val second = TerminalViewModel(link, Notices(), "c2")
     store.put("second", second)
-    assertEquals(TerminalBars(topBar = true, input = true), second.state.value.bars)
-    second.setInputShown(false)
-    assertEquals(TerminalBars(topBar = true, input = false), memory.value)
+    assertEquals(TerminalBars(topBar = false, input = false), second.state.value.bars)
+    assertEquals(TerminalBars(topBar = true, input = true), first.state.value.bars)
   }
 }

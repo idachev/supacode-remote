@@ -103,11 +103,11 @@ class TerminalViewModel(
   private val overscrollToProgram: () -> Boolean = { true },
   /** Таванът на „Пауза“; над него паузата спира сама и маркираното се отменя. */
   pauseCapBytes: Long = OutputPause.CAP_BYTES,
-  /** Общата памет за лентите (за процеса): нов таб тръгва както е оставен последният. */
-  private val bars: MutableStateFlow<TerminalBars> = MutableStateFlow(TerminalBars()),
+  /** Паузата между текста от полето и неговия Enter (виж [sendLine]). */
+  private val enterDelayMs: Long = ENTER_DELAY_MS,
 ) : ViewModel() {
 
-  private val _state = MutableStateFlow(TerminalUiState(bars = bars.value))
+  private val _state = MutableStateFlow(TerminalUiState())
   val state: StateFlow<TerminalUiState> = _state.asStateFlow()
 
   private val _commands = Channel<TerminalCommand>(Channel.UNLIMITED)
@@ -123,6 +123,7 @@ class TerminalViewModel(
   private var suggestId: Int? = null
   private var suggestTimeout: Job? = null
   private val pause = OutputPause(pauseCapBytes)
+  private var pendingEnter: Job? = null
   private var pauseTicker: Job? = null
 
   init {
@@ -222,8 +223,30 @@ class TerminalViewModel(
     }
   }
 
-  /** Текстът от полето и после Enter. */
-  fun sendLine(text: String): Boolean = sendRaw(text + TerminalKeys.ENTER)
+  /**
+   * Текстът от полето и после Enter — в два отделни `input`, с [enterDelayMs] между тях.
+   * Claude Code приема бързо дошло парче с няколко знака като поставен текст и `\r` в него
+   * става нов ред в полето му, а не „изпрати“; shell-ът няма тази разлика. Затова Enter-ът
+   * идва сам и малко по-късно.
+   */
+  fun sendLine(text: String): Boolean {
+    if (text.isEmpty()) return sendRaw(TerminalKeys.ENTER)
+    if (!sendRaw(text)) return false
+    pendingEnter = viewModelScope.launch {
+      delay(enterDelayMs)
+      pendingEnter = null
+      sendRaw(TerminalKeys.ENTER)
+    }
+    return true
+  }
+
+  /** Чакащ Enter от [sendLine] тръгва веднага, за да не го изпревари следващият вход. */
+  private fun flushPendingEnter() {
+    val job = pendingEnter ?: return
+    pendingEnter = null
+    job.cancel()
+    sendRaw(TerminalKeys.ENTER)
+  }
 
   /** Бутон от реда с клавиши. */
   fun sendKey(bytes: String): Boolean {
@@ -254,9 +277,7 @@ class TerminalViewModel(
   }
 
   private fun setBars(change: (TerminalBars) -> TerminalBars) {
-    val next = change(_state.value.bars)
-    bars.value = next
-    _state.update { it.copy(bars = next) }
+    _state.update { it.copy(bars = change(it.bars)) }
   }
 
   /** Иска текста на терминала; идва обратно през `onText` на WebView-то. */
@@ -391,6 +412,7 @@ class TerminalViewModel(
   }
 
   private fun sendRaw(text: String): Boolean {
+    flushPendingEnter()
     // Вход към програмата: първо се показва задържаният изход, иначе отговорът ѝ идва
     // след стария екран.
     endPause(OutputPause.EndReason.Input)
@@ -437,12 +459,17 @@ class TerminalViewModel(
 
   /** Екранът е затворен (entry-то е махнато от стека): host-ът спира потока. */
   override fun onCleared() {
+    // Излизане веднага след „Прати“: Enter-ът не бива да остане неизпратен в полето на агента.
+    flushPendingEnter()
     link.detach(contentId, lastAttachId)
   }
 
   companion object {
     /** Моделът на Mac-а има до 90 s; малко отгоре за relay-а. */
     const val SUGGEST_TIMEOUT_MS = 100_000L
+
+    /** Над прозореца, в който Claude Code слива бързо дошли парчета в един paste. */
+    const val ENTER_DELAY_MS = 150L
 
     /** Колко често чипът „Пауза“ показва нов размер. */
     const val PAUSE_TICK_MS = 250L

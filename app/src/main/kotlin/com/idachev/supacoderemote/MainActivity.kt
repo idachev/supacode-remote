@@ -5,6 +5,9 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -25,6 +28,7 @@ class MainActivity : ComponentActivity() {
     if (savedInstanceState == null) handleIntent(intent)
 
     enableEdgeToEdge()
+    hideSystemBars()
     setContent {
       CompositionLocalProvider(LocalAppContainer provides container) {
         SupacodeRemoteTheme {
@@ -40,6 +44,23 @@ class MainActivity : ComponentActivity() {
     // Service-ът за известия се пуска оттук: от преден план Android го позволява винаги.
     val container = (application as SupacodeRemoteApp).container
     AgentWatchService.sync(this, container.settingsStore.notifyAwaiting.value)
+  }
+
+  override fun onWindowFocusChanged(hasFocus: Boolean) {
+    super.onWindowFocusChanged(hasFocus)
+    // Диалог или известие връщат системните ленти; при връщане на фокуса пак се скриват.
+    if (hasFocus) hideSystemBars()
+  }
+
+  /**
+   * Цял екран: status bar-ът и navigation bar-ът са скрити, за да вземе терминалът всеки
+   * ред. Плъзгане от ръба ги показва за малко, без да мести съдържанието (immersive).
+   */
+  private fun hideSystemBars() {
+    WindowCompat.getInsetsController(window, window.decorView).apply {
+      systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+      hide(WindowInsetsCompat.Type.systemBars())
+    }
   }
 
   override fun onNewIntent(intent: Intent) {

@@ -46,7 +46,9 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -92,7 +94,7 @@ import com.idachev.supacoderemote.ui.PathChip
 import com.idachev.supacoderemote.ui.LocalAppContainer
 
 /** „Терминал“: живият таб от Mac-а, полето за писане, клавишите и „Предложи“. */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
   val container = LocalAppContainer.current
@@ -102,7 +104,6 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
       notices = container.notices,
       contentId = key.contentId,
       overscrollToProgram = { container.settingsStore.overscrollToProgram.value },
-      bars = container.terminalBars,
     )
   }
   val state by vm.state.collectAsStateWithLifecycle()
@@ -110,7 +111,7 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
   val context = LocalContext.current
   var copyText by remember { mutableStateOf<String?>(null) }
   // Расте с всяко докосване на бутона с клавиатурата: само тогава полето взема фокуса и
-  // клавиатурата излиза, а не при всяко показване (напр. при отваряне на таб с разпънато поле).
+  // клавиатурата излиза, а не при всяко показване (напр. след завъртане с разпънато поле).
   var focusInput by remember { mutableIntStateOf(0) }
   // Текстът в полето живее тук, а не в InputBar: прибраното поле не губи неизпратеното.
   val field = rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue("")) }
@@ -124,8 +125,15 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
   // Back първо прибира разпънатото поле (текстът остава), едва следващият напуска терминала.
   // Отворена клавиатура взема Back преди това, както винаги.
   BackHandler(enabled = state.bars.input) { collapseInput() }
+  // Отворена клавиатура: терминалът скача най-долу, както с „Долу“. Пишеш към последния
+  // ред, а местене с пръст или превъртяна история иначе оставят друго място пред очите.
+  // Следи се самата клавиатура, за да важи за всеки път: бутона, полето, „Живи клавиши“.
+  val imeVisible = WindowInsets.isImeVisible
+  LaunchedEffect(imeVisible) { if (imeVisible) vm.scrollToBottom() }
 
   Scaffold(
+    // Тъмен фон и под камерата (display cutout): на цял екран там иначе стои светла ивица.
+    containerColor = TerminalBackground,
     topBar = {
       // Скрита горна лента: банерът за връзката остава, под status bar-а.
       val insets = if (state.bars.topBar) Modifier else Modifier.windowInsetsPadding(WindowInsets.statusBars)
@@ -166,7 +174,7 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
       )
     },
   ) { padding ->
-    Box(Modifier.fillMaxSize().padding(padding).background(androidx.compose.ui.graphics.Color(0xFF1E1E1E))) {
+    Box(Modifier.fillMaxSize().padding(padding).background(TerminalBackground)) {
       TerminalWebView(
         commands = vm.commands,
         onReady = vm::onWebReady,
@@ -541,3 +549,6 @@ private fun KeyButton(label: String, highlighted: Boolean = false, tag: String =
     modifier = Modifier.height(36.dp).testTag(tag),
   ) { Text(label, fontFamily = FontFamily.Monospace) }
 }
+
+/** Фонът на терминала (като в xterm.js); и празното около него е в този цвят. */
+private val TerminalBackground = androidx.compose.ui.graphics.Color(0xFF1E1E1E)

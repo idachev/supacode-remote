@@ -87,6 +87,9 @@ Navigation 3. compileSdk и targetSdk са 36 (template-ът иска 37, но p
   `LiveKeys` — по разликата спрямо вече изпратеното, по code point. Всяка промяна там
   минава през `LiveKeysTest` и през проба с истинския Gboard в emulator-а (тап по клавишите,
   не `adb input text`, който минава покрай IME-а).
+- Текстът от полето и неговият Enter тръгват като два `input`, на 150 ms един от друг
+  (`sendLine`): Claude Code и Codex приемат бързо дошло парче като paste и `\r` в него
+  става нов ред, а не „изпрати“.
 - Предложение („Предложи“) само пълни полето. **Никога** не се праща само.
 - xterm.js е в `app/src/main/assets/terminal/` (5.5.0). Без CDN по време на работа.
 - Маркиране за копиране: дългото натискане се хваща в Android (`GestureDetector` в
