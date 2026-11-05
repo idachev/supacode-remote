@@ -187,6 +187,8 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
         onInput = vm::onWheelInput,
         fontSize = textSize,
         onSelection = vm::onSelection,
+        // Цял екран (без горната лента и полето за писане): по един празен ред горе и долу.
+        rowPadding = !state.bars.topBar && !state.bars.input,
       )
       // Плаващите бутони са в една колона вдясно, а не подравнени поотделно: в ниско място
       // (хоризонтално, с клавиатура) иначе се застъпват и горният прихваща докосванията.

@@ -40,6 +40,13 @@ fun MainNavigation() {
     backStack.add(key)
   }
 
+  // „Назад“ от екрана [key] маха само него и само ако е най-горе. Докато екранът излиза с
+  // анимация, бутонът му още приема докосвания; второ докосване иначе маха и екрана под
+  // него, а празен стек срива NavDisplay.
+  fun closeScreen(key: NavKey) {
+    if (backStack.size > 1 && backStack.lastOrNull() == key) backStack.removeLastOrNull()
+  }
+
   // 401 от relay-а: ключът е грешен, връщаме към „Настройка“ с обяснение.
   LaunchedEffect(connection) {
     if (connection == ConnectionState.Unauthorized && backStack.lastOrNull() !is SetupKey) {
@@ -81,7 +88,7 @@ fun MainNavigation() {
           SetupScreen(
             wrongKey = key.wrongKey,
             canGoBack = backStack.size > 1,
-            onBack = { backStack.removeLastOrNull() },
+            onBack = { closeScreen(key) },
             onSaved = { resetTo(SessionsKey) },
           )
         }
@@ -94,12 +101,12 @@ fun MainNavigation() {
         entry<WorktreeKey> { key ->
           WorktreeScreen(
             key = key,
-            onBack = { backStack.removeLastOrNull() },
+            onBack = { closeScreen(key) },
             onOpenTab = { tab -> backStack.add(TerminalKey(tab.contentId, tab.title ?: "Таб")) },
           )
         }
         entry<TerminalKey> { key ->
-          TerminalScreen(key = key, onBack = { backStack.removeLastOrNull() })
+          TerminalScreen(key = key, onBack = { closeScreen(key) })
         }
       },
     )

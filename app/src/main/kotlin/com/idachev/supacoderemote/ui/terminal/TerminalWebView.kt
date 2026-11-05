@@ -21,6 +21,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
@@ -52,6 +53,11 @@ fun TerminalWebView(
   onInput: (String) -> Unit = {},
   fontSize: Int = TextSize.FIT,
   onSelection: (TerminalSelection?) -> Unit = {},
+  /**
+   * Празен ред горе и долу (височината на един ред от страницата): на цял екран заобленият
+   * екран и камерата иначе режат буквите на крайните редове.
+   */
+  rowPadding: Boolean = false,
 ) {
   val context = LocalContext.current
   val currentOnReady by rememberUpdatedState(onReady)
@@ -63,6 +69,8 @@ fun TerminalWebView(
   var ready by remember { mutableStateOf(false) }
   // Височината на терминала в страницата (dp); до първия доклад WebView-то е цялото място.
   var pageHeight by remember { mutableStateOf<Int?>(null) }
+  // Височината на един ред (dp), за [rowPadding]; до първия доклад отстъп няма.
+  var rowHeight by remember { mutableStateOf(0f) }
   val main = remember { Handler(Looper.getMainLooper()) }
 
   val webView = remember {
@@ -143,6 +151,12 @@ fun TerminalWebView(
           main.post { pageHeight = dp }
         }
 
+        /** Височината на един ред на терминала (CSS px = dp), за [rowPadding]. */
+        @JavascriptInterface
+        fun rowHeight(dp: Double) {
+          main.post { rowHeight = dp.toFloat() }
+        }
+
         /** Байтовете на xterm.js за скрола от `supa.wheel` (mouse report или стрелки). */
         @JavascriptInterface
         fun input(data: String) {
@@ -174,7 +188,10 @@ fun TerminalWebView(
 
   // height е предпочитана височина: по-висок терминал взема цялото място, а страницата показва частта с курсора.
   val size = pageHeight?.let { Modifier.height(it.dp) } ?: Modifier.fillMaxHeight()
-  AndroidView(factory = { webView }, modifier = modifier.then(size))
+  // Отстъпът е отвън, височината отвътре: по-висок терминал се свива с двата реда, а
+  // страницата вижда новата височина и показва частта с курсора в нея.
+  val pad = Modifier.padding(vertical = if (rowPadding) rowHeight.dp else 0.dp)
+  AndroidView(factory = { webView }, modifier = modifier.then(pad).then(size))
 }
 
 private const val TAG = "TerminalWebView"

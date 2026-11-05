@@ -3,8 +3,8 @@
 // Kotlin вика supa.init / write / resize / scrollPages / scrollToBottom / wheel / copyText;
 // selectStart / selectMove / selectEnd (от дългото натискане в Android), selectRange /
 // copySelection / clearSelection (от лентата за маркиране); страницата вика
-// SupaBridge.ready(), text(), copy(), selection(), selectionGone(), overscroll(), input()
-// и height().
+// SupaBridge.ready(), text(), copy(), selection(), selectionGone(), overscroll(), input(),
+// height() и rowHeight().
 //
 // Размерът на терминала е винаги този на Mac-а (cols × rows от `attached` и `size`).
 // Страницата никога не го сменя сама: вместо това подбира шрифта така, че всички колони
@@ -530,11 +530,25 @@
   // Височината на терминала (CSS px = dp) към Kotlin: WebView-то става точно толкова и
   // долу в мястото си, а празното над него е на Compose, извън страницата.
   var reportedHeight = 0;
+  var reportedRow = 0;
   function reportHeight() {
+    reportRowHeight();
     var h = Math.ceil(term.element.getBoundingClientRect().height);
     if (!h || h === reportedHeight) return;
     reportedHeight = h;
     if (bridge.height) bridge.height(h);
+  }
+
+  // Височината на един ред (CSS px = dp): на цял екран Compose оставя по толкова място горе и
+  // долу, за да не режат заобленият екран и камерата буквите. Само страницата я знае: при
+  // „по ширина“ шрифтът идва от fit(), а и при фиксиран клетката се мери от xterm.js.
+  function reportRowHeight() {
+    var screen = term.element.querySelector('.xterm-screen');
+    if (!screen || !term.rows) return;
+    var row = Math.round(screen.getBoundingClientRect().height / term.rows * 10) / 10;
+    if (!row || row === reportedRow) return;
+    reportedRow = row;
+    if (bridge.rowHeight) bridge.rowHeight(row);
   }
   if (window.ResizeObserver) new ResizeObserver(reportHeight).observe(term.element);
 
