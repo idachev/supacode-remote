@@ -211,6 +211,14 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
         RepeatKeyButton("▲", description = "Скрол нагоре", tag = "float-scroll-up") { vm.scrollWheel(up = true) }
         Spacer(Modifier.height(12.dp))
         RepeatKeyButton("▼", description = "Скрол надолу", tag = "float-scroll-down") { vm.scrollWheel(up = false) }
+        Spacer(Modifier.height(12.dp))
+        // Едно докосване до най-новото: историята на телефона и скролът на агента (Claude Code).
+        FloatingBarButton(
+          icon = TerminalIcons.ToBottom,
+          description = "Най-долу",
+          tag = "float-to-bottom",
+          onClick = vm::jumpToBottom,
+        )
         Spacer(Modifier.weight(1f).heightIn(min = 12.dp))
         // Долу: разпъва полето за писане. Разпънато се прибира от реда с клавиши (или с Back),
         // а докато има маркирано, бутонът не се показва, за да не покрива лентата за маркиране.

@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** Какво трябва да направи xterm.js. Изпълнява се в реда на пристигане. */
 sealed interface TerminalCommand {
@@ -46,8 +47,12 @@ sealed interface TerminalCommand {
    * Скрол като от колелото / trackpad-а: страницата праща WheelEvent на xterm.js и той прави
    * каквото прави за истинско колело — mouse report, ако програмата следи мишката, стрелки
    * в alternate буфера, иначе превърта историята на телефона. Байтовете идват през `onInput`.
+   *
+   * [lines] е броят събития (0 — колкото за един скрол на колелото в страницата). С
+   * [programOnly] страницата скролира само ако програмата следи мишката; иначе не прави нищо,
+   * за да не тръгнат стрелки към TUI без мишка и да не мърда историята на телефона.
    */
-  data class Wheel(val up: Boolean) : TerminalCommand
+  data class Wheel(val up: Boolean, val lines: Int = 0, val programOnly: Boolean = false) : TerminalCommand
 
   /** Целият текст на терминала (историята и екрана) обратно към приложението, за копиране. */
   data object RequestText : TerminalCommand
@@ -125,12 +130,17 @@ class TerminalViewModel(
   private val pause = OutputPause(pauseCapBytes)
   private var pendingEnter: Job? = null
   private var pauseTicker: Job? = null
+  private var jumpJob: Job? = null
+
+  /** Байтовете от страницата за скрола на „Най-долу“; има го само докато той тече. */
+  private var jumpReplies: Channel<String>? = null
 
   init {
     viewModelScope.launch { link.messages.collect(::onMessage) }
     viewModelScope.launch {
       link.hostSession.collect { session ->
         if (session == null) {
+          cancelJump()
           attachId = null
           _state.update { it.copy(phase = AttachPhase.Waiting) }
         } else if (webReady) {
@@ -146,6 +156,7 @@ class TerminalViewModel(
    */
   fun onWebReady() {
     webReady = true
+    cancelJump()
     while (_commands.tryReceive().isSuccess) Unit
     // Новата страница е празна и маркирано няма; задържаното ще дойде наново с attach.
     pause.end()
@@ -181,6 +192,7 @@ class TerminalViewModel(
   private fun onMessage(message: ServerMessage) {
     when (message) {
       is Attached -> if (message.contentId == contentId) {
+        cancelJump()
         endPause(OutputPause.EndReason.Reattach)
         attachId = null
         // Init чисти терминала, а с него и маркираното.
@@ -203,6 +215,7 @@ class TerminalViewModel(
         _commands.trySend(TerminalCommand.Resize(message.cols, message.rows))
       }
       is Detached -> if (message.contentId == contentId) {
+        cancelJump()
         attachId = null
         _state.update { it.copy(phase = AttachPhase.Detached(message.reason?.ifBlank { null } ?: "сесията е спряла")) }
       }
@@ -230,6 +243,7 @@ class TerminalViewModel(
    * идва сам и малко по-късно.
    */
   fun sendLine(text: String): Boolean {
+    cancelJump()
     if (text.isEmpty()) return sendRaw(TerminalKeys.ENTER)
     if (!sendRaw(text)) return false
     pendingEnter = viewModelScope.launch {
@@ -250,6 +264,7 @@ class TerminalViewModel(
 
   /** Бутон от реда с клавиши. */
   fun sendKey(bytes: String): Boolean {
+    cancelJump()
     _state.update { it.copy(ctrlSticky = false) }
     return sendRaw(bytes)
   }
@@ -259,11 +274,49 @@ class TerminalViewModel(
    * PgUp/PgDn от реда с клавиши отиват към програмата (напр. Claude Code).
    */
   fun scrollHistory(pages: Int) {
+    cancelJump()
     _commands.trySend(TerminalCommand.ScrollPages(pages))
   }
 
   fun scrollToBottom() {
     _commands.trySend(TerminalCommand.ScrollToBottom)
+  }
+
+  /**
+   * „Най-долу“: историята на телефона до живия край, после скрол надолу към програмата на
+   * пакети от [JUMP_LINES] реда, за да покаже Claude Code и другите агенти най-новото.
+   *
+   * Телефонът не може да знае кога програмата е стигнала дъното, затова спира таванът
+   * [JUMP_ROUNDS]; излишният скрол на дъното програмата пренебрегва. Скролът тръгва само ако
+   * програмата следи мишката (`programOnly`): иначе страницата не дава байтове, пакетът
+   * остава без отговор за [JUMP_REPLY_MS] и скролът спира. Пакетите не чакат прерисуване:
+   * агентът, който работи, прерисува постоянно, а входът така и така чака на ред в PTY-то.
+   */
+  fun jumpToBottom() {
+    cancelJump()
+    _commands.trySend(TerminalCommand.ScrollToBottom)
+    if (_state.value.phase !is AttachPhase.Attached) return
+    val replies = Channel<String>(Channel.UNLIMITED)
+    jumpReplies = replies
+    jumpJob = viewModelScope.launch {
+      try {
+        repeat(JUMP_ROUNDS) {
+          // Отговорите от предишния пакет не бива да минат за отговор на новия.
+          while (replies.tryReceive().isSuccess) Unit
+          _commands.trySend(TerminalCommand.Wheel(up = false, lines = JUMP_LINES, programOnly = true))
+          withTimeoutOrNull(JUMP_REPLY_MS) { replies.receive() } ?: return@launch
+          delay(JUMP_EVERY_MS)
+        }
+      } finally {
+        if (jumpReplies === replies) jumpReplies = null
+      }
+    }
+  }
+
+  private fun cancelJump() {
+    jumpJob?.cancel()
+    jumpJob = null
+    jumpReplies = null
   }
 
   /** Плаващият бутон горе: показва или скрива горната лента. */
@@ -366,6 +419,7 @@ class TerminalViewModel(
    * ако терминалът не е свързан — скролът е жест, не команда.
    */
   fun onOverscroll(up: Boolean) {
+    cancelJump()
     if (!overscrollToProgram()) return
     scrollWheel(up)
   }
@@ -375,6 +429,7 @@ class TerminalViewModel(
    * в shell PgUp / PgDn вървят по историята на командите. Тихо без attach, както скролът.
    */
   fun scrollWheel(up: Boolean) {
+    cancelJump()
     if (_state.value.phase !is AttachPhase.Attached) return
     _commands.trySend(TerminalCommand.Wheel(up))
   }
@@ -382,6 +437,7 @@ class TerminalViewModel(
   /** Байтовете, които xterm.js е произвел за скрола от [scrollWheel] (mouse report, стрелки). */
   fun onWheelInput(bytes: String) {
     if (bytes.isEmpty() || _state.value.phase !is AttachPhase.Attached) return
+    jumpReplies?.trySend(bytes)
     sendRaw(bytes)
   }
 
@@ -395,6 +451,7 @@ class TerminalViewModel(
    */
   fun sendLive(text: String) {
     if (text.isEmpty()) return
+    cancelJump()
     if (text.length == 1 && consumeCtrl(text[0])) return
     sendRaw(text)
   }
@@ -405,6 +462,7 @@ class TerminalViewModel(
    */
   fun consumeCtrl(ch: Char): Boolean {
     if (!_state.value.ctrlSticky) return false
+    cancelJump()
     val code = TerminalKeys.control(ch) ?: return false
     _state.update { it.copy(ctrlSticky = false) }
     sendRaw(code)
@@ -473,5 +531,22 @@ class TerminalViewModel(
 
     /** Колко често чипът „Пауза“ показва нов размер. */
     const val PAUSE_TICK_MS = 250L
+
+    /** „Най-долу“: редове скрол в един пакет; mouse report-ът е ~13 байта, 50 са под 1 KB. */
+    const val JUMP_LINES = 50
+
+    /** „Най-долу“: пауза между пакетите, за да не се трупа вход в relay-а. */
+    const val JUMP_EVERY_MS = 100L
+
+    /** „Най-долу“: таванът — 30 пакета по 50 реда, около 3 s и 1500 реда. */
+    const val JUMP_ROUNDS = 30
+
+    const val JUMP_MAX_MS = JUMP_ROUNDS * JUMP_EVERY_MS
+
+    /**
+     * „Най-долу“: толкова се чакат байтовете на страницата за пакета. Те идват от WebView-то на
+     * телефона, не от мрежата, затова времето не зависи от връзката.
+     */
+    const val JUMP_REPLY_MS = 500L
   }
 }

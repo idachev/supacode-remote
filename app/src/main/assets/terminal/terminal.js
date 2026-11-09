@@ -126,9 +126,13 @@
       fixedFont = px > 0 ? px : 0;
       fit();
     },
-    /** Скрол като от колелото / trackpad-а; [dir] е -1 нагоре, 1 надолу. Виж wheel(). */
-    wheel: function (dir) {
-      wheel(dir);
+    /**
+     * Скрол като от колелото / trackpad-а; [dir] е -1 нагоре, 1 надолу. [lines] — колко
+     * събития (0 — WHEEL_LINES). С [programOnly] само ако програмата следи мишката. Виж wheel().
+     */
+    wheel: function (dir, lines, programOnly) {
+      if (programOnly && term.modes.mouseTrackingMode === 'none') return;
+      wheel(dir, lines || WHEEL_LINES);
     },
     /**
      * Историята и екранът като обикновен текст, за да се маркира и копира в приложението
@@ -373,12 +377,12 @@
 
   // По едно събитие на ред: при mouse tracking xterm.js дава един report на събитие,
   // каквото и да е deltaY, а програмата (Claude Code) брои report-ите като редове.
-  function wheel(dir) {
+  function wheel(dir, lines) {
     var screen = term.element.querySelector('.xterm-screen');
     var rect = screen.getBoundingClientRect();
     wheeling = true;
     try {
-      for (var i = 0; i < WHEEL_LINES; i++) {
+      for (var i = 0; i < lines; i++) {
         screen.dispatchEvent(new WheelEvent('wheel', {
           deltaY: dir,
           deltaMode: WheelEvent.DOM_DELTA_LINE,

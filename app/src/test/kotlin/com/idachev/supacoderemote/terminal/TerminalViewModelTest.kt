@@ -306,6 +306,97 @@ class TerminalViewModelTest {
     assertEquals(listOf("\u001b[<64;61;21M"), inputs())
   }
 
+  private val sgrDown = "\u001b[<65;61;21M"
+
+  private fun TestScope.attachedWithCommands(): MutableList<TerminalCommand> {
+    link.hostSession.value = 1
+    runCurrent()
+    vm.onWebReady()
+    val commands = collectCommands()
+    emit(Attached(1, "c1", 120, 40))
+    commands.clear()
+    return commands
+  }
+
+  private fun List<TerminalCommand>.jumpWheels() = filterIsInstance<TerminalCommand.Wheel>()
+
+  @Test
+  fun `„Най-долу“ сваля историята и скролира програмата, докато тя приема скрола, до тавана`() = runTest(dispatcher) {
+    val commands = attachedWithCommands()
+    // Страницата отговаря на всеки пакет с mouse report-и, както при Claude Code.
+    backgroundScope.launch {
+      var seen = 0
+      while (true) {
+        val wheels = commands.jumpWheels().size
+        if (wheels > seen) {
+          seen = wheels
+          vm.onWheelInput(sgrDown)
+          vm.onWheelInput(sgrDown)
+        }
+        kotlinx.coroutines.delay(1)
+      }
+    }
+    vm.jumpToBottom()
+    advanceTimeBy(TerminalViewModel.JUMP_MAX_MS + 1_000)
+    runCurrent()
+    assertEquals(TerminalCommand.ScrollToBottom, commands.first())
+    val wheels = commands.jumpWheels()
+    assertEquals(TerminalViewModel.JUMP_ROUNDS, wheels.size)
+    assertTrue(wheels.all { !it.up && it.lines == TerminalViewModel.JUMP_LINES && it.programOnly })
+    assertEquals(List(TerminalViewModel.JUMP_ROUNDS * 2) { sgrDown }, inputs())
+  }
+
+  @Test
+  fun `„Най-долу“ спира след първия пакет, ако програмата не следи мишката`() = runTest(dispatcher) {
+    val commands = attachedWithCommands()
+    vm.jumpToBottom()
+    advanceTimeBy(TerminalViewModel.JUMP_MAX_MS + 1_000)
+    runCurrent()
+    assertEquals(listOf(TerminalCommand.ScrollToBottom), commands.filter { it !is TerminalCommand.Wheel })
+    assertEquals(1, commands.jumpWheels().size)
+    assertTrue(inputs().isEmpty())
+  }
+
+  @Test
+  fun `„Най-долу“ спира при вход от потребителя, а редът пак тръгва`() = runTest(dispatcher) {
+    val commands = attachedWithCommands()
+    vm.jumpToBottom()
+    runCurrent()
+    vm.onWheelInput(sgrDown)
+    advanceTimeBy(TerminalViewModel.JUMP_EVERY_MS * 3)
+    runCurrent()
+    val before = commands.jumpWheels().size
+    assertTrue(before >= 2)
+    vm.sendKey("q")
+    vm.onWheelInput(sgrDown)
+    advanceTimeBy(TerminalViewModel.JUMP_MAX_MS)
+    runCurrent()
+    assertEquals(before, commands.jumpWheels().size)
+    assertTrue("q" in inputs())
+  }
+
+  @Test
+  fun `„Най-долу“ спира при detached и при паднала връзка`() = runTest(dispatcher) {
+    val commands = attachedWithCommands()
+    vm.jumpToBottom()
+    runCurrent()
+    vm.onWheelInput(sgrDown)
+    emit(Detached("c1", "край"))
+    advanceTimeBy(TerminalViewModel.JUMP_MAX_MS)
+    runCurrent()
+    assertEquals(1, commands.jumpWheels().size)
+
+    emit(Attached(2, "c1", 120, 40))
+    commands.clear()
+    vm.jumpToBottom()
+    runCurrent()
+    vm.onWheelInput(sgrDown)
+    link.hostSession.value = null
+    advanceTimeBy(TerminalViewModel.JUMP_MAX_MS)
+    runCurrent()
+    assertEquals(1, commands.jumpWheels().size)
+  }
+
   @Test
   fun `без attach нищо не се пише`() = runTest(dispatcher) {
     link.hostSession.value = 1

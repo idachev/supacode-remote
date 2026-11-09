@@ -20,6 +20,9 @@ object TerminalIcons {
   /** „keyboard_arrow_up“: горната лента се вижда, бутонът я прибира. */
   val ArrowUp: ImageVector = icon("ArrowUp", "M7.41,15.41L12,10.83l4.59,4.58L18,14l-6,-6 -6,6z")
 
+  /** „vertical_align_bottom“: „Най-долу“ — най-новото в историята и в програмата. */
+  val ToBottom: ImageVector = icon("ToBottom", "M16,13h-3V3h-2v10H8l4,4 4,-4zM4,19v2h16v-2H4z")
+
   /** „keyboard“: полето за писане е прибрано, бутонът го разпъва. */
   val Keyboard: ImageVector = icon(
     "Keyboard",
