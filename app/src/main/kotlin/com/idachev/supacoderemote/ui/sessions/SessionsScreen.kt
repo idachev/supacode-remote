@@ -9,16 +9,20 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -175,16 +179,34 @@ private fun SidebarGroupHeader(name: String, collapsed: Boolean, onToggle: () ->
   }
 }
 
+/**
+ * Repository: тих етикет с папка, без фон и без докосване — за разлика от картите на
+ * worktree-тата под него, които се отварят.
+ */
 @Composable
 private fun RepositoryHeader(name: String) {
   Column(Modifier.fillMaxWidth().padding(top = 12.dp)) {
     HorizontalDivider()
-    Text(
-      name,
-      style = MaterialTheme.typography.titleMedium,
-      fontWeight = FontWeight.Bold,
-      modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-    )
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
+      modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 4.dp),
+    ) {
+      Icon(
+        SessionIcons.Repository,
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.size(18.dp),
+      )
+      Spacer(Modifier.width(8.dp))
+      Text(
+        name,
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+      )
+    }
   }
 }
 
@@ -202,15 +224,41 @@ private fun GroupHeader(group: WorktreeStatus) {
   )
 }
 
+/**
+ * Worktree: карта с branch икона и › вдясно — ясно е, че се натиска и отваря табовете.
+ */
 @Composable
 private fun WorktreeItem(worktree: Worktree, repositoryName: String?, onClick: () -> Unit) {
-  Column(
-    verticalArrangement = Arrangement.spacedBy(4.dp),
-    modifier = Modifier
-      .fillMaxWidth()
-      .clickable(onClick = onClick)
-      .padding(horizontal = 16.dp, vertical = 8.dp),
+  Surface(
+    onClick = onClick,
+    shape = RoundedCornerShape(12.dp),
+    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 3.dp),
   ) {
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
+      modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
+    ) {
+      Icon(
+        SessionIcons.Worktree,
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.size(20.dp),
+      )
+      Spacer(Modifier.width(12.dp))
+      WorktreeText(worktree, repositoryName, Modifier.weight(1f))
+      Icon(
+        SessionIcons.Open,
+        contentDescription = "Отвори",
+        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+    }
+  }
+}
+
+@Composable
+private fun WorktreeText(worktree: Worktree, repositoryName: String?, modifier: Modifier) {
+  Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = modifier) {
     Row(verticalAlignment = Alignment.CenterVertically) {
       Text(
         // В Active и Pinned редовете са от различни repository-та.
