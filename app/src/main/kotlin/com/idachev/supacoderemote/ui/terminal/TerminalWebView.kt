@@ -51,6 +51,7 @@ fun TerminalWebView(
   onCopy: (String) -> Unit = {},
   onOverscroll: (up: Boolean) -> Unit = {},
   onInput: (String) -> Unit = {},
+  onScreenSignature: (Int) -> Unit = {},
   fontSize: Int = TextSize.FIT,
   onSelection: (TerminalSelection?) -> Unit = {},
   /**
@@ -65,6 +66,7 @@ fun TerminalWebView(
   val currentOnCopy by rememberUpdatedState(onCopy)
   val currentOnOverscroll by rememberUpdatedState(onOverscroll)
   val currentOnInput by rememberUpdatedState(onInput)
+  val currentOnScreenSignature by rememberUpdatedState(onScreenSignature)
   val currentOnSelection by rememberUpdatedState(onSelection)
   var ready by remember { mutableStateOf(false) }
   // Височината на терминала в страницата (dp); до първия доклад WebView-то е цялото място.
@@ -157,6 +159,12 @@ fun TerminalWebView(
           main.post { rowHeight = dp.toFloat() }
         }
 
+        /** Подписът на екрана, поискан от `supa.reportScreen` („Най-долу“). */
+        @JavascriptInterface
+        fun screenSignature(hash: Int) {
+          main.post { currentOnScreenSignature(hash) }
+        }
+
         /** Байтовете на xterm.js за скрола от `supa.wheel` (mouse report или стрелки). */
         @JavascriptInterface
         fun input(data: String) {
@@ -241,6 +249,7 @@ private fun TerminalCommand.toJs(): String = when (this) {
   is TerminalCommand.ScrollPages -> "supa.scrollPages($pages)"
   TerminalCommand.ScrollToBottom -> "supa.scrollToBottom()"
   is TerminalCommand.Wheel -> "supa.wheel(${if (up) -1 else 1},$lines,$programOnly)"
+  TerminalCommand.ReportScreen -> "supa.reportScreen()"
   TerminalCommand.RequestText -> "supa.copyText()"
   is TerminalCommand.Select -> "supa.selectRange(${start.col},${start.row},${end.col},${end.row})"
   TerminalCommand.CopySelection -> "supa.copySelection()"

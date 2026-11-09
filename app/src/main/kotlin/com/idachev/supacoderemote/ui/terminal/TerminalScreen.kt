@@ -186,6 +186,7 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
         onCopy = { text -> copyToClipboard(context, text, container.notices) },
         onOverscroll = vm::onOverscroll,
         onInput = vm::onWheelInput,
+        onScreenSignature = vm::onScreenSignature,
         fontSize = textSize,
         onSelection = vm::onSelection,
         // Цял екран (без горната лента и полето за писане): по един празен ред горе и долу.
@@ -213,10 +214,12 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
         RepeatKeyButton("▼", description = "Скрол надолу", tag = "float-scroll-down") { vm.scrollWheel(up = false) }
         Spacer(Modifier.height(12.dp))
         // Едно докосване до най-новото: историята на телефона и скролът на агента (Claude Code).
+        // Докато скролира, свети; второ докосване го спира.
         FloatingBarButton(
           icon = TerminalIcons.ToBottom,
-          description = "Най-долу",
+          description = if (state.jumping) "Спри скрола до най-долу" else "Най-долу",
           tag = "float-to-bottom",
+          active = state.jumping,
           onClick = vm::jumpToBottom,
         )
         Spacer(Modifier.weight(1f).heightIn(min = 12.dp))
@@ -300,19 +303,22 @@ private fun FloatingBarButton(
   description: String,
   tag: String,
   modifier: Modifier = Modifier,
+  /** Нещо, пуснато с бутона, още тече: бутонът е плътен, в основния цвят. */
+  active: Boolean = false,
   onClick: () -> Unit,
 ) {
+  val colors = MaterialTheme.colorScheme
   Box(
     contentAlignment = Alignment.Center,
     modifier = modifier
       .size(52.dp)
-      .alpha(FloatingButtonAlpha)
+      .alpha(if (active) 1f else FloatingButtonAlpha)
       .clip(CircleShape)
-      .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
+      .background(if (active) colors.primary else colors.surfaceVariant.copy(alpha = 0.55f))
       .clickable(onClickLabel = description, role = Role.Button, onClick = onClick)
       .testTag(tag),
   ) {
-    Icon(icon, contentDescription = description, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+    Icon(icon, contentDescription = description, tint = if (active) colors.onPrimary else colors.onSurfaceVariant)
   }
 }
 

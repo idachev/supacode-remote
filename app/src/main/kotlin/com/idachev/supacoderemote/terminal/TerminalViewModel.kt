@@ -54,6 +54,9 @@ sealed interface TerminalCommand {
    */
   data class Wheel(val up: Boolean, val lines: Int = 0, val programOnly: Boolean = false) : TerminalCommand
 
+  /** Подпис на екрана обратно към приложението: „Най-долу“ гледа има ли нови редове. */
+  data object ReportScreen : TerminalCommand
+
   /** Целият текст на терминала (историята и екрана) обратно към приложението, за копиране. */
   data object RequestText : TerminalCommand
 
@@ -90,6 +93,8 @@ data class TerminalUiState(
   val pausedBytes: Long? = null,
   /** Горната лента и полето за писане; по подразбиране скрити (терминалът на цял екран). */
   val bars: TerminalBars = TerminalBars(),
+  /** „Най-долу“ още скролира програмата; второ докосване го спира. */
+  val jumping: Boolean = false,
 )
 
 /**
@@ -110,6 +115,8 @@ class TerminalViewModel(
   pauseCapBytes: Long = OutputPause.CAP_BYTES,
   /** Паузата между текста от полето и неговия Enter (виж [sendLine]). */
   private val enterDelayMs: Long = ENTER_DELAY_MS,
+  /** Часовникът, с който „Най-долу“ мери колко бързо отговаря програмата. */
+  private val nowMs: () -> Long = { System.nanoTime() / 1_000_000 },
 ) : ViewModel() {
 
   private val _state = MutableStateFlow(TerminalUiState())
@@ -134,6 +141,9 @@ class TerminalViewModel(
 
   /** Байтовете от страницата за скрола на „Най-долу“; има го само докато той тече. */
   private var jumpReplies: Channel<String>? = null
+
+  /** Подписите на екрана от страницата; има го само докато „Най-долу“ тече. */
+  private var jumpSignatures: Channel<Int>? = null
 
   init {
     viewModelScope.launch { link.messages.collect(::onMessage) }
@@ -284,39 +294,85 @@ class TerminalViewModel(
 
   /**
    * „Най-долу“: историята на телефона до живия край, после скрол надолу към програмата на
-   * пакети от [JUMP_LINES] реда, за да покаже Claude Code и другите агенти най-новото.
+   * пакети от [JUMP_LINES] реда, докато идват нови редове — за да покаже Claude Code и другите
+   * агенти най-новото. Второ докосване, докато тече, го спира.
    *
-   * Телефонът не може да знае кога програмата е стигнала дъното, затова спира таванът
-   * [JUMP_ROUNDS]; излишният скрол на дъното програмата пренебрегва. Скролът тръгва само ако
-   * програмата следи мишката (`programOnly`): иначе страницата не дава байтове, пакетът
-   * остава без отговор за [JUMP_REPLY_MS] и скролът спира. Пакетите не чакат прерисуване:
-   * агентът, който работи, прерисува постоянно, а входът така и така чака на ред в PTY-то.
+   * Дъното се познава по екрана ([TerminalCommand.ReportScreen]), не по `out`: `less` праща
+   * байтове и на дъното, а агентът върти spinner. Времето без промяна е според връзката —
+   * до [JUMP_FIRST_CHANGE_MS], докато екранът мръдне за първи път, после три пъти колкото е
+   * отнело това, между [JUMP_QUIET_MIN_MS] и [JUMP_QUIET_MAX_MS]. Агент, който пише нови
+   * редове, не свършва; затова има и таван [JUMP_MAX_MS].
+   *
+   * Скролът тръгва само ако програмата следи мишката (`programOnly`): иначе страницата не дава
+   * байтове, пакетът остава без отговор за [JUMP_REPLY_MS] и скролът спира, без стрелки.
    */
   fun jumpToBottom() {
+    if (jumpJob?.isActive == true) {
+      cancelJump()
+      return
+    }
     cancelJump()
     _commands.trySend(TerminalCommand.ScrollToBottom)
     if (_state.value.phase !is AttachPhase.Attached) return
     val replies = Channel<String>(Channel.UNLIMITED)
+    val signatures = Channel<Int>(Channel.UNLIMITED)
     jumpReplies = replies
+    jumpSignatures = signatures
+    _state.update { it.copy(jumping = true) }
     jumpJob = viewModelScope.launch {
       try {
-        repeat(JUMP_ROUNDS) {
-          // Отговорите от предишния пакет не бива да минат за отговор на новия.
-          while (replies.tryReceive().isSuccess) Unit
-          _commands.trySend(TerminalCommand.Wheel(up = false, lines = JUMP_LINES, programOnly = true))
-          withTimeoutOrNull(JUMP_REPLY_MS) { replies.receive() } ?: return@launch
-          delay(JUMP_EVERY_MS)
-        }
+        withTimeoutOrNull(JUMP_MAX_MS) { scrollProgramDown(replies, signatures) }
       } finally {
-        if (jumpReplies === replies) jumpReplies = null
+        // Нов „Най-долу“ може вече да тече; неговото състояние не се пипа.
+        if (jumpReplies === replies) {
+          jumpReplies = null
+          jumpSignatures = null
+          _state.update { it.copy(jumping = false) }
+        }
       }
     }
+  }
+
+  private suspend fun scrollProgramDown(replies: Channel<String>, signatures: Channel<Int>) {
+    val startedAt = nowMs()
+    var lastChangeAt = startedAt
+    var quietMs = JUMP_FIRST_CHANGE_MS
+    var moved = false
+    var last: Int? = null
+    while (true) {
+      // Отговорите от предишния пакет не бива да минат за отговор на новия.
+      while (replies.tryReceive().isSuccess) Unit
+      _commands.trySend(TerminalCommand.Wheel(up = false, lines = JUMP_LINES, programOnly = true))
+      withTimeoutOrNull(JUMP_REPLY_MS) { replies.receive() } ?: return
+      delay(JUMP_EVERY_MS)
+      while (signatures.tryReceive().isSuccess) Unit
+      _commands.trySend(TerminalCommand.ReportScreen)
+      val signature = withTimeoutOrNull(JUMP_REPLY_MS) { signatures.receive() } ?: return
+      val now = nowMs()
+      if (last != null && signature != last) {
+        if (!moved) {
+          moved = true
+          quietMs = ((now - startedAt) * 3).coerceIn(JUMP_QUIET_MIN_MS, JUMP_QUIET_MAX_MS)
+        }
+        lastChangeAt = now
+      } else if (now - lastChangeAt >= quietMs) {
+        return
+      }
+      last = signature
+    }
+  }
+
+  /** Подписът на екрана от страницата, за „Най-долу“. */
+  fun onScreenSignature(hash: Int) {
+    jumpSignatures?.trySend(hash)
   }
 
   private fun cancelJump() {
     jumpJob?.cancel()
     jumpJob = null
     jumpReplies = null
+    jumpSignatures = null
+    _state.update { it.copy(jumping = false) }
   }
 
   /** Плаващият бутон горе: показва или скрива горната лента. */
@@ -532,21 +588,29 @@ class TerminalViewModel(
     /** Колко често чипът „Пауза“ показва нов размер. */
     const val PAUSE_TICK_MS = 250L
 
-    /** „Най-долу“: редове скрол в един пакет; mouse report-ът е ~13 байта, 50 са под 1 KB. */
-    const val JUMP_LINES = 50
+    /**
+     * „Най-долу“: редове скрол в един пакет; mouse report-ът е ~13 байта, 100 са ~1,3 KB.
+     * С паузата между пакетите това е ~700 реда в секунда (в emulator-а, с mock-а).
+     */
+    const val JUMP_LINES = 100
 
     /** „Най-долу“: пауза между пакетите, за да не се трупа вход в relay-а. */
     const val JUMP_EVERY_MS = 100L
 
-    /** „Най-долу“: таванът — 30 пакета по 50 реда, около 3 s и 1500 реда. */
-    const val JUMP_ROUNDS = 30
-
-    const val JUMP_MAX_MS = JUMP_ROUNDS * JUMP_EVERY_MS
+    /** „Най-долу“: таванът за агент, който работи и прерисува постоянно (над 10 000 реда). */
+    const val JUMP_MAX_MS = 20_000L
 
     /**
-     * „Най-долу“: толкова се чакат байтовете на страницата за пакета. Те идват от WebView-то на
-     * телефона, не от мрежата, затова времето не зависи от връзката.
+     * „Най-долу“: толкова се чакат байтовете и подписът от страницата. Те идват от WebView-то
+     * на телефона, не от мрежата, затова времето не зависи от връзката.
      */
     const val JUMP_REPLY_MS = 500L
+
+    /** „Най-долу“: първата промяна минава през relay-а и Mac-а; бавна връзка има време. */
+    const val JUMP_FIRST_CHANGE_MS = 3_000L
+
+    /** „Най-долу“: границите на времето без нови редове, след което програмата е на дъното. */
+    const val JUMP_QUIET_MIN_MS = 400L
+    const val JUMP_QUIET_MAX_MS = 2_000L
   }
 }

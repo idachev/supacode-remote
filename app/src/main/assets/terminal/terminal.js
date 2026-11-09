@@ -135,6 +135,24 @@
       wheel(dir, lines || WHEEL_LINES);
     },
     /**
+     * Подпис на горната половина от екрана за „Най-долу“: еднакъв подпис значи, че няма нови
+     * редове. Долната половина не се гледа — там агентът върти spinner и полето си. Чака в
+     * опашката на xterm.js, за да включи вече дошлия изход.
+     */
+    reportScreen: function () {
+      term.write('', function () {
+        var buffer = term.buffer.active;
+        var hash = 0;
+        for (var y = 0; y < Math.floor(term.rows / 2); y++) {
+          var line = buffer.getLine(buffer.viewportY + y);
+          var text = line ? line.translateToString(true) : '';
+          for (var i = 0; i < text.length; i++) hash = (hash * 31 + text.charCodeAt(i)) | 0;
+          hash = (hash * 31 + 10) | 0;
+        }
+        if (bridge.screenSignature) bridge.screenSignature(hash);
+      });
+    },
+    /**
      * Историята и екранът като обикновен текст, за да се маркира и копира в приложението
      * (докосването в xterm.js не маркира). Пренесените редове се слепват обратно в един.
      */

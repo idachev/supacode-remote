@@ -67,7 +67,7 @@ class TerminalViewModelTest {
     Dispatchers.setMain(dispatcher)
     link = FakeLink()
     store = ViewModelStore()
-    vm = TerminalViewModel(link, Notices(), "c1", suggestTimeoutMs = 5_000)
+    vm = TerminalViewModel(link, Notices(), "c1", suggestTimeoutMs = 5_000, nowMs = { dispatcher.scheduler.currentTime })
     store.put("vm", vm)
   }
 
@@ -320,30 +320,80 @@ class TerminalViewModelTest {
 
   private fun List<TerminalCommand>.jumpWheels() = filterIsInstance<TerminalCommand.Wheel>()
 
-  @Test
-  fun `„Най-долу“ сваля историята и скролира програмата, докато тя приема скрола, до тавана`() = runTest(dispatcher) {
-    val commands = attachedWithCommands()
-    // Страницата отговаря на всеки пакет с mouse report-и, както при Claude Code.
+  /**
+   * Страницата отговаря на всеки пакет с mouse report-и (програмата следи мишката), а
+   * екранът се мени за първите [changingRounds] пакета — после е на дъното. Програмата може
+   * да праща `out` и на дъното: важи само екранът.
+   */
+  private fun TestScope.respondToWheels(commands: List<TerminalCommand>, changingRounds: Int = Int.MAX_VALUE) {
     backgroundScope.launch {
       var seen = 0
+      var reported = 0
       while (true) {
         val wheels = commands.jumpWheels().size
         if (wheels > seen) {
           seen = wheels
           vm.onWheelInput(sgrDown)
           vm.onWheelInput(sgrDown)
+          link.messages.tryEmit(Output("c1", "eA=="))
+        }
+        val reports = commands.count { it is TerminalCommand.ReportScreen }
+        if (reports > reported) {
+          reported = reports
+          vm.onScreenSignature(minOf(reports, changingRounds))
         }
         kotlinx.coroutines.delay(1)
       }
     }
+  }
+
+  @Test
+  fun `„Най-долу“ скролира, докато идват нови редове, и спира, щом екранът спре да се мени`() = runTest(dispatcher) {
+    val commands = attachedWithCommands()
+    respondToWheels(commands, changingRounds = 7)
     vm.jumpToBottom()
+    runCurrent()
+    assertTrue(vm.state.value.jumping)
     advanceTimeBy(TerminalViewModel.JUMP_MAX_MS + 1_000)
     runCurrent()
     assertEquals(TerminalCommand.ScrollToBottom, commands.first())
     val wheels = commands.jumpWheels()
-    assertEquals(TerminalViewModel.JUMP_ROUNDS, wheels.size)
+    // 7 пакета с промяна и още няколко, докато изтече времето без нови редове.
+    assertTrue("пакети: ${wheels.size}", wheels.size in 9..13)
     assertTrue(wheels.all { !it.up && it.lines == TerminalViewModel.JUMP_LINES && it.programOnly })
-    assertEquals(List(TerminalViewModel.JUMP_ROUNDS * 2) { sgrDown }, inputs())
+    assertEquals(List(wheels.size * 2) { sgrDown }, inputs())
+    assertFalse(vm.state.value.jumping)
+  }
+
+  @Test
+  fun `„Най-долу“ при агент, който пише нови редове, спира на тавана`() = runTest(dispatcher) {
+    val commands = attachedWithCommands()
+    respondToWheels(commands)
+    vm.jumpToBottom()
+    advanceTimeBy(TerminalViewModel.JUMP_MAX_MS + 1_000)
+    runCurrent()
+    val atCap = commands.jumpWheels().size
+    assertTrue("пакетите текат до тавана: $atCap", atCap > 50)
+    advanceTimeBy(TerminalViewModel.JUMP_MAX_MS)
+    runCurrent()
+    assertEquals(atCap, commands.jumpWheels().size)
+    assertFalse(vm.state.value.jumping)
+  }
+
+  @Test
+  fun `второ докосване на „Най-долу“ го спира`() = runTest(dispatcher) {
+    val commands = attachedWithCommands()
+    respondToWheels(commands)
+    vm.jumpToBottom()
+    advanceTimeBy(TerminalViewModel.JUMP_EVERY_MS * 5)
+    runCurrent()
+    vm.jumpToBottom()
+    runCurrent()
+    assertFalse(vm.state.value.jumping)
+    val stopped = commands.jumpWheels().size
+    advanceTimeBy(TerminalViewModel.JUMP_MAX_MS)
+    runCurrent()
+    assertEquals(stopped, commands.jumpWheels().size)
   }
 
   @Test
@@ -360,9 +410,8 @@ class TerminalViewModelTest {
   @Test
   fun `„Най-долу“ спира при вход от потребителя, а редът пак тръгва`() = runTest(dispatcher) {
     val commands = attachedWithCommands()
+    respondToWheels(commands)
     vm.jumpToBottom()
-    runCurrent()
-    vm.onWheelInput(sgrDown)
     advanceTimeBy(TerminalViewModel.JUMP_EVERY_MS * 3)
     runCurrent()
     val before = commands.jumpWheels().size
@@ -373,6 +422,7 @@ class TerminalViewModelTest {
     runCurrent()
     assertEquals(before, commands.jumpWheels().size)
     assertTrue("q" in inputs())
+    assertFalse(vm.state.value.jumping)
   }
 
   @Test
