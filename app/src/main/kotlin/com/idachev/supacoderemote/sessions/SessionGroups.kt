@@ -88,22 +88,23 @@ object SessionGroups {
     }
 
   /**
-   * Repository-тата, които отговарят на [query], без значение от главни и малки букви.
-   * Намерено име на repository-то оставя всичките му worktree-та; иначе остават само
-   * worktree-тата с намерено име, заглавие или branch, а repository без тях отпада.
+   * Repository-тата, които отговарят на [query], без значение от главни и малки букви и с
+   * търпими грешки ([FuzzyMatch]). Намерено име на repository-то оставя всичките му
+   * worktree-та; иначе остават само worktree-тата с намерено име, заглавие или branch, а
+   * repository без тях отпада.
    */
   fun filter(repos: List<Repository>, query: String): List<Repository> {
     val q = query.trim()
     if (q.isEmpty()) return repos
     return repos.mapNotNull { repo ->
-      if (repo.name.contains(q, ignoreCase = true)) return@mapNotNull repo
+      if (FuzzyMatch.matches(repo.name, q)) return@mapNotNull repo
       val found = repo.worktrees.filter { it.matches(q) }
       if (found.isEmpty()) null else repo.copy(worktrees = found)
     }
   }
 
   private fun Worktree.matches(q: String): Boolean =
-    listOfNotNull(displayName, name, branch).any { it.contains(q, ignoreCase = true) }
+    listOfNotNull(displayName, name, branch).any { FuzzyMatch.matches(it, q) }
 
   private fun sectionRows(
     allRepos: List<Repository>,
@@ -167,7 +168,7 @@ object SessionGroups {
    * долу би стояло празно заглавие.
    */
   private fun Repository.shownWhileSearching(query: String): Boolean =
-    name.contains(query, ignoreCase = true) || rows().isNotEmpty()
+    FuzzyMatch.matches(name, query) || rows().isNotEmpty()
 
   /**
    * Групите на sidebar-а по `group` (стар host без `sections`): първо repository-тата без

@@ -219,6 +219,9 @@ class SessionGroupsTest {
     assertEquals(listOf("repo r", "wt x"), describe(SessionGroups.rows(list, query = "поправка")))
     assertEquals(listOf("repo r", "wt y"), describe(SessionGroups.rows(list, query = "search")))
     assertEquals(emptyList<String>(), describe(SessionGroups.rows(list, query = "няма такова")))
+    // Грешно написаното се намира: „поправака“ е с една излишна буква, „serach“ — с разменени.
+    assertEquals(listOf("repo r", "wt x"), describe(SessionGroups.rows(list, query = "поправака")))
+    assertEquals(listOf("repo r", "wt y"), describe(SessionGroups.rows(list, query = "serach")))
   }
 
   @Test
