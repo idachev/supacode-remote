@@ -467,8 +467,9 @@ private fun InputBar(
       KeyButton("Home") { vm.sendKey(TerminalKeys.HOME) }
       KeyButton("End") { vm.sendKey(TerminalKeys.END) }
       // Историята на телефона (xterm.js), за shell; горните четири са за програмата.
-      KeyButton("История ↑", tag = "history-up") { vm.scrollHistory(-1) }
-      KeyButton("История ↓", tag = "history-down") { vm.scrollHistory(1) }
+      // Повтарят, докато се държат, както ▲ ▼: историята се превърта с много страници.
+      RepeatKeyChip("История ↑", tag = "history-up") { vm.scrollHistory(-1) }
+      RepeatKeyChip("История ↓", tag = "history-down") { vm.scrollHistory(1) }
       KeyButton("Долу", tag = "history-bottom") { vm.scrollToBottom() }
       KeyButton("⏎") { vm.sendKey(TerminalKeys.ENTER) }
       KeyButton("!") { vm.sendKey("!") }
@@ -578,6 +579,29 @@ private fun KeyButton(label: String, highlighted: Boolean = false, tag: String =
     contentPadding = PaddingValues(horizontal = 10.dp),
     modifier = Modifier.height(36.dp).testTag(tag),
   ) { Text(label, fontFamily = FontFamily.Monospace) }
+}
+
+/**
+ * На вид като [KeyButton], но повтаря, докато се държи ([repeatPress]). Не е `Button`:
+ * неговото докосване би дало второ действие освен това на [repeatPress]. Само за превъртане
+ * на историята — клавиш, повторен към агента, би бил много клавиши наведнъж.
+ */
+@Composable
+private fun RepeatKeyChip(label: String, tag: String, onFire: () -> Unit) {
+  Surface(
+    shape = ButtonDefaults.filledTonalShape,
+    color = MaterialTheme.colorScheme.secondaryContainer,
+    contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+    modifier = Modifier
+      .height(36.dp)
+      .clip(ButtonDefaults.filledTonalShape)
+      .testTag(tag)
+      .repeatPress(description = label, onFire = onFire),
+  ) {
+    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxHeight().padding(horizontal = 10.dp)) {
+      Text(label, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.labelLarge)
+    }
+  }
 }
 
 /** Фонът на терминала (като в xterm.js); и празното около него е в този цвят. */
