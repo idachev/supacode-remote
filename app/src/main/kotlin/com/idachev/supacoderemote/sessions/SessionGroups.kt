@@ -74,19 +74,45 @@ object SessionGroups {
    * Плоският списък за екрана. С `sections` е точно sidebar-ът на Supacode; без тях —
    * групиране по `status` във всеки repository. [collapsed] е изборът на телефона
    * по id на група; група без избор взима `collapsed` от Mac-а.
+   *
+   * Непразно [query] оставя само намереното ([filter]). Тогава всяка група с намерено е
+   * разгъната, а групите без намерено изчезват с заглавието си: търси се, за да се стигне
+   * до worktree-то, а не до сгънато заглавие. Изборът „сгъната“ не се пипа и се връща,
+   * щом търсенето се изчисти.
    */
-  fun rows(list: ListReply, collapsed: Map<String, Boolean> = emptyMap()): List<SessionRow> =
+  fun rows(list: ListReply, collapsed: Map<String, Boolean> = emptyMap(), query: String = ""): List<SessionRow> =
     if (list.sections.isEmpty()) {
-      rows(list.repos, collapsed)
+      rows(list.repos, collapsed, query)
     } else {
-      sectionRows(list.repos, list.sections, collapsed)
+      sectionRows(list.repos, list.sections, collapsed, query.trim())
     }
 
+  /**
+   * Repository-тата, които отговарят на [query], без значение от главни и малки букви.
+   * Намерено име на repository-то оставя всичките му worktree-та; иначе остават само
+   * worktree-тата с намерено име, заглавие или branch, а repository без тях отпада.
+   */
+  fun filter(repos: List<Repository>, query: String): List<Repository> {
+    val q = query.trim()
+    if (q.isEmpty()) return repos
+    return repos.mapNotNull { repo ->
+      if (repo.name.contains(q, ignoreCase = true)) return@mapNotNull repo
+      val found = repo.worktrees.filter { it.matches(q) }
+      if (found.isEmpty()) null else repo.copy(worktrees = found)
+    }
+  }
+
+  private fun Worktree.matches(q: String): Boolean =
+    listOfNotNull(displayName, name, branch).any { it.contains(q, ignoreCase = true) }
+
   private fun sectionRows(
-    repos: List<Repository>,
+    allRepos: List<Repository>,
     sections: List<SidebarSection>,
     collapsed: Map<String, Boolean>,
+    query: String,
   ): List<SessionRow> {
+    val searching = query.isNotEmpty()
+    val repos = filter(allRepos, query)
     val repoById = repos.associateBy { it.id }
     val owner = repos.flatMap { r -> r.worktrees.map { it.id to r } }.toMap()
     return buildList {
@@ -108,13 +134,16 @@ object SessionGroups {
           }
           SidebarSection.GROUP -> {
             val id = "$index:${section.title.orEmpty()}"
-            val isCollapsed = collapsed[id] ?: section.collapsed
+            val groupRepos = section.repositoryIds.mapNotNull(repoById::get)
+              .filter { !searching || it.shownWhileSearching(query) }
+            if (searching && groupRepos.isEmpty()) return@forEachIndexed
+            val isCollapsed = !searching && (collapsed[id] ?: section.collapsed)
             add(SessionRow.SidebarGroupHeader(id, section.title?.ifBlank { null } ?: "Група", isCollapsed))
-            if (!isCollapsed) {
-              section.repositoryIds.mapNotNull(repoById::get).forEach { addRepository(it, "$index") }
-            }
+            if (!isCollapsed) groupRepos.forEach { addRepository(it, "$index") }
           }
-          SidebarSection.REPOSITORY -> section.repositoryId?.let(repoById::get)?.let { addRepository(it, "$index") }
+          SidebarSection.REPOSITORY -> section.repositoryId?.let(repoById::get)
+            ?.takeIf { !searching || it.shownWhileSearching(query) }
+            ?.let { addRepository(it, "$index") }
           else -> Unit
         }
       }
@@ -124,10 +153,21 @@ object SessionGroups {
   /** Repository и редовете под него: `rowIds` по ред, а без тях — всичките му worktree-та. */
   private fun MutableList<SessionRow>.addRepository(repo: Repository, section: String) {
     add(SessionRow.RepositoryHeader(repo))
-    val byId = repo.worktrees.associateBy { it.id }
-    val worktrees = repo.rowIds?.mapNotNull(byId::get) ?: repo.worktrees
-    worktrees.forEach { add(SessionRow.WorktreeRow(repo.id, it, section = section)) }
+    repo.rows().forEach { add(SessionRow.WorktreeRow(repo.id, it, section = section)) }
   }
+
+  private fun Repository.rows(): List<Worktree> {
+    val byId = worktrees.associateBy { it.id }
+    return rowIds?.mapNotNull(byId::get) ?: worktrees
+  }
+
+  /**
+   * При търсене repository-то остава под групата си само с ред за показване или с намерено
+   * име. Намереното worktree може да е само в Active / Pinned (не е в `rowIds`) и тогава
+   * долу би стояло празно заглавие.
+   */
+  private fun Repository.shownWhileSearching(query: String): Boolean =
+    name.contains(query, ignoreCase = true) || rows().isNotEmpty()
 
   /**
    * Групите на sidebar-а по `group` (стар host без `sections`): първо repository-тата без
@@ -147,12 +187,12 @@ object SessionGroups {
    * worktree стои веднага под името на repository-то; „Закачени“ и „Активни“ имат
    * заглавие само ако не са празни.
    */
-  fun rows(repos: List<Repository>, collapsed: Map<String, Boolean> = emptyMap()): List<SessionRow> =
-    bySidebarGroup(repos).flatMap { (groupName, groupRepos) ->
+  fun rows(repos: List<Repository>, collapsed: Map<String, Boolean> = emptyMap(), query: String = ""): List<SessionRow> =
+    bySidebarGroup(filter(repos, query)).flatMap { (groupName, groupRepos) ->
       buildList {
         if (groupName != null) {
           val id = "group:$groupName"
-          val isCollapsed = collapsed[id] ?: false
+          val isCollapsed = query.isBlank() && (collapsed[id] ?: false)
           add(SessionRow.SidebarGroupHeader(id, groupName, isCollapsed))
           if (isCollapsed) return@buildList
         }

@@ -8,9 +8,12 @@ import androidx.compose.ui.unit.dp
 
 /**
  * Иконите на плаващите бутони — пътищата на Material Icons (Filled), 24 × 24. Тук, а не
- * от `material-icons-extended`, защото са три, а библиотеката е хиляди.
+ * от `material-icons-extended`, защото са няколко, а библиотеката е хиляди.
  */
 object TerminalIcons {
+  /** „arrow_back“: горната лента е скрита, бутонът горе вляво напуска терминала като „Назад“. */
+  val ArrowBack: ImageVector = icon("ArrowBack", "M20,11H7.83l5.59,-5.59L12,4l-8,8 8,8 1.41,-1.41L7.83,13H20v-2z")
+
   /** „keyboard_arrow_down“: горната лента е скрита, бутонът я сваля. */
   val ArrowDown: ImageVector = icon("ArrowDown", "M7.41,8.59L12,13.17l4.59,-4.58L18,10l-6,6 -6,-6 1.41,-1.41z")
 

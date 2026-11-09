@@ -10,11 +10,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -27,7 +30,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -53,6 +58,8 @@ fun SessionsScreen(onOpenWorktree: (repositoryId: String, Worktree) -> Unit, onO
   var collapsed by rememberSaveable { mutableStateOf(mapOf<String, Boolean>()) }
   val refreshing by container.sessions.refreshing.collectAsStateWithLifecycle()
   val hostName by container.relay.hostName.collectAsStateWithLifecycle()
+  // Търсенето е тук, а не в хранилището: важи само докато екранът е отворен (и при завъртане).
+  var query by rememberSaveable { mutableStateOf("") }
   PollSessionsWhileVisible()
 
   Scaffold(
@@ -71,6 +78,7 @@ fun SessionsScreen(onOpenWorktree: (repositoryId: String, Worktree) -> Unit, onO
           },
         )
         ConnectionBanner()
+        SearchField(query, onChange = { query = it })
       }
     },
   ) { padding ->
@@ -83,7 +91,14 @@ fun SessionsScreen(onOpenWorktree: (repositoryId: String, Worktree) -> Unit, onO
       if (list == null) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Чакам списъка от Mac-а…") }
       } else {
-        val rows = SessionGroups.rows(list, collapsed)
+        val rows = SessionGroups.rows(list, collapsed, query)
+        if (rows.isEmpty() && query.isNotBlank()) {
+          Text(
+            "Нищо не отговаря на „${query.trim()}“",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(16.dp),
+          )
+        }
         LazyColumn(Modifier.fillMaxSize().testTag("sessions-list")) {
           items(rows, key = { it.key }) { row ->
             when (row) {
@@ -102,6 +117,30 @@ fun SessionsScreen(onOpenWorktree: (repositoryId: String, Worktree) -> Unit, onO
       }
     }
   }
+}
+
+/**
+ * Търсене по името на worktree-то и на repository-то. Стои над списъка, а не в него, за
+ * да не се изгуби при скрол. „Търси“ на клавиатурата само я прибира: списъкът вече е филтриран.
+ */
+@Composable
+private fun SearchField(query: String, onChange: (String) -> Unit) {
+  val keyboard = LocalSoftwareKeyboardController.current
+  OutlinedTextField(
+    value = query,
+    onValueChange = onChange,
+    placeholder = { Text("Търси сесия или repository") },
+    singleLine = true,
+    trailingIcon = if (query.isEmpty()) null else {
+      { TextButton(onClick = { onChange("") }, modifier = Modifier.testTag("sessions-search-clear")) { Text("✕") } }
+    },
+    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+    keyboardActions = KeyboardActions(onSearch = { keyboard?.hide() }),
+    modifier = Modifier
+      .fillMaxWidth()
+      .padding(horizontal = 16.dp, vertical = 4.dp)
+      .testTag("sessions-search"),
+  )
 }
 
 /** „Active“ / „Pinned“ най-горе, както в sidebar-а на Supacode. */

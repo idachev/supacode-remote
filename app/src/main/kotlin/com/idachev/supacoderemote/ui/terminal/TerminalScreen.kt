@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -228,6 +229,17 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
           Spacer(Modifier.size(52.dp))
         }
       }
+      // Скрита горна лента: „Назад“ остава горе вляво, защото е най-честото, за което тя се
+      // разпъваше. Води направо до табовете, като „Назад“ в лентата.
+      if (!state.bars.topBar) {
+        FloatingBarButton(
+          icon = TerminalIcons.ArrowBack,
+          description = "Назад",
+          tag = "float-back",
+          modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
+          onClick = onBack,
+        )
+      }
       // Маркираното с дълго натискане: лентата е тук, не в страницата, за да не расте с zoom-а.
       if (state.selection != null) {
         SelectionBar(
@@ -249,6 +261,12 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
 }
 
 /**
+ * Прозрачност на целия плаващ бутон, с иконата: текстът на терминала под него се чете, а
+ * бутонът пак се намира с поглед.
+ */
+private const val FloatingButtonAlpha = 0.6f
+
+/**
  * Полупрозрачен кръгъл бутон за клавиш, който се повтаря, докато се държи: първо веднъж,
  * после след кратка пауза на всеки 150 ms ([repeatPress]).
  */
@@ -258,6 +276,7 @@ private fun RepeatKeyButton(label: String, description: String, tag: String, onF
     contentAlignment = Alignment.Center,
     modifier = Modifier
       .size(52.dp)
+      .alpha(FloatingButtonAlpha)
       .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f), CircleShape)
       .testTag(tag)
       .repeatPress(description = description, onFire = onFire),
@@ -279,6 +298,7 @@ private fun FloatingBarButton(
     contentAlignment = Alignment.Center,
     modifier = modifier
       .size(52.dp)
+      .alpha(FloatingButtonAlpha)
       .clip(CircleShape)
       .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
       .clickable(onClickLabel = description, role = Role.Button, onClick = onClick)

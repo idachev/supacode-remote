@@ -174,6 +174,70 @@ class SessionGroupsTest {
   }
 
   @Test
+  fun `търсенето по име на worktree отваря сгънатата група и скрива останалото`() {
+    // „pm“ е в сгънатата група Work: при търсене тя се разгъва, без да пипа избора на телефона.
+    assertEquals(
+      listOf("sidebar Work", "repo shop", "wt pm"),
+      describe(SessionGroups.rows(sidebarList, query = "PM")),
+    )
+    // „pp“ е само в Pinned (няма го в rowIds): repository-то и групата му не остават празни заглавия.
+    assertEquals(listOf("section Pinned", "wt shop · pp"), describe(SessionGroups.rows(sidebarList, query = "pp")))
+    assertEquals(
+      listOf("section Pinned", "wt shop · pp", "sidebar Work", "repo shop", "wt pp"),
+      describe(SessionGroups.rows(sidebarList.copy(repos = sidebarList.repos.map { r ->
+        if (r.id == "plx") r.copy(rowIds = listOf("pm", "pp")) else r
+      }), query = " pp ")),
+    )
+  }
+
+  @Test
+  fun `търсенето по име на repository показва всичките му worktree-та`() {
+    assertEquals(
+      listOf("section Active", "wt supacode · run", "repo supacode", "wt m", "wt a2"),
+      describe(SessionGroups.rows(sidebarList, query = "supa")),
+    )
+    // И сгъната от телефона група се отваря, щом в нея има намерено.
+    val work = SessionGroups.rows(sidebarList).filterIsInstance<SessionRow.SidebarGroupHeader>().first()
+    assertEquals(
+      listOf("section Pinned", "wt shop · pp", "sidebar Work", "repo shop", "wt pm"),
+      describe(SessionGroups.rows(sidebarList, mapOf(work.id to true), query = "shop")),
+    )
+  }
+
+  @Test
+  fun `търсенето гледа и заглавието и branch-а на worktree-то`() {
+    val list = ListReply(
+      repos = listOf(
+        Repository(id = "r", name = "r", worktrees = listOf(
+          Worktree(id = "x", name = "x", status = "main", title = "Поправка на входа"),
+          Worktree(id = "y", name = "y", status = "unpinned", branch = "feature/search"),
+          wt("z", "unpinned"),
+        )),
+      ),
+      sections = listOf(SidebarSection(kind = "repository", repositoryId = "r")),
+    )
+    assertEquals(listOf("repo r", "wt x"), describe(SessionGroups.rows(list, query = "поправка")))
+    assertEquals(listOf("repo r", "wt y"), describe(SessionGroups.rows(list, query = "search")))
+    assertEquals(emptyList<String>(), describe(SessionGroups.rows(list, query = "няма такова")))
+  }
+
+  @Test
+  fun `търсенето работи и в стария формат без sections`() {
+    val grouped = repos + Repository(id = "g", name = "work-repo", group = "Work", worktrees = listOf(wt("gm", "main")))
+    val work = SessionGroups.rows(grouped).filterIsInstance<SessionRow.SidebarGroupHeader>().first()
+    assertEquals(
+      listOf("repo supacode", "group pinned", "wt p2", "group unpinned", "wt a2", "repo notes-app", "wt m2"),
+      describe(SessionGroups.rows(grouped, query = "2")),
+    )
+    assertEquals(
+      listOf("sidebar Work", "repo work-repo", "wt gm"),
+      describe(SessionGroups.rows(grouped, mapOf(work.id to true), query = "work")),
+    )
+    // Празно търсене е без филтър.
+    assertEquals(describe(SessionGroups.rows(grouped)), describe(SessionGroups.rows(grouped, query = "  ")))
+  }
+
+  @Test
   fun `worktree се намира по repository и id`() {
     assertEquals("p2", SessionGroups.findWorktree(repos, "r1", "p2")?.id)
     assertNull(SessionGroups.findWorktree(repos, "r2", "p2"))
