@@ -129,11 +129,30 @@
     return rect.width ? { w: rect.width / term.cols, h: rect.height / term.rows } : null;
   }
 
+  /**
+   * Клетката в цели device px. xterm.js рисува клетка от цели device px, а размера на екрана
+   * закръгля до цял CSS px; делено на броя редове, това дава дроб с грешка, която при сто и
+   * повече нови реда стига до цял ред. Цялото число се възстановява точно при редове > dpr.
+   */
+  function deviceCell() {
+    var cell = cellSize();
+    var dpr = window.devicePixelRatio || 1;
+    return { w: Math.round(cell.w * dpr), h: Math.round(cell.h * dpr) };
+  }
+
+  /** Най-много клетки [cellDev], които xterm.js закръгля до не повече от [css] CSS px. */
+  function fitCount(css, cellDev) {
+    var dpr = window.devicePixelRatio || 1;
+    var n = Math.floor((css + 0.5) * dpr / cellDev);
+    while (n > 0 && Math.round(n * cellDev / dpr) > css) n--;
+    return n;
+  }
+
   /** Фиксиран „Размер на текста“: колкото колони и реда влизат при него. */
   function gridAtFont(height) {
-    var cell = cellSize();
-    var cols = Math.floor(document.documentElement.clientWidth / cell.w);
-    return { cols: cols, rows: Math.floor(height / cell.h), font: term.options.fontSize };
+    var cell = deviceCell();
+    var cols = fitCount(document.documentElement.clientWidth, cell.w);
+    return { cols: cols, rows: fitCount(height, cell.h), font: term.options.fontSize };
   }
 
   /**
@@ -144,7 +163,7 @@
   function gridAtPhoneCols(height) {
     var current = term.options.fontSize;
     var font = fontForCols(PHONE_COLS);
-    var rows = Math.floor(height / cellSize().h);
+    var rows = fitCount(height, deviceCell().h);
     term.options.fontSize = current;
     return { cols: PHONE_COLS, rows: rows, font: font };
   }
@@ -159,7 +178,7 @@
       size = next;
       term.options.fontSize = size;
     }
-    while (cellSize().w * cols > avail && size > 2) {
+    while (fitCount(avail, deviceCell().w) < cols && size > 2) {
       size -= 0.1;
       term.options.fontSize = size;
     }
