@@ -131,6 +131,19 @@ test('„Размер по този екран“ сменя таба на Mac-�
   const [, cols, rows] = /resize content-codex (\d+)x(\d+)/.exec(mock.log().slice(from));
   assert.notDeepEqual([Number(cols), Number(rows)], [120, 40]);
   await waitFor(async () => (await fontOf()) === '14px', 'шрифтът е този от „Настройка“');
+  // Мрежата е измерена при 14 px: целият терминал влиза в мястото.
+  const fits = await page.evaluate(() => {
+    const screen = document.querySelector('.xterm-screen').getBoundingClientRect();
+    const area = document.getElementById('term-area').getBoundingClientRect();
+    return screen.width <= area.width && screen.height <= area.height;
+  });
+  assert.equal(fits, true);
+  // Задържаният шрифт е на този таб: друг таб се вписва в размера на своя Mac.
+  await page.locator('.tab', { hasText: 'claude' }).click();
+  await waitLive();
+  await waitFor(async () => (await fontOf()) !== '14px', 'вписан шрифт на другия таб');
+  await page.locator('.tab', { hasText: 'codex review' }).click();
+  await waitLive();
   // Mac-ът връща своя размер (тук: mock-resize) — шрифтът пак се вписва.
   await typeInTerminal('mock-resize');
   await waitFor(async () => (await fontOf()) !== '14px', 'вписан шрифт след size от Mac-а');

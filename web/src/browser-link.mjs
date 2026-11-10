@@ -14,6 +14,16 @@ import WebSocket from 'ws';
 import { silentLogger } from './log.mjs';
 import { parseConnectionKey, relayLabel } from './protocol.mjs';
 
+/** Само JSON обект: `null`, масив или число от страницата се прескачат. */
+function parseObject(text) {
+  try {
+    const value = JSON.parse(text);
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 const BAD_KEY = 'Ключът е „relay/ключ“, напр. relay.example.com/abcde-fghij-…';
 
 export class BrowserLink {
@@ -58,12 +68,8 @@ export class BrowserLink {
     this.#activate(ws);
     ws.on('message', (data, isBinary) => {
       if (isBinary) return;
-      let message;
-      try {
-        message = JSON.parse(data.toString('utf8'));
-      } catch {
-        return;
-      }
+      const message = parseObject(data.toString('utf8'));
+      if (!message) return;
       this.#onMessage(ws, message).catch((err) => this.#failed(ws, message.t, err));
     });
     ws.on('close', () => {

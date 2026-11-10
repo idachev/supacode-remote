@@ -154,3 +154,17 @@ test('записан счупен ключ — сървърът тръгва и 
   await other.close();
 });
 
+test('null, масив или число от страницата не спират сървъра', async () => {
+  const p = page();
+  await p.opened;
+  await waitFor(() => p.last('state'), 'state');
+  for (const text of ['null', '[]', '5', '"x"', '{']) p.ws.send(text);
+  await new Promise((r) => setTimeout(r, 200));
+  // Сървърът е жив: нова страница получава state.
+  const other = page();
+  assert.equal(await other.opened, true);
+  await waitFor(() => other.last('state'), 'state след лошите кадри');
+  p.ws.close();
+  other.ws.close();
+});
+

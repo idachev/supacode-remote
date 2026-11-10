@@ -26,6 +26,8 @@ export class HostController extends EventEmitter {
     this.active = false;
     this.openContentId = null;
     this.lastAttachId = null;
+    /** Сесията, в която е дошъл `attached` на отворения таб; `null`, докато не е дошъл. */
+    this.attachedSession = null;
     this.lastList = null;
     this.hostSession = relay.state.hostSession;
     this.pollTimer = null;
@@ -59,6 +61,7 @@ export class HostController extends EventEmitter {
   close() {
     const old = this.openContentId;
     this.openContentId = null;
+    this.attachedSession = null;
     if (old && this.relay.state.hostSession != null) this.relay.detach(old, this.lastAttachId);
     this.lastAttachId = null;
   }
@@ -99,7 +102,9 @@ export class HostController extends EventEmitter {
    */
   resize({ contentId, cols, rows }) {
     if (!this.openContentId || contentId !== this.openContentId) return false;
-    if (!Number.isInteger(cols) || !Number.isInteger(rows) || this.relay.state.hostSession == null) return false;
+    if (!Number.isInteger(cols) || !Number.isInteger(rows)) return false;
+    // Само след `attached` в текущата сесия: по нов път (LAN ↔ relay) host-ът още не знае таба.
+    if (this.attachedSession == null || this.attachedSession !== this.relay.state.hostSession) return false;
     return this.relay.send({ t: 'resize', contentId, cols, rows });
   }
 
@@ -149,6 +154,7 @@ export class HostController extends EventEmitter {
   }
 
   #attach() {
+    this.attachedSession = null;
     if (!this.openContentId || this.relay.state.hostSession == null) return;
     const id = this.relay.nextId();
     if (this.relay.send({ t: 'attach', id, contentId: this.openContentId, scrollback: ATTACH_SCROLLBACK })) {
@@ -185,6 +191,8 @@ export class HostController extends EventEmitter {
   #onTerminal(message) {
     if (message.contentId !== this.openContentId) return;
     if (message.t === 'attached' && message.id != null && message.id !== this.lastAttachId) return;
+    if (message.t === 'attached') this.attachedSession = this.relay.state.hostSession;
+    if (message.t === 'detached') this.attachedSession = null;
     this.emit('message', message);
   }
 

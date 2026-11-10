@@ -146,11 +146,16 @@ export class TerminalView {
   }
 
   /**
-   * След „Размер по този екран“: докато размерът на Mac-а е поисканият, шрифтът остава този, по
-   * който е сметнат, вместо да се вписва. Друг размер (Mac-ът е върнал своя) пуска вписването.
+   * След потвърден „Размер по този екран“: докато размерът на Mac-а е поисканият, шрифтът остава
+   * този, по който е сметнат, вместо да се вписва. Друг размер (Mac-ът е върнал своя) или смяна
+   * на таба (`releaseFont`) пуска вписването.
    */
   holdFont({ cols, rows, fontPx }) {
     this.held = { cols, rows, fontPx };
+  }
+
+  releaseFont() {
+    this.held = null;
   }
 
   #heldFontApplies() {
@@ -185,15 +190,27 @@ export class TerminalView {
     }
   }
 
-  /** Колко колони и редове влизат в мястото при шрифт `fontPx` — за нов таб. */
+  /** Колко колони и редове влизат в мястото при шрифт `fontPx` — за нов таб и за бутона. */
   gridAt(fontPx) {
     const avail = this.#avail();
-    const cell = this.#cellRatio();
+    const cell = this.#cellAt(fontPx);
     if (!cell || avail.w <= 0 || avail.h <= 0) return null;
     return {
-      cols: Math.max(20, Math.min(500, Math.floor(avail.w / (cell.w * fontPx)))),
-      rows: Math.max(5, Math.min(200, Math.floor(avail.h / (cell.h * fontPx)))),
+      cols: Math.max(20, Math.min(500, Math.floor(avail.w / cell.w))),
+      rows: Math.max(5, Math.min(200, Math.floor(avail.h / cell.h))),
     };
+  }
+
+  /**
+   * Клетката, измерена при `fontPx`: рендерът закръгля размера ѝ за всеки шрифт, затова мащаб от
+   * друг шрифт може да даде колона или ред повече, отколкото влиза. Шрифтът се връща веднага.
+   */
+  #cellAt(fontPx) {
+    const before = this.term.options.fontSize;
+    this.term.options.fontSize = fontPx;
+    const ratio = this.#cellRatio();
+    this.term.options.fontSize = before;
+    return ratio ? { w: ratio.w * fontPx, h: ratio.h * fontPx } : null;
   }
 
   // `term.write` е асинхронен, а reset и resize — не. Затова те чакат в същата опашка (празен

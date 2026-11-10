@@ -83,6 +83,17 @@ function onAttached(m) {
   terminal.focus();
 }
 
+/**
+ * `size` за отворения таб. Шрифтът се задържа само когато това е поисканият размер (потвърден
+ * „Размер по този екран“); всеки друг `size` е размерът на Mac-а и шрифтът се вписва.
+ */
+function onSize(m) {
+  const asked = ui.pendingResize;
+  ui.pendingResize = null;
+  if (asked?.contentId === m.contentId && asked.cols === m.cols && asked.rows === m.rows) terminal.holdFont(asked);
+  terminal.resize(m.cols, m.rows);
+}
+
 function onDetached(m) {
   ui.phase = 'ended';
   ui.endReason = m.reason || 'табът е затворен';
@@ -119,6 +130,8 @@ function onReset() {
   ui.listText = '';
   ui.openContentId = null;
   ui.phase = 'none';
+  ui.pendingResize = null;
+  terminal.releaseFont();
   terminal.clear();
   history.replaceState(null, '', location.pathname);
   dropRequests();
@@ -135,7 +148,7 @@ const MESSAGES = {
   list: onList,
   attached: forOpenTab(onAttached),
   out: forOpenTab((m) => terminal.write(m.b64)),
-  size: forOpenTab((m) => terminal.resize(m.cols, m.rows)),
+  size: forOpenTab(onSize),
   detached: forOpenTab(onDetached),
   'tab.new': onTabNew,
   suggest: onSuggest,
@@ -153,6 +166,9 @@ function openTab(contentId) {
   ui.openContentId = contentId;
   ui.phase = 'opening';
   ui.endReason = null;
+  // Задържаният шрифт и чакащият размер са на предишния таб.
+  ui.pendingResize = null;
+  terminal.releaseFont();
   terminal.clear();
   history.replaceState(null, '', `#c=${encodeURIComponent(contentId)}`);
   const found = findTab(ui.list, contentId);
@@ -200,7 +216,8 @@ function resizeToScreen() {
   const fontPx = newTabFont();
   const grid = terminal.gridAt(fontPx);
   if (ui.phase !== 'live' || !grid) return;
-  terminal.holdFont({ ...grid, fontPx });
+  // Шрифтът се задържа чак при потвърждението (`onSize`), не сега.
+  ui.pendingResize = { contentId: ui.openContentId, ...grid, fontPx };
   link.send({ t: 'resize', contentId: ui.openContentId, cols: grid.cols, rows: grid.rows });
 }
 

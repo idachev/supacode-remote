@@ -359,8 +359,12 @@ function handle(c, msg) {
         log('resize ignored', JSON.stringify(msg));
         break;
       }
-      s.cols = clamp(msg.cols, 20, 500);
-      s.rows = clamp(msg.rows, 5, 200);
+      const cols = clamp(msg.cols, 20, 500);
+      const rows = clamp(msg.rows, 5, 200);
+      // Без промяна няма `size`, както на Mac-а.
+      if (cols === s.cols && rows === s.rows) break;
+      s.cols = cols;
+      s.rows = rows;
       s.proc.resize(s.cols, s.rows);
       log('resize', msg.contentId, `${s.cols}x${s.rows}`);
       for (const other of clients) {
