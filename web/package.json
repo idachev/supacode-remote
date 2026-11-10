@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "description": "Локален уеб app за Supacode Remote: терминалите на Mac-а в браузъра на лаптопа.",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "start": "node server.mjs",
     "test": "node --test --test-concurrency=1 'test/*.test.mjs'"
@@ -13,6 +15,7 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "playwright-core": "^1.65.0",
     "selfsigned": "^2.4.1"
   }
 }

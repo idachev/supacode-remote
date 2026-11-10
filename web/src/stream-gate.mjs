@@ -55,17 +55,22 @@ export class TerminalStreamGate {
   /** `{deliver, detach}`: към екрана ли; по кои пътища да тръгне `detach` за кой терминал. */
   accept(source, message) {
     if (!isTerminalStream(message)) return { deliver: true, detach: [] };
-    const wait = this.pending;
-    if (message.t === 'attached' && wait && wait.via === source && message.contentId === wait.contentId &&
-      (message.id == null || message.id === wait.id)) {
-      this.pending = null;
+    if (this.#answersPending(source, message)) {
       this.current = source;
-      this.currentContentId = wait.contentId;
+      this.currentContentId = this.pending.contentId;
+      this.pending = null;
       return { deliver: true, detach: this.#takeOthers(source, null) };
     }
     if (source !== this.current) return { deliver: false, detach: [] };
     if (message.t === 'detached' && this.attachedOn.get(source) === message.contentId) this.attachedOn.delete(source);
     return { deliver: true, detach: [] };
+  }
+
+  /** `attached` на чакащия attach: по същия път, за същия терминал и (ако го носи) със същия id. */
+  #answersPending(source, message) {
+    const wait = this.pending;
+    if (message.t !== 'attached' || !wait || wait.via !== source || message.contentId !== wait.contentId) return false;
+    return message.id == null || message.id === wait.id;
   }
 
   #clearCurrent() {

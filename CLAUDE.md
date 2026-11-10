@@ -162,8 +162,12 @@ Navigation 3. compileSdk и targetSdk са 36 (template-ът иска 37, но p
 
 - Локален app за лаптоп: Node сървър на `127.0.0.1` (порт 8790) е клиентът към relay-а и
   LAN-а, а страницата е само екран. Дизайн: `docs/plans/2026-11-10-web-app-design.md`.
-- Пуска се с `web/run.sh`; тестовете — `cd web && npm test` (искат `tools/node_modules`).
-  Gradle build-ът не го докосва.
+- Пуска се с `web/run.sh`; тестовете — `cd web && npm test` (искат `tools/node_modules` и
+  инсталиран Google Chrome за `page.e2e.test.mjs`, който кара страницата в браузър без прозорец
+  срещу mock-а). Gradle build-ът не го докосва.
+- Логът на сървъра е един JSON ред на събитие (`src/log.mjs`, `LOG_LEVEL`); конзолата на
+  браузъра е четим текст (`public/log.js`). Двата ползват един форматер (`public/log-format.js`).
+  Не се логват ключът, адресът на relay-а и имена на Mac-ове.
 - Ключът е в `~/.config/supacode-remote-web/config.json` (0600) и никога не отива към браузъра.
   WebSocket-ът `/ws` иска `Host` и `Origin` от `localhost` / `127.0.0.1`.
 - Логиката е пренесена от Android с имената от `docs/CONTEXT.md` (`RelayClient`,

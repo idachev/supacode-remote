@@ -81,65 +81,57 @@ function lanInfo(lan) {
   return { addrs: strList(lan.addrs), port: lan.port, fp: isStr(lan.fp) ? lan.fp : '', fpMac: isStr(lan.fpMac) ? lan.fpMac : '' };
 }
 
+const terminalSize = (o) => isStr(o.contentId) && isInt(o.cols) && isInt(o.rows);
+
 /**
- * Чете съобщение от relay-а или от host-а. `null` за `ping`/`pong`, счупен JSON, непознат
- * тип или липсващо задължително поле: нищо от relay-а не бива да спира връзката. Полета,
- * които host-ът може да изпусне, получават стойност по подразбиране.
+ * Декодер за всеки тип съобщение. `null` при липсващо задължително поле; полета, които host-ът
+ * може да изпусне, получават стойност по подразбиране.
  */
-export function decode(text) {
-  if (text === PING || text === PONG) return null;
-  let o;
+const DECODERS = {
+  relay: (o) => ({
+    t: 'relay',
+    hostOnline: o.hostOnline === true,
+    host: isStr(o.host) ? o.host : null,
+    // Липсващо поле (стар relay) не е същото като празен списък (нов relay без Mac-ове).
+    hosts: Array.isArray(o.hosts) ? o.hosts.map(hostInfo).filter(Boolean) : null,
+  }),
+  hello: (o) => ({
+    t: 'hello', v: isInt(o.v) ? o.v : PROTOCOL_VERSION,
+    host: isStr(o.host) ? o.host : null,
+    hostId: isStr(o.hostId) ? o.hostId : null,
+    lan: lanInfo(o.lan),
+  }),
+  // Списъкът минава до екрана почти както е: там непознати стойности се търпят поотделно.
+  list: (o) => ({ ...o, id: optId(o.id), repos: Array.isArray(o.repos) ? o.repos : [], sections: Array.isArray(o.sections) ? o.sections : [] }),
+  attached: (o) => (terminalSize(o) ? { t: 'attached', id: optId(o.id), contentId: o.contentId, cols: o.cols, rows: o.rows } : null),
+  out: (o) => (isStr(o.contentId) && isStr(o.b64) ? { t: 'out', contentId: o.contentId, b64: o.b64 } : null),
+  size: (o) => (terminalSize(o) ? { t: 'size', contentId: o.contentId, cols: o.cols, rows: o.rows } : null),
+  detached: (o) => (isStr(o.contentId) ? { t: 'detached', contentId: o.contentId, reason: isStr(o.reason) ? o.reason : null } : null),
+  suggest: (o) => (isStr(o.contentId) ? { t: 'suggest', id: optId(o.id), contentId: o.contentId, suggestions: strList(o.suggestions) } : null),
+  'tab.new': (o) => (isStr(o.contentId)
+    ? { t: 'tab.new', id: optId(o.id), worktreeId: isStr(o.worktreeId) ? o.worktreeId : '', tabId: isStr(o.tabId) ? o.tabId : '', contentId: o.contentId }
+    : null),
+  error: (o) => ({ t: 'error', id: optId(o.id), message: isStr(o.message) ? o.message : '' }),
+};
+
+function parseObject(text) {
   try {
-    o = JSON.parse(text);
+    const o = JSON.parse(text);
+    return o && typeof o === 'object' && !Array.isArray(o) ? o : null;
   } catch {
     return null;
   }
-  if (!o || typeof o !== 'object' || Array.isArray(o)) return null;
-  switch (o.t) {
-    case 'relay':
-      return {
-        t: 'relay',
-        hostOnline: o.hostOnline === true,
-        host: isStr(o.host) ? o.host : null,
-        // Липсващо поле (стар relay) не е същото като празен списък (нов relay без Mac-ове).
-        hosts: Array.isArray(o.hosts) ? o.hosts.map(hostInfo).filter(Boolean) : null,
-      };
-    case 'hello':
-      return {
-        t: 'hello', v: isInt(o.v) ? o.v : PROTOCOL_VERSION,
-        host: isStr(o.host) ? o.host : null,
-        hostId: isStr(o.hostId) ? o.hostId : null,
-        lan: lanInfo(o.lan),
-      };
-    case 'list':
-      // Списъкът минава до екрана почти както е: там непознати стойности се търпят поотделно.
-      return { ...o, id: optId(o.id), repos: Array.isArray(o.repos) ? o.repos : [], sections: Array.isArray(o.sections) ? o.sections : [] };
-    case 'attached':
-      if (!isStr(o.contentId) || !isInt(o.cols) || !isInt(o.rows)) return null;
-      return { t: 'attached', id: optId(o.id), contentId: o.contentId, cols: o.cols, rows: o.rows };
-    case 'out':
-      if (!isStr(o.contentId) || !isStr(o.b64)) return null;
-      return { t: 'out', contentId: o.contentId, b64: o.b64 };
-    case 'size':
-      if (!isStr(o.contentId) || !isInt(o.cols) || !isInt(o.rows)) return null;
-      return { t: 'size', contentId: o.contentId, cols: o.cols, rows: o.rows };
-    case 'detached':
-      if (!isStr(o.contentId)) return null;
-      return { t: 'detached', contentId: o.contentId, reason: isStr(o.reason) ? o.reason : null };
-    case 'suggest':
-      if (!isStr(o.contentId)) return null;
-      return { t: 'suggest', id: optId(o.id), contentId: o.contentId, suggestions: strList(o.suggestions) };
-    case 'tab.new':
-      if (!isStr(o.contentId)) return null;
-      return {
-        t: 'tab.new', id: optId(o.id), worktreeId: isStr(o.worktreeId) ? o.worktreeId : '',
-        tabId: isStr(o.tabId) ? o.tabId : '', contentId: o.contentId,
-      };
-    case 'error':
-      return { t: 'error', id: optId(o.id), message: isStr(o.message) ? o.message : '' };
-    default:
-      return null;
-  }
+}
+
+/**
+ * Чете съобщение от relay-а или от host-а. `null` за `ping`/`pong`, счупен JSON, непознат
+ * тип или липсващо задължително поле: нищо от relay-а не бива да спира връзката.
+ */
+export function decode(text) {
+  if (text === PING || text === PONG) return null;
+  const o = parseObject(text);
+  const decoder = o && Object.hasOwn(DECODERS, o.t) ? DECODERS[o.t] : null;
+  return decoder ? decoder(o) : null;
 }
 
 /** Съобщения, които носят потока на терминала (виж TerminalStreamGate). */

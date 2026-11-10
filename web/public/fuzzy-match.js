@@ -27,16 +27,22 @@ function bestDistance(t, q) {
   let prev = Array.from({ length: m + 1 }, (_, i) => i);
   let best = prev[m];
   for (let j = 1; j <= t.length; j++) {
-    const cur = new Array(m + 1).fill(0);
-    for (let i = 1; i <= m; i++) {
-      const cost = q[i - 1] === t[j - 1] ? 0 : 1;
-      let d = Math.min(prev[i] + 1, cur[i - 1] + 1, prev[i - 1] + cost);
-      if (i > 1 && j > 1 && q[i - 1] === t[j - 2] && q[i - 2] === t[j - 1]) d = Math.min(d, prev2[i - 2] + 1);
-      cur[i] = d;
-    }
+    const cur = nextRow({ t, q, j, prev, prev2 });
     best = Math.min(best, cur[m]);
     prev2 = prev;
     prev = cur;
   }
   return best;
+}
+
+/** Редът за буква `j` от `t`: замяна, вмъкване, изтриване и размяна на две съседни букви. */
+function nextRow({ t, q, j, prev, prev2 }) {
+  const cur = new Array(q.length + 1).fill(0);
+  for (let i = 1; i <= q.length; i++) {
+    const cost = q[i - 1] === t[j - 1] ? 0 : 1;
+    const swapped = i > 1 && j > 1 && q[i - 1] === t[j - 2] && q[i - 2] === t[j - 1];
+    const d = Math.min(prev[i] + 1, cur[i - 1] + 1, prev[i - 1] + cost);
+    cur[i] = swapped ? Math.min(d, prev2[i - 2] + 1) : d;
+  }
+  return cur;
 }

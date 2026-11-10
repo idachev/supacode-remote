@@ -55,106 +55,107 @@ export function sessionRows(list, collapsed = {}, query = '') {
   const repos = Array.isArray(list?.repos) ? list.repos : [];
   const sections = Array.isArray(list?.sections) ? list.sections : [];
   const q = String(query ?? '').trim();
-  return sections.length ? sectionRows(repos, sections, collapsed, q) : statusRows(repos, collapsed, q);
+  return sections.length ? sectionRows({ repos, sections }, collapsed, q) : statusRows(repos, collapsed, q);
 }
 
-function sectionRows(allRepos, sections, collapsed, query) {
-  const searching = query.length > 0;
+/** Общото за един списък: намереното, по id и чий е всеки worktree. */
+function sectionContext(allRepos, collapsed, query) {
   const repos = filterRepos(allRepos, query);
-  const repoById = new Map(repos.map((r) => [r.id, r]));
   const owner = new Map();
   for (const r of repos) for (const w of r.worktrees ?? []) owner.set(w.id, r);
-  const shownWhileSearching = (repo) => fuzzyMatches(repo.name, query) || repoRows(repo).length > 0;
-  const rows = [];
-  const addRepository = (repo, section) => {
-    rows.push({ kind: 'repository', repository: repo });
-    for (const wt of repoRows(repo)) rows.push(worktreeRow(repo, wt, section, null));
-  };
-  sections.forEach((section, index) => {
-    switch (section?.kind) {
-      case 'active':
-      case 'pinned': {
-        const id = `${index}:${section.kind}`;
-        const items = (section.worktreeIds ?? []).flatMap((wtId) => {
-          const repo = owner.get(wtId);
-          const wt = repo?.worktrees.find((w) => w.id === wtId);
-          return wt ? [worktreeRow(repo, wt, id, repo.name)] : [];
-        });
-        if (items.length) {
-          const title = (section.title ?? '').trim() || (section.kind === 'active' ? 'Active' : 'Pinned');
-          rows.push({ kind: 'section', id, sectionKind: section.kind, title });
-          rows.push(...items);
-        }
-        break;
-      }
-      case 'group': {
-        const id = `${index}:${section.title ?? ''}`;
-        const groupRepos = (section.repositoryIds ?? []).map((rid) => repoById.get(rid)).filter(Boolean)
-          .filter((r) => !searching || shownWhileSearching(r));
-        if (searching && groupRepos.length === 0) break;
-        const isCollapsed = !searching && (collapsed[id] ?? section.collapsed === true);
-        rows.push({ kind: 'group', id, title: (section.title ?? '').trim() || 'Група', collapsed: isCollapsed });
-        if (!isCollapsed) groupRepos.forEach((r) => addRepository(r, String(index)));
-        break;
-      }
-      case 'repository': {
-        const repo = repoById.get(section.repositoryId);
-        if (repo && (!searching || shownWhileSearching(repo))) addRepository(repo, String(index));
-        break;
-      }
-      default:
-        break;
-    }
-  });
-  return rows;
+  return { query, searching: query.length > 0, collapsed, repoById: new Map(repos.map((r) => [r.id, r])), owner };
 }
 
-function worktreeRow(repo, worktree, section, repositoryName) {
-  return {
-    kind: 'worktree', repositoryId: repo.id, repositoryName, worktree,
-    key: `wt:${section ?? ''}:${repo.id}:${worktree.id}`,
-  };
+function sectionRows({ repos, sections }, collapsed, query) {
+  const ctx = sectionContext(repos, collapsed, query);
+  return sections.flatMap((section, index) => {
+    const rowsOf = SECTION_ROWS[section?.kind];
+    return rowsOf ? rowsOf(section, index, ctx) : [];
+  });
+}
+
+/** При търсене repository-то остава само с ред за показване или с намерено име. */
+function shownWhileSearching(repo, ctx) {
+  return !ctx.searching || fuzzyMatches(repo.name, ctx.query) || repoRows(repo).length > 0;
+}
+
+function repositoryRows(repo, section) {
+  return [{ kind: 'repository', repository: repo }, ...repoRows(repo).map((wt) => worktreeRow({ repo, worktree: wt, section }))];
+}
+
+/** Active / Pinned: worktree-та от всички repository-та, като „repo · worktree“. */
+function liftedRows(section, index, ctx) {
+  const id = `${index}:${section.kind}`;
+  const items = (section.worktreeIds ?? []).flatMap((wtId) => {
+    const repo = ctx.owner.get(wtId);
+    const wt = repo?.worktrees.find((w) => w.id === wtId);
+    return wt ? [worktreeRow({ repo, worktree: wt, section: id, repositoryName: repo.name })] : [];
+  });
+  if (!items.length) return [];
+  const title = (section.title ?? '').trim() || (section.kind === 'active' ? 'Active' : 'Pinned');
+  return [{ kind: 'section', id, sectionKind: section.kind, title }, ...items];
+}
+
+/** Група на sidebar-а; при търсене е разгъната, а без намерено изчезва. */
+function groupRepos(section, ctx) {
+  return (section.repositoryIds ?? []).map((rid) => ctx.repoById.get(rid)).filter((r) => r && shownWhileSearching(r, ctx));
+}
+
+function groupRows(section, index, ctx) {
+  const id = `${index}:${section.title ?? ''}`;
+  const repos = groupRepos(section, ctx);
+  if (ctx.searching && repos.length === 0) return [];
+  const collapsed = !ctx.searching && (ctx.collapsed[id] ?? section.collapsed === true);
+  const header = { kind: 'group', id, title: (section.title ?? '').trim() || 'Група', collapsed };
+  return collapsed ? [header] : [header, ...repos.flatMap((r) => repositoryRows(r, String(index)))];
+}
+
+function ungroupedRows(section, index, ctx) {
+  const repo = ctx.repoById.get(section.repositoryId);
+  return repo && shownWhileSearching(repo, ctx) ? repositoryRows(repo, String(index)) : [];
+}
+
+/** Редовете на всеки вид секция; непознат вид се прескача. */
+const SECTION_ROWS = { active: liftedRows, pinned: liftedRows, group: groupRows, repository: ungroupedRows };
+
+function worktreeRow({ repo, worktree, section = '', repositoryName = null }) {
+  return { kind: 'worktree', repositoryId: repo.id, repositoryName, worktree, key: `wt:${section}:${repo.id}:${worktree.id}` };
+}
+
+/** Repository-тата по групата им на sidebar-а: първо без група, после всяка група по първа поява. */
+function bySidebarGroup(repos) {
+  const groupOf = (r) => (typeof r.group === 'string' && r.group.trim()) || null;
+  const blocks = new Map();
+  for (const r of repos) {
+    const g = groupOf(r);
+    if (!blocks.has(g)) blocks.set(g, []);
+    blocks.get(g).push(r);
+  }
+  const ungrouped = blocks.get(null);
+  blocks.delete(null);
+  return [...(ungrouped ? [[null, ungrouped]] : []), ...blocks];
+}
+
+/** Repository без `sections`: основният веднага под името, после „Закачени“ и „Активни“. */
+function statusRepositoryRows(repo) {
+  const of = (status) => (repo.worktrees ?? []).filter((w) => worktreeStatus(w.status) === status);
+  const rows = [{ kind: 'repository', repository: repo }, ...of('main').map((wt) => worktreeRow({ repo, worktree: wt }))];
+  for (const status of ['pinned', 'unpinned']) {
+    const list = of(status);
+    if (list.length) rows.push({ kind: 'status', repositoryId: repo.id, status }, ...list.map((wt) => worktreeRow({ repo, worktree: wt })));
+  }
+  return rows;
 }
 
 /** Резервният списък без `sections`: групи по `group`, после основен / закачени / активни. */
 function statusRows(allRepos, collapsed, query) {
-  const repos = filterRepos(allRepos, query);
-  const groupOf = (r) => (typeof r.group === 'string' && r.group.trim()) || null;
-  const order = [];
-  const byGroup = new Map();
-  const ungrouped = repos.filter((r) => !groupOf(r));
-  for (const r of repos.filter(groupOf)) {
-    const g = groupOf(r);
-    if (!byGroup.has(g)) {
-      byGroup.set(g, []);
-      order.push(g);
-    }
-    byGroup.get(g).push(r);
-  }
-  const blocks = [];
-  if (ungrouped.length) blocks.push([null, ungrouped]);
-  for (const g of order) blocks.push([g, byGroup.get(g)]);
-  const rows = [];
-  for (const [name, groupRepos] of blocks) {
-    if (name !== null) {
-      const id = `group:${name}`;
-      const isCollapsed = !query && (collapsed[id] ?? false);
-      rows.push({ kind: 'group', id, title: name, collapsed: isCollapsed });
-      if (isCollapsed) continue;
-    }
-    for (const repo of groupRepos) {
-      rows.push({ kind: 'repository', repository: repo });
-      const of = (s) => (repo.worktrees ?? []).filter((w) => worktreeStatus(w.status) === s);
-      for (const wt of of('main')) rows.push(worktreeRow(repo, wt, '', null));
-      for (const status of ['pinned', 'unpinned']) {
-        const list = of(status);
-        if (!list.length) continue;
-        rows.push({ kind: 'status', repositoryId: repo.id, status });
-        for (const wt of list) rows.push(worktreeRow(repo, wt, '', null));
-      }
-    }
-  }
-  return rows;
+  return bySidebarGroup(filterRepos(allRepos, query)).flatMap(([name, repos]) => {
+    if (name === null) return repos.flatMap(statusRepositoryRows);
+    const id = `group:${name}`;
+    const isCollapsed = !query && (collapsed[id] ?? false);
+    const header = { kind: 'group', id, title: name, collapsed: isCollapsed };
+    return isCollapsed ? [header] : [header, ...repos.flatMap(statusRepositoryRows)];
+  });
 }
 
 /** Всички worktree-та по реда на списъка, без повторения (за Ctrl+⌘+← / →). */
@@ -166,12 +167,28 @@ export function worktreeOrder(rows) {
 /** Worktree-то и repository-то на таба с този `contentId`. */
 export function findTab(list, contentId) {
   for (const repo of list?.repos ?? []) {
-    for (const wt of repo.worktrees ?? []) {
-      const tab = (wt.tabs ?? []).find((t) => t.contentId === contentId);
-      if (tab) return { repo, worktree: wt, tab };
-    }
+    const found = findTabIn(repo, contentId);
+    if (found) return found;
   }
   return null;
+}
+
+function findTabIn(repo, contentId) {
+  for (const wt of repo.worktrees ?? []) {
+    const tab = (wt.tabs ?? []).find((t) => t.contentId === contentId);
+    if (tab) return { repo, worktree: wt, tab };
+  }
+  return null;
+}
+
+/** Чака ли агент вход в този таб — най-ярката значка. */
+export function isAwaiting(tab) {
+  return (tab.agents ?? []).some((a) => a.activity === 'awaitingInput');
+}
+
+/** Колко таба чакат вход: броят е в заглавието на страницата. */
+export function countAwaiting(list) {
+  return (list?.repos ?? []).flatMap((r) => r.worktrees ?? []).flatMap((w) => w.tabs ?? []).filter(isAwaiting).length;
 }
 
 export const ACTIVITY_LABELS = {

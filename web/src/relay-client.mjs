@@ -6,18 +6,18 @@
 // `hello` и всичко друго към host-а тръгват едва когато relay-ът каже `hostOnline:true`:
 // съобщение към офлайн host relay-ът връща като грешка.
 //
-// LAN пътят: `hello` по relay-а с `lan` и верен `fpMac` → пряка връзка (`connectLan`). Тя поема
-// всички заявки, а relay сокетът остава като резерва (само ping). Всяка смяна на пътя е нова
-// `hostSession`: host-ът не знае за `attach`-а по другия път, затова терминалът го прави наново.
-// Кой път носи потока на терминала, решава `TerminalStreamGate`.
+// Пряката връзка в LAN е в `LanPath`. Щом е горе, тя поема всички заявки, а relay сокетът остава
+// като резерва (само ping). Всяка смяна на пътя е нова `hostSession`: host-ът не знае за
+// `attach`-а по другия път, затова терминалът го прави наново. Кой път носи потока на терминала,
+// решава `TerminalStreamGate`.
 //
 // Node е на една нишка, затова тук няма lock-ове: всяко решение и `emit` стават в реда на
 // пристигане на кадрите.
 
 import { EventEmitter } from 'node:events';
 import WebSocket from 'ws';
-import { connectLan } from './lan-session.mjs';
-import { fpMacValid } from './lan-trust.mjs';
+import { HELLO, LanPath } from './lan-path.mjs';
+import { silentLogger } from './log.mjs';
 import { PING, clientUrl, decode, encode } from './protocol.mjs';
 import { TerminalStreamGate } from './stream-gate.mjs';
 
@@ -34,32 +34,49 @@ export const DEFAULT_TIMING = Object.freeze({
   lanRetryMaxMs: 300_000,
 });
 
+function initialState() {
+  return {
+    connection: 'idle', retryInMs: 0, reason: null,
+    hostOnline: false, hostName: null, hostId: null,
+    path: 'none', hostSession: null,
+    // multi-host: `null` — стар relay без списък; `[]` — нов relay, който не знае Mac.
+    hosts: null, boundHost: null,
+  };
+}
+
+/** Полетата, чиято промяна се записва в лога (`relay.state`). */
+const LOGGED = ['connection', 'path', 'hostOnline', 'boundHost', 'reason'];
+
+/** Списъците (`hosts`) идват наново при всяко `relay` съобщение: сравнение по съдържание. */
+function sameValue(a, b) {
+  return a === b || (Array.isArray(a) && Array.isArray(b) && JSON.stringify(a) === JSON.stringify(b));
+}
+
+function socketSend(ws, text) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  ws.send(text);
+  return true;
+}
+
 export class RelayClient extends EventEmitter {
-  constructor({ timing = {} } = {}) {
+  constructor({ timing = {}, log = silentLogger } = {}) {
     super();
     this.timing = { ...DEFAULT_TIMING, ...timing };
+    this.log = log;
     this.settings = null;
     this.hostId = null;
     this.ids = 0;
     this.attempt = 0;
     this.socket = null;
-    this.lan = null;
-    this.lanGeneration = 0;
-    this.lanConnecting = false;
-    this.lanOffered = false;
-    this.lanRetryMs = this.timing.lanRetryFirstMs;
-    this.lanRetryTimer = null;
-    this.lanKeepalive = null;
-    this.lanLastFrameAt = 0;
     this.hostSessionCounter = 0;
     this.gate = new TerminalStreamGate();
-    this.state = {
-      connection: 'idle', retryInMs: 0, reason: null,
-      hostOnline: false, hostName: null, hostId: null,
-      path: 'none', hostSession: null,
-      // multi-host: `null` — стар relay без списък; `[]` — нов relay, който не знае Mac.
-      hosts: null, boundHost: null,
-    };
+    this.state = initialState();
+    this.lanPath = new LanPath({ timing: this.timing, log, events: this.#lanEvents() });
+  }
+
+  /** Текущата LAN сесия или `null`. */
+  get lan() {
+    return this.lanPath.session;
   }
 
   nextId() {
@@ -91,9 +108,7 @@ export class RelayClient extends EventEmitter {
   send(message) {
     const text = encode(message);
     if (message.t !== 'attach' && message.t !== 'detach') return this.#sendText(text);
-    let via = null;
-    if (this.lan && this.lan.send(text)) via = this.lan;
-    else if (this.#socketSend(this.socket, text)) via = this.socket;
+    const via = this.#sendVia(text);
     if (!via) return false;
     if (message.t === 'attach') this.gate.attachSent(via, message.id, message.contentId);
     else this.#sendDetaches(this.gate.detachSent(via, message.contentId));
@@ -106,36 +121,37 @@ export class RelayClient extends EventEmitter {
     return this.send({ t: 'detach', contentId });
   }
 
-  // ---- вътрешно ----
+  // ---- състояние и изпращане ----
 
   #set(patch) {
-    let changed = false;
-    // Списъците (`hosts`) идват наново при всяко `relay` съобщение: сравнение по съдържание.
-    const same = (a, b) => a === b || (Array.isArray(a) && Array.isArray(b) && JSON.stringify(a) === JSON.stringify(b));
-    for (const [k, v] of Object.entries(patch)) {
-      if (!same(this.state[k], v)) {
-        this.state[k] = v;
-        changed = true;
-      }
-    }
-    if (changed) this.emit('state', { ...this.state });
+    const changed = Object.entries(patch).filter(([k, v]) => !sameValue(this.state[k], v));
+    if (!changed.length) return;
+    for (const [k, v] of changed) this.state[k] = v;
+    if (changed.some(([k]) => LOGGED.includes(k))) this.#logState();
+    this.emit('state', { ...this.state });
   }
 
-  #socketSend(ws, text) {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
-    ws.send(text);
-    return true;
+  #logState() {
+    const s = this.state;
+    this.log.info('relay.state', {
+      connection: s.connection, path: s.path, host_online: s.hostOnline, bound_host: s.boundHost, reason: s.reason,
+    });
+  }
+
+  /** Пътят, по който тръгна текстът (LAN сесията или relay сокетът), или `null`. */
+  #sendVia(text) {
+    if (this.lan?.send(text)) return this.lan;
+    return socketSend(this.socket, text) ? this.socket : null;
   }
 
   #sendText(text) {
-    if (this.lan && this.lan.send(text)) return true;
-    return this.#socketSend(this.socket, text);
+    return this.#sendVia(text) != null;
   }
 
   #sendDetaches(targets) {
     for (const [source, contentId] of targets) {
       const text = encode({ t: 'detach', contentId });
-      if (source instanceof WebSocket) this.#socketSend(source, text);
+      if (source instanceof WebSocket) socketSend(source, text);
       else source.send(text);
     }
   }
@@ -147,21 +163,43 @@ export class RelayClient extends EventEmitter {
     if (decision.deliver) this.emit('message', message);
   }
 
+  #updateRoute() {
+    const route = this.lan ? 'lan' : this.state.hostOnline ? 'relay' : 'none';
+    if (route === this.state.path) return;
+    if (route === 'none') {
+      this.#set({ path: route, hostSession: null });
+      return;
+    }
+    this.hostSessionCounter += 1;
+    this.#set({ path: route, hostSession: this.hostSessionCounter });
+  }
+
+  // ---- relay сокетът ----
+
   #restart() {
     // Буди чакащия цикъл: той вижда новия `attempt` и спира.
     this.emit('restart-wait');
     // Старият опит спира веднага: закъснелите му събития вече не пипат състоянието.
     this.attempt += 1;
+    this.#dropConnections();
+    // Името и id-то са от hello на стария Mac: след смяна на Mac-а не бива да остават.
+    this.#set({ hostOnline: false, hosts: null, boundHost: null, hostName: null, hostId: null });
+    this.#updateRoute();
+    this.#startLoop();
+  }
+
+  #dropConnections() {
     const old = this.socket;
     this.socket = null;
     if (old) {
       this.gate.closed(old);
       old.terminate();
     }
-    this.#closeLan();
-    // Името и id-то са от hello на стария Mac: след смяна на Mac-а не бива да остават.
-    this.#set({ hostOnline: false, hosts: null, boundHost: null, hostName: null, hostId: null });
-    this.#updateRoute();
+    const lan = this.lanPath.reset();
+    if (lan) this.gate.closed(lan);
+  }
+
+  #startLoop() {
     if (!this.settings) {
       this.#set({ connection: 'idle', retryInMs: 0, reason: null });
       return;
@@ -171,226 +209,163 @@ export class RelayClient extends EventEmitter {
       this.#set({ connection: 'waiting', retryInMs: 0, reason: 'невалиден адрес' });
       return;
     }
-    this.#runLoop(url, this.settings.apiKey, this.attempt);
+    this.#runLoop(url, this.attempt);
   }
 
-  async #runLoop(url, apiKey, attempt) {
+  async #runLoop(url, attempt) {
     let retry = this.timing.firstRetryMs;
     while (attempt === this.attempt) {
       this.#set({ connection: 'connecting', retryInMs: 0 });
-      const outcome = await this.#connectOnce(url, apiKey, attempt);
+      const outcome = await this.#connectOnce(url, attempt);
       if (attempt !== this.attempt) return;
       if (outcome.unauthorized) {
+        this.log.warn('relay.unauthorized', { status: 401 });
         this.#set({ connection: 'unauthorized', reason: null });
         return;
       }
       if (outcome.wasOpen) retry = this.timing.firstRetryMs;
       this.#set({ connection: 'waiting', retryInMs: retry, reason: outcome.reason });
-      await new Promise((resolve) => {
-        const wake = () => { clearTimeout(timer); resolve(); };
-        const timer = setTimeout(() => { this.off('restart-wait', wake); resolve(); }, retry);
-        this.once('restart-wait', wake);
-      });
+      await this.#sleepUnlessRestarted(retry);
       retry = Math.min(retry * 2, this.timing.maxRetryMs);
     }
   }
 
-  #connectOnce(url, apiKey, attempt) {
+  #sleepUnlessRestarted(ms) {
     return new Promise((resolve) => {
-      let opened = false;
-      let lastFrameAt = Date.now();
-      let finished = false;
-      // handshakeTimeout: upgrade без отговор (след sleep, мрежа, която гълта заявката) иначе виси.
-      let ws;
-      try {
-        ws = new WebSocket(url, {
-          headers: { Authorization: `Bearer ${apiKey}` }, perMessageDeflate: false, handshakeTimeout: this.timing.handshakeTimeoutMs,
-        });
-      } catch {
-        // Невалиден адрес хвърля веднага; без това грешката би спряла Node.
+      const wake = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        this.off('restart-wait', wake);
+        resolve();
+      }, ms);
+      this.once('restart-wait', wake);
+    });
+  }
+
+  /** Един опит: свършва с `{unauthorized}` или `{reason, wasOpen}`, когато сокетът падне. */
+  #connectOnce(url, attempt) {
+    return new Promise((resolve) => {
+      const ws = this.#openSocket(url);
+      if (!ws) {
         resolve({ reason: 'невалиден адрес на relay-а', wasOpen: false });
         return;
       }
-      const current = () => !finished && attempt === this.attempt;
-      const finish = (outcome) => {
-        if (finished) return;
-        finished = true;
-        clearInterval(keepalive);
-        if (this.socket === ws) this.socket = null;
-        this.gate.closed(ws);
-        // LAN връзката остава (както в Android): тя не зависи от relay сокета.
-        if (attempt === this.attempt) {
-          this.#set({ hostOnline: false });
-          this.#updateRoute();
-        }
-        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) ws.terminate();
-        resolve(outcome);
-      };
-      ws.on('open', () => {
-        if (!current()) return;
-        opened = true;
-        lastFrameAt = Date.now();
-        this.socket = ws;
-        this.#set({ connection: 'connected', retryInMs: 0, reason: null });
-      });
-      ws.on('unexpected-response', (_req, res) => {
-        res.resume();
-        if (res.statusCode === 401) finish({ unauthorized: true });
-        else finish({ reason: `HTTP ${res.statusCode}`, wasOpen: false });
-      });
-      ws.on('message', (data, isBinary) => {
-        if (!current() || isBinary) return;
-        lastFrameAt = Date.now();
-        const message = decode(data.toString('utf8'));
-        if (!message) return;
-        if (message.t === 'relay') this.#onRelayStatus(ws, message);
-        else if (message.t === 'hello') {
-          this.#set({ hostName: message.host, hostId: message.hostId });
-          this.#onRelayHello(message);
-        }
-        this.#deliver(ws, message);
-      });
-      ws.on('error', (err) => finish({ reason: err.message || 'грешка', wasOpen: opened }));
-      ws.on('close', (code, reason) => finish({ reason: reason?.toString() || `затворена (${code})`, wasOpen: opened }));
-      const keepalive = setInterval(() => {
-        if (this.socket !== ws) return;
-        if (Date.now() - lastFrameAt > this.timing.silenceLimitMs) {
-          finish({ reason: 'няма отговор от relay-а', wasOpen: opened });
-          return;
-        }
-        this.#socketSend(ws, PING);
-      }, this.timing.pingIntervalMs);
+      const conn = { ws, attempt, resolve, opened: false, finished: false, lastFrameAt: Date.now(), keepalive: null };
+      this.#watch(conn);
     });
+  }
+
+  /** `null` за невалиден адрес: `new WebSocket` хвърля веднага и иначе би спрял Node. */
+  #openSocket(url) {
+    try {
+      // handshakeTimeout: upgrade без отговор (след sleep, мрежа, която гълта заявката) иначе виси.
+      return new WebSocket(url, {
+        headers: { Authorization: `Bearer ${this.settings.apiKey}` },
+        perMessageDeflate: false,
+        handshakeTimeout: this.timing.handshakeTimeoutMs,
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  #watch(conn) {
+    const { ws } = conn;
+    ws.on('open', () => this.#opened(conn));
+    ws.on('unexpected-response', (_req, res) => {
+      res.resume();
+      this.#finish(conn, res.statusCode === 401 ? { unauthorized: true } : { reason: `HTTP ${res.statusCode}`, wasOpen: false });
+    });
+    ws.on('message', (data, isBinary) => {
+      if (!isBinary) this.#frame(conn, data.toString('utf8'));
+    });
+    ws.on('error', (err) => this.#finish(conn, { reason: err.message || 'грешка', wasOpen: conn.opened }));
+    ws.on('close', (code, reason) => this.#finish(conn, { reason: reason?.toString() || `затворена (${code})`, wasOpen: conn.opened }));
+    conn.keepalive = setInterval(() => this.#keepalive(conn), this.timing.pingIntervalMs);
+  }
+
+  #current(conn) {
+    return !conn.finished && conn.attempt === this.attempt;
+  }
+
+  #opened(conn) {
+    if (!this.#current(conn)) return;
+    conn.opened = true;
+    conn.lastFrameAt = Date.now();
+    this.socket = conn.ws;
+    this.#set({ connection: 'connected', retryInMs: 0, reason: null });
+  }
+
+  #frame(conn, text) {
+    if (!this.#current(conn)) return;
+    conn.lastFrameAt = Date.now();
+    const message = decode(text);
+    if (!message) return;
+    if (message.t === 'relay') this.#onRelayStatus(conn.ws, message);
+    else if (message.t === 'hello') this.#onRelayHello(message);
+    this.#deliver(conn.ws, message);
+  }
+
+  #keepalive(conn) {
+    if (this.socket !== conn.ws) return;
+    if (Date.now() - conn.lastFrameAt > this.timing.silenceLimitMs) {
+      this.#finish(conn, { reason: 'няма отговор от relay-а', wasOpen: conn.opened });
+      return;
+    }
+    socketSend(conn.ws, PING);
+  }
+
+  #finish(conn, outcome) {
+    if (conn.finished) return;
+    conn.finished = true;
+    clearInterval(conn.keepalive);
+    const { ws } = conn;
+    if (this.socket === ws) this.socket = null;
+    this.gate.closed(ws);
+    // LAN връзката остава (както в Android): тя не зависи от relay сокета.
+    if (conn.attempt === this.attempt) {
+      this.#set({ hostOnline: false });
+      this.#updateRoute();
+    }
+    if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) ws.terminate();
+    conn.resolve(outcome);
   }
 
   #onRelayStatus(ws, message) {
     // Само ръбът false → true значи нов host; повторен `true` носи само списъка на Mac-овете.
-    if (message.hostOnline && !this.state.hostOnline) this.#socketSend(ws, encode({ t: 'hello', v: 1 }));
+    if (message.hostOnline && !this.state.hostOnline) socketSend(ws, HELLO);
     this.#set({ hostOnline: message.hostOnline, hosts: message.hosts, boundHost: message.host });
     this.#updateRoute();
   }
 
-  #updateRoute() {
-    const route = this.lan ? 'lan' : this.state.hostOnline ? 'relay' : 'none';
-    if (route === this.state.path) return;
-    if (route === 'none') {
-      this.#set({ path: route, hostSession: null });
-    } else {
-      this.hostSessionCounter += 1;
-      this.#set({ path: route, hostSession: this.hostSessionCounter });
-    }
+  #onRelayHello(hello) {
+    this.#set({ hostName: hello.host, hostId: hello.hostId });
+    this.lanPath.offer(hello, { apiKey: this.settings?.apiKey, boundHostId: this.hostId });
   }
 
   // ---- LAN пътят ----
 
-  /**
-   * `hello` по relay-а. С `lan` — опит за пряка връзка. Без `lan`, но след като LAN вече е
-   * бил предложен в тази връзка — нов `hello` по-късно, за да се върнем на LAN, щом пак е там.
-   * `hello` от друг Mac (multi-host, различен `hostId`) не пуска LAN.
-   */
-  #onRelayHello(hello) {
-    if (this.hostId && hello.hostId && hello.hostId !== this.hostId) return;
-    const info = hello.lan;
-    const key = this.settings?.apiKey;
-    if (info && key && fpMacValid(key, info.fp, info.fpMac)) {
-      this.lanOffered = true;
-      this.#maybeStartLan(info);
-    } else if (info) {
-      // Отпечатък без верен fpMac: не е от Mac-а (или relay-ят го е пипал) — без LAN.
-    } else if (this.lanOffered && !this.lan && !this.lanConnecting) {
-      this.#scheduleLanRetry();
-    }
+  #lanEvents() {
+    return {
+      opened: () => this.#updateRoute(),
+      text: (session, text) => this.#lanText(session, text),
+      closed: (session) => {
+        this.gate.closed(session);
+        this.#updateRoute();
+      },
+      askHello: () => {
+        if (this.state.hostOnline) socketSend(this.socket, HELLO);
+      },
+    };
   }
 
-  async #maybeStartLan(info) {
-    if (this.lan || this.lanConnecting || info.addrs.length === 0) return;
-    const key = this.settings?.apiKey;
-    if (!key) return;
-    const generation = this.lanGeneration;
-    clearTimeout(this.lanRetryTimer);
-    this.lanConnecting = true;
-    let session = null;
-    try {
-      session = await connectLan(info, key, {
-        timeoutMs: this.timing.lanConnectTimeoutMs,
-        onText: (s, text) => this.#onLanText(s, text),
-        onClose: (s) => this.#onLanClosed(s),
-      });
-    } catch {
-      // Неуспешен LAN опит: остава relay пътят. Без catch грешката би спряла Node.
-      session = null;
-    }
-    if (generation !== this.lanGeneration) {
-      session?.close();
-      return;
-    }
-    this.lanConnecting = false;
-    if (!session || session.closed) {
-      session?.close();
-      this.#scheduleLanRetry();
-      return;
-    }
-    this.lan = session;
-    this.lanLastFrameAt = Date.now();
-    this.lanRetryMs = this.timing.lanRetryFirstMs;
-    // hello първо, после новата сесия: по нея терминалът прави attach, а списъкът — list.
-    session.send(encode({ t: 'hello', v: 1 }));
-    this.#updateRoute();
-    this.lanKeepalive = setInterval(() => {
-      if (this.lan !== session) return;
-      if (Date.now() - this.lanLastFrameAt > this.timing.silenceLimitMs) {
-        session.cancel();
-        this.#onLanClosed(session);
-        return;
-      }
-      session.send(PING);
-    }, this.timing.pingIntervalMs);
-  }
-
-  #onLanText(session, text) {
-    if (this.lan !== session) return;
-    this.lanLastFrameAt = Date.now();
+  #lanText(session, text) {
     const message = decode(text);
     if (!message) return;
     // `lan` в hello по самия LAN не значи нищо ново.
     if (message.t === 'hello') this.#set({ hostName: message.host, hostId: message.hostId });
     this.#deliver(session, message);
-  }
-
-  #onLanClosed(session) {
-    this.gate.closed(session);
-    if (this.lan !== session) return;
-    this.lan = null;
-    clearInterval(this.lanKeepalive);
-    // Обратно на relay-а: нова сесия, терминалът прави attach наново там.
-    this.#updateRoute();
-    this.#scheduleLanRetry();
-  }
-
-  /** Следващият `hello` по relay-а: отговорът носи `lan`, ако Mac-ът още е в същата мрежа. */
-  #scheduleLanRetry() {
-    clearTimeout(this.lanRetryTimer);
-    const wait = this.lanRetryMs;
-    this.lanRetryMs = Math.min(this.lanRetryMs * 2, this.timing.lanRetryMaxMs);
-    const generation = this.lanGeneration;
-    this.lanRetryTimer = setTimeout(() => {
-      if (generation !== this.lanGeneration || this.lan || !this.state.hostOnline) return;
-      this.#socketSend(this.socket, encode({ t: 'hello', v: 1 }));
-    }, wait);
-  }
-
-  #closeLan() {
-    this.lanGeneration += 1;
-    this.lanConnecting = false;
-    clearInterval(this.lanKeepalive);
-    clearTimeout(this.lanRetryTimer);
-    this.lanRetryMs = this.timing.lanRetryFirstMs;
-    this.lanOffered = false;
-    const lan = this.lan;
-    this.lan = null;
-    if (lan) {
-      this.gate.closed(lan);
-      lan.close();
-    }
   }
 }

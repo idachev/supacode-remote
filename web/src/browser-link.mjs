@@ -11,12 +11,14 @@
 
 import { randomUUID } from 'node:crypto';
 import WebSocket from 'ws';
+import { silentLogger } from './log.mjs';
 import { parseConnectionKey, relayLabel } from './protocol.mjs';
 
 const BAD_KEY = 'Ключът е „relay/ключ“, напр. relay.example.com/abcde-fghij-…';
 
 export class BrowserLink {
-  constructor({ relay, host, config }) {
+  constructor({ relay, host, config, log = silentLogger }) {
+    this.log = log;
     this.relay = relay;
     this.host = host;
     this.config = config;
@@ -30,11 +32,16 @@ export class BrowserLink {
      * страницата и се презарежда сама, иначе говори стария локален протокол.
      */
     this.bootId = randomUUID();
-    relay.on('state', (state) => {
+    this.handlers = this.#handlers();
+    this.#listen();
+  }
+
+  #listen() {
+    this.relay.on('state', (state) => {
       this.#sendState();
       this.#autoSelect(state);
     });
-    host.on('message', (message) => this.#send(this.active, message));
+    this.host.on('message', (message) => this.#send(this.active, message));
   }
 
   /** Чете записания ключ и тръгва към relay-а. */
@@ -57,12 +64,13 @@ export class BrowserLink {
       } catch {
         return;
       }
-      this.#onMessage(ws, message).catch((err) => this.#send(ws, { t: 'error', message: String(err?.message ?? err) }));
+      this.#onMessage(ws, message).catch((err) => this.#failed(ws, message.t, err));
     });
     ws.on('close', () => {
       if (this.active !== ws) return;
       this.active = null;
       this.host.setActive(false);
+      this.log.info('page.closed', {});
     });
   }
 
@@ -95,7 +103,7 @@ export class BrowserLink {
     this.selecting = true;
     setImmediate(() => {
       this.#selectHost(online[0].id)
-        .catch((err) => this.#send(this.active, { t: 'error', message: String(err?.message ?? err) }))
+        .catch((err) => this.#failed(this.active, 'host.auto_select', err))
         .finally(() => { this.selecting = false; });
     });
   }
@@ -106,6 +114,7 @@ export class BrowserLink {
     // Първо записът: при грешка изборът остава стар, а автоматичният избор може да опита пак.
     await this.config.save({ connectionKey: this.connectionKey, selectedHostId: id });
     this.selectedHostId = id;
+    this.log.info('host.selected', { host_id: id });
     this.host.reset();
     this.#send(this.active, { t: 'reset' });
     this.relay.configure(this.settings, id);
@@ -116,6 +125,7 @@ export class BrowserLink {
     const old = this.active;
     if (old && old !== ws) {
       this.#send(old, { t: 'replaced' });
+      this.log.info('page.replaced', {});
       // Терминалът на старата страница не е на новата: тя ще отвори своя.
       this.host.close();
     }
@@ -123,6 +133,30 @@ export class BrowserLink {
     this.host.setActive(true);
     this.#send(ws, this.state());
     if (this.host.lastList) this.#send(ws, this.host.lastList);
+    this.log.info('page.active', {});
+  }
+
+  /** Съобщенията от активната страница. Стойностите се проверяват тук, преди да стигнат до host-а. */
+  #handlers() {
+    const str = (v) => typeof v === 'string';
+    return {
+      open: (_ws, m) => str(m.contentId) && this.host.open(m.contentId),
+      close: () => this.host.close(),
+      input: (_ws, m) => str(m.b64) && this.host.input(m.b64, m.contentId),
+      line: (_ws, m) => str(m.text) && this.host.line(m.text, m.contentId),
+      suggest: (_ws, m) => this.host.suggest(m.ref ?? null),
+      'tab.new': (_ws, m) => str(m.worktreeId) && this.host.newTab({ worktreeId: m.worktreeId, cols: m.cols, rows: m.rows, ref: m.ref ?? null }),
+      refresh: () => this.host.refresh(),
+      'host.select': (_ws, m) => this.#selectHost(m.id),
+      reconnect: () => this.relay.reconnectNow(),
+      setup: (ws, m) => this.#setup(ws, m.connectionKey),
+    };
+  }
+
+  /** Грешката отива и в лога, и в страницата като съобщение. */
+  #failed(ws, messageType, err) {
+    this.log.error('page.request_failed', { message_type: String(messageType), error: err instanceof Error ? err : new Error(String(err)) });
+    this.#send(ws, { t: 'error', message: String(err?.message ?? err) });
   }
 
   async #onMessage(ws, m) {
@@ -130,61 +164,37 @@ export class BrowserLink {
       this.#activate(ws);
       return;
     }
-    if (ws !== this.active) return;
-    switch (m.t) {
-      case 'open':
-        if (typeof m.contentId === 'string') this.host.open(m.contentId);
-        break;
-      case 'close':
-        this.host.close();
-        break;
-      case 'input':
-        if (typeof m.b64 === 'string') this.host.input(m.b64, m.contentId);
-        break;
-      case 'line':
-        if (typeof m.text === 'string') this.host.line(m.text, m.contentId);
-        break;
-      case 'suggest':
-        this.host.suggest(m.ref ?? null);
-        break;
-      case 'tab.new':
-        if (typeof m.worktreeId === 'string') this.host.newTab(m.worktreeId, m.cols, m.rows, m.ref ?? null);
-        break;
-      case 'refresh':
-        this.host.refresh();
-        break;
-      case 'host.select':
-        await this.#selectHost(m.id);
-        break;
-      case 'reconnect':
-        this.relay.reconnectNow();
-        break;
-      case 'setup':
-        await this.#setup(ws, m.connectionKey);
-        break;
-      default:
-        break;
-    }
+    // Само активната страница управлява; непознат тип се прескача.
+    if (ws !== this.active || !Object.hasOwn(this.handlers, m.t)) return;
+    await this.handlers[m.t](ws, m);
   }
 
   async #setup(ws, text) {
     const settings = parseConnectionKey(text);
     if (!settings) {
+      this.log.info('setup.rejected', { reason: 'format' });
       this.#send(ws, { t: 'setup.result', ok: false, message: BAD_KEY });
       return;
     }
-    this.connectionKey = String(text).trim();
-    await this.config.save({ connectionKey: this.connectionKey, selectedHostId: this.selectedHostId });
+    // Първо записът: при грешка в паметта остава старият ключ.
+    const connectionKey = String(text).trim();
+    await this.config.save({ connectionKey, selectedHostId: this.selectedHostId });
+    this.connectionKey = connectionKey;
+    this.log.info('setup.saved', {});
+    this.#applySettings(ws, settings);
+    this.#send(ws, { t: 'setup.result', ok: true });
+    this.#sendState();
+  }
+
+  /** Друг relay или ключ — може и друг Mac: старият таб и списъкът вече не важат. */
+  #applySettings(ws, settings) {
     const same = this.settings && this.settings.baseUrl === settings.baseUrl && this.settings.apiKey === settings.apiKey;
     this.settings = settings;
     if (!same) {
-      // Друг relay или ключ — може и друг Mac: старият таб и списъкът вече не важат.
       this.host.reset();
       this.#send(ws, { t: 'reset' });
     }
     this.relay.configure(settings, this.selectedHostId);
-    this.#send(ws, { t: 'setup.result', ok: true });
-    this.#sendState();
   }
 
   #sendState() {

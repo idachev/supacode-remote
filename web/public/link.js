@@ -1,6 +1,8 @@
 // WebSocket-ът на страницата към локалния Node сървър. Пада ли (сървърът е спрян или
 // рестартиран), се свързва пак на 1 s.
 
+import { log } from './log.js';
+
 export class LocalLink {
   constructor({ onMessage, onUp, onDown }) {
     this.onMessage = onMessage;
@@ -18,7 +20,7 @@ export class LocalLink {
       try {
         this.onMessage(JSON.parse(e.data));
       } catch (err) {
-        console.error('[link] лошо съобщение', err);
+        log.error('link.message_failed', { error: err });
       }
     });
     ws.addEventListener('close', () => {

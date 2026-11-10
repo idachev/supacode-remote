@@ -23,22 +23,22 @@ export async function startMock({ lan = true, key = 'test-key' } = {}) {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let log = '';
+  const append = (d) => { log += d.toString(); };
+  proc.stdout.on('data', append);
+  proc.stderr.on('data', append);
+  // Един слушател за целия живот на mock-а: всеки ред влиза в лога веднъж.
   await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`mock не тръгна:\n${log}`)), 15_000);
-    const onData = (d) => {
-      log += d.toString();
-      const relayUp = log.includes('mock host on');
-      const lanUp = !lan || log.includes('LAN endpoint on');
-      if (relayUp && lanUp) {
-        clearTimeout(timer);
-        resolve();
-      }
+    const started = () => log.includes('mock host on') && (!lan || log.includes('LAN endpoint on'));
+    const check = () => {
+      if (!started()) return;
+      clearTimeout(timer);
+      proc.stdout.off('data', check);
+      resolve();
     };
-    proc.stdout.on('data', onData);
-    proc.stderr.on('data', onData);
-    proc.on('exit', (code) => reject(new Error(`mock спря (${code}):\n${log}`)));
+    proc.stdout.on('data', check);
+    proc.once('exit', (code) => reject(new Error(`mock спря (${code}):\n${log}`)));
   });
-  proc.stdout.on('data', (d) => { log += d.toString(); });
   return {
     port, lanPort, key,
     connectionKey: `http://127.0.0.1:${port}/${key}`,

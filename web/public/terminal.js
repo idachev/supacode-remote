@@ -38,60 +38,73 @@ export const encodeText = (text) => toB64(new TextEncoder().encode(text));
  * - Shift+Enter и Option+Enter пращат ESC+CR (нов ред в Claude Code и Grok).
  */
 export function ghosttyKey(e) {
-  if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey && (e.shiftKey || e.altKey)) return '\x1b\r';
+  return newlineKey(e) ?? ctrlLetter(e);
+}
+
+function newlineKey(e) {
+  const plainEnter = e.key === 'Enter' && !e.ctrlKey && !e.metaKey;
+  return plainEnter && (e.shiftKey || e.altKey) ? '\x1b\r' : null;
+}
+
+function ctrlLetter(e) {
   if (!e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return null;
   const m = /^Key([A-Z])$/.exec(e.code ?? '');
   if (!m || 'IJMO'.includes(m[1])) return null;
   return String.fromCharCode(m[1].charCodeAt(0) - 64);
 }
 
+const XTERM_OPTIONS = {
+  cols: 80,
+  rows: 24,
+  scrollback: 5000,
+  fontFamily: 'Menlo, "SF Mono", Monaco, monospace',
+  fontSize: BASE_FONT,
+  lineHeight: 1.0,
+  cursorBlink: false,
+  convertEol: false,
+  // Option пише специалните знаци, както в Supacode (Ghostty без `macos-option-as-alt`);
+  // маркиране при програма с мишка — с Option.
+  macOptionIsMeta: false,
+  macOptionClickForcesSelection: true,
+  minimumContrastRatio: 1,
+  theme: { background: '#1e1e1e', foreground: '#d4d4d4', cursor: '#d4d4d4', selectionBackground: '#264f78' },
+};
+
+/** Mouse report в старото X10 кодиране: байтове, не UTF-8. */
+function binaryToB64(data) {
+  const bytes = new Uint8Array(data.length);
+  for (let i = 0; i < data.length; i++) bytes[i] = data.charCodeAt(i) & 0xff;
+  return toB64(bytes);
+}
+
 export class TerminalView {
   constructor(container, area, { onInput }) {
-    this.container = container;
     this.area = area;
     this.onInput = onInput;
-    this.cols = 80;
-    this.rows = 24;
-    this.term = new window.Terminal({
-      cols: this.cols,
-      rows: this.rows,
-      scrollback: 5000,
-      fontFamily: 'Menlo, "SF Mono", Monaco, monospace',
-      fontSize: BASE_FONT,
-      lineHeight: 1.0,
-      cursorBlink: false,
-      convertEol: false,
-      // Option пише специалните знаци, както в Supacode (Ghostty без `macos-option-as-alt`);
-      // маркиране при програма с мишка — с Option.
-      macOptionIsMeta: false,
-      macOptionClickForcesSelection: true,
-      minimumContrastRatio: 1,
-      theme: { background: '#1e1e1e', foreground: '#d4d4d4', cursor: '#d4d4d4', selectionBackground: '#264f78' },
-    });
+    this.term = new window.Terminal(XTERM_OPTIONS);
     this.term.open(container);
     this.#blockReplies();
-    this.term.onData((data) => {
-      if (FOCUS_REPORTS.has(data)) return;
-      this.onInput(encodeText(data));
-    });
-    // Mouse report в старото X10 кодиране: байтове, не UTF-8.
-    this.term.onBinary((data) => {
-      const bytes = new Uint8Array(data.length);
-      for (let i = 0; i < data.length; i++) bytes[i] = data.charCodeAt(i) & 0xff;
-      this.onInput(toB64(bytes));
-    });
-    this.term.attachCustomKeyEventHandler((e) => {
-      // Ctrl+⌘ е за app-а; ⌘ сам — за браузъра (⌘C, ⌘V, ⌘R …). Нищо от тях не отива в PTY-то.
-      // Ctrl+⌘ ги хваща app.js по-рано (capture фазата).
-      if (e.metaKey) return false;
-      if (e.type !== 'keydown') return true;
-      const bytes = ghosttyKey(e);
-      if (bytes == null) return true;
-      e.preventDefault();
-      this.onInput(encodeText(bytes));
-      return false;
-    });
+    this.#wireInput();
     new ResizeObserver(() => this.fit()).observe(area);
+  }
+
+  #wireInput() {
+    this.term.onData((data) => {
+      if (!FOCUS_REPORTS.has(data)) this.onInput(encodeText(data));
+    });
+    this.term.onBinary((data) => this.onInput(binaryToB64(data)));
+    this.term.attachCustomKeyEventHandler((e) => this.#onKey(e));
+  }
+
+  /** `false` — xterm.js да не обработва клавиша. ⌘ е на браузъра; Ctrl+⌘ хваща app.js по-рано. */
+  #onKey(e) {
+    if (e.metaKey) return false;
+    if (e.type !== 'keydown') return true;
+    const bytes = ghosttyKey(e);
+    if (bytes == null) return true;
+    e.preventDefault();
+    this.onInput(encodeText(bytes));
+    return false;
   }
 
   /**

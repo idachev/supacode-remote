@@ -11,6 +11,8 @@ import { EventEmitter } from 'node:events';
 import { ATTACH_SCROLLBACK, isTerminalStream } from './protocol.mjs';
 
 export const TAB_NEW_TIMEOUT_MS = 12_000;
+/** Отговори на заявки със `id`, които се връщат към страницата с нейния `ref`. */
+const REPLIES = ['suggest', 'tab.new', 'error'];
 /** Текстът от полето и неговият Enter тръгват на толкова един от друг (ОП33). */
 export const LINE_ENTER_DELAY_MS = 150;
 
@@ -96,17 +98,14 @@ export class HostController extends EventEmitter {
       this.emit('message', { t: 'error', ref, kind: 'suggest', message: 'Няма отворен таб' });
       return false;
     }
-    return this.#request({ t: 'suggest', contentId: this.openContentId }, 'suggest', ref, this.tabNewTimeoutMs);
+    return this.#request({ t: 'suggest', contentId: this.openContentId }, { kind: 'suggest', ref });
   }
 
   /** Нов таб; `cols`/`rows` — началният размер (ОП27), само заедно и само цели числа. */
-  newTab(worktreeId, cols, rows, ref) {
-    const message = { t: 'tab.new', worktreeId };
-    if (Number.isInteger(cols) && Number.isInteger(rows) && cols > 0 && rows > 0) {
-      message.cols = cols;
-      message.rows = rows;
-    }
-    return this.#request(message, 'tab.new', ref, this.tabNewTimeoutMs);
+  newTab({ worktreeId, cols, rows, ref }) {
+    const sized = Number.isInteger(cols) && Number.isInteger(rows) && cols > 0 && rows > 0;
+    const message = sized ? { t: 'tab.new', worktreeId, cols, rows } : { t: 'tab.new', worktreeId };
+    return this.#request(message, { kind: 'tab.new', ref });
   }
 
   /** Нов ключ за връзка: старият таб и списъкът са на стария relay. */
@@ -123,22 +122,19 @@ export class HostController extends EventEmitter {
 
   // ---- вътрешно ----
 
-  #request(message, kind, ref, timeoutMs) {
-    if (this.relay.state.hostSession == null) {
-      this.emit('message', { t: 'error', ref, kind, message: 'Няма връзка с Mac-а' });
+  /** Заявка с `id`; отговорът (или грешка, или таймаут) стига до страницата с нейния `ref`. */
+  #request(message, request) {
+    const fail = (text) => {
+      this.emit('message', { t: 'error', ...request, message: text });
       return false;
-    }
+    };
+    if (this.relay.state.hostSession == null) return fail('Няма връзка с Mac-а');
     const id = this.relay.nextId();
-    if (!this.relay.send({ ...message, id })) {
-      this.emit('message', { t: 'error', ref, kind, message: 'Няма връзка — не е изпратено' });
-      return false;
-    }
+    if (!this.relay.send({ ...message, id })) return fail('Няма връзка — не е изпратено');
     const timer = setTimeout(() => {
-      if (!this.pending.delete(id)) return;
-      const text = kind === 'tab.new' ? 'Mac-ът не отвори таб навреме' : 'Mac-ът не отговори навреме';
-      this.emit('message', { t: 'error', ref, kind, message: text });
-    }, timeoutMs);
-    this.pending.set(id, { kind, ref, timer });
+      if (this.pending.delete(id)) fail(request.kind === 'tab.new' ? 'Mac-ът не отвори таб навреме' : 'Mac-ът не отговори навреме');
+    }, this.tabNewTimeoutMs);
+    this.pending.set(id, { ...request, timer });
     return true;
   }
 
@@ -165,29 +161,33 @@ export class HostController extends EventEmitter {
   }
 
   #onMessage(message) {
-    if (message.t === 'list') {
-      this.lastList = { ...message, id: null };
-      this.emit('message', this.lastList);
-      return;
-    }
-    if (isTerminalStream(message)) {
-      // Закъснели кадри от предишния таб не стигат до екрана.
-      if (message.contentId !== this.openContentId) return;
-      if (message.t === 'attached' && message.id != null && message.id !== this.lastAttachId) return;
-      this.emit('message', message);
-      return;
-    }
-    if (message.t === 'suggest' || message.t === 'tab.new' || message.t === 'error') {
-      const request = message.id != null ? this.pending.get(message.id) : null;
-      if (request) {
-        clearTimeout(request.timer);
-        this.pending.delete(message.id);
-        if (message.t === 'tab.new') this.refresh();
-        this.emit('message', { ...message, ref: request.ref, kind: request.kind });
-        return;
-      }
+    if (message.t === 'list') this.#onList(message);
+    else if (isTerminalStream(message)) this.#onTerminal(message);
+    else if (REPLIES.includes(message.t)) this.#onReply(message);
+  }
+
+  #onList(message) {
+    this.lastList = { ...message, id: null };
+    this.emit('message', this.lastList);
+  }
+
+  /** Закъснели кадри от предишния таб или от стар attach не стигат до екрана. */
+  #onTerminal(message) {
+    if (message.contentId !== this.openContentId) return;
+    if (message.t === 'attached' && message.id != null && message.id !== this.lastAttachId) return;
+    this.emit('message', message);
+  }
+
+  #onReply(message) {
+    const request = message.id != null ? this.pending.get(message.id) : null;
+    if (!request) {
       // Грешка без наша заявка (напр. „not attached“) — пак се показва, както в Android.
       if (message.t === 'error') this.emit('message', message);
+      return;
     }
+    clearTimeout(request.timer);
+    this.pending.delete(message.id);
+    if (message.t === 'tab.new') this.refresh();
+    this.emit('message', { ...message, ref: request.ref, kind: request.kind });
   }
 }

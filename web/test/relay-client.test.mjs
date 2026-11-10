@@ -92,7 +92,7 @@ test('нов таб с размера на прозореца', async () => {
   const c = connect();
   c.host.setActive(true);
   await waitFor(() => c.relay.state.hostSession != null, 'сесия');
-  c.host.newTab('wt-main', 90, 30, 'r1');
+  c.host.newTab({ worktreeId: 'wt-main', cols: 90, rows: 30, ref: 'r1' });
   const reply = await waitFor(() => c.messages.find((m) => m.t === 'tab.new'), 'tab.new');
   assert.equal(reply.ref, 'r1');
   assert.equal(reply.worktreeId, 'wt-main');
@@ -102,7 +102,7 @@ test('нов таб с размера на прозореца', async () => {
   // Новият таб е в следващия list.
   await waitFor(() => c.messages.some((m) => m.t === 'list' &&
     m.repos.some((r) => r.worktrees.some((w) => w.tabs.some((t) => t.contentId === reply.contentId)))), 'табът в list');
-  c.host.newTab('wt-missing', 90, 30, 'r2');
+  c.host.newTab({ worktreeId: 'wt-missing', cols: 90, rows: 30, ref: 'r2' });
   const err = await waitFor(() => c.messages.find((m) => m.t === 'error' && m.ref === 'r2'), 'грешка');
   assert.match(err.message, /unknown worktree/);
   c.stop();

@@ -13,6 +13,30 @@ import { fpMacValid, pinMatches } from './lan-trust.mjs';
 
 export const LAN_CONNECT_TIMEOUT_MS = 2_500;
 
+/**
+ * TLS 1.3 сокет към Mac-а, даден чак след `secureConnect` и съвпадащ отпечатък. Сертификатът е
+ * самоподписан и името е IP: доверието е само в отпечатъка.
+ */
+function pinnedTlsSocket({ host, port }, fp, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const socket = tls.connect({ host, port, minVersion: 'TLSv1.3', maxVersion: 'TLSv1.3', rejectUnauthorized: false, ALPNProtocols: ['http/1.1'] });
+    const fail = (err) => {
+      clearTimeout(timer);
+      socket.destroy();
+      reject(err);
+    };
+    const timer = setTimeout(() => fail(new Error('LAN: няма отговор')), timeoutMs);
+    socket.once('error', fail);
+    socket.once('secureConnect', () => {
+      const cert = socket.getPeerCertificate(false);
+      if (!cert?.raw || !pinMatches(cert.raw, fp)) return fail(new Error('LAN: сертификатът не е този на Mac-а'));
+      clearTimeout(timer);
+      socket.off('error', fail);
+      resolve(socket);
+    });
+  });
+}
+
 class PinnedAgent extends https.Agent {
   constructor(fp, timeoutMs) {
     // Без keep-alive и без общи сокети: всяка връзка минава проверката сама.
@@ -21,38 +45,9 @@ class PinnedAgent extends https.Agent {
     this.timeoutMs = timeoutMs;
   }
 
+  /** `undefined`: http чака callback-а, т.е. заявката с ключа тръгва чак след проверката. */
   createConnection(options, callback) {
-    let done = false;
-    const finish = (err, socket) => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      callback(err, socket);
-    };
-    const socket = tls.connect({
-      host: options.host,
-      port: options.port,
-      minVersion: 'TLSv1.3',
-      maxVersion: 'TLSv1.3',
-      // Сертификатът е самоподписан и името е IP: доверието е само в отпечатъка по-долу.
-      rejectUnauthorized: false,
-      ALPNProtocols: ['http/1.1'],
-    });
-    const timer = setTimeout(() => {
-      socket.destroy();
-      finish(new Error('LAN: няма отговор'));
-    }, this.timeoutMs);
-    socket.once('secureConnect', () => {
-      const cert = socket.getPeerCertificate(false);
-      if (!cert?.raw || !pinMatches(cert.raw, this.fp)) {
-        socket.destroy();
-        finish(new Error('LAN: сертификатът не е този на Mac-а'));
-        return;
-      }
-      finish(null, socket);
-    });
-    socket.once('error', (err) => finish(err));
-    // undefined: http ще чака callback-а (асинхронно създаване на сокета).
+    pinnedTlsSocket(options, this.fp, this.timeoutMs).then((socket) => callback(null, socket), (err) => callback(err));
     return undefined;
   }
 }
@@ -83,48 +78,64 @@ export class LanSession {
   }
 }
 
-function connectOne(addr, port, clientKey, agent, timeoutMs, { onText, onClose }) {
+/** WebSocket към един адрес; `null`, ако адресът е невалиден (тогава `new WebSocket` хвърля). */
+function openLanSocket({ addr, port, clientKey, agent, timeoutMs }) {
+  try {
+    return new WebSocket(`wss://${addr}:${port}/lan`, {
+      agent,
+      headers: { Authorization: `Bearer ${clientKey}` },
+      handshakeTimeout: timeoutMs * 2,
+      perMessageDeflate: false,
+    });
+  } catch {
+    return null;
+  }
+}
+
+/** Отворената сесия или `null`; след отварянето подава текста и затварянето нататък. */
+function sessionFrom(ws, addr, { onText, onClose }) {
   return new Promise((resolve) => {
     let session = null;
-    let settled = false;
-    let ws;
-    try {
-      ws = new WebSocket(`wss://${addr}:${port}/lan`, {
-        agent,
-        headers: { Authorization: `Bearer ${clientKey}` },
-        handshakeTimeout: timeoutMs * 2,
-        perMessageDeflate: false,
-      });
-    } catch {
-      // Невалиден адрес хвърля веднага; опитът е просто неуспешен.
-      resolve(null);
-      return;
-    }
-    const settle = (value) => {
-      if (settled) return;
-      settled = true;
-      resolve(value);
-    };
     ws.on('open', () => {
       session = new LanSession(ws, addr);
-      settle(session);
+      resolve(session);
     });
     ws.on('message', (data, isBinary) => {
       if (session && !isBinary) onText?.(session, data.toString('utf8'));
     });
-    ws.on('unexpected-response', (_req, res) => {
-      res.resume();
-      ws.terminate();
-    });
-    ws.on('error', () => { /* close идва след error */ });
+    endOnFailure(ws);
     ws.on('close', (code) => {
-      settle(null);
-      if (session && !session.closed) {
-        session.closed = true;
-        onClose?.(session, `затворена (${code})`);
-      }
+      resolve(null);
+      ended(session, code, onClose);
     });
   });
+}
+
+/** Отказ при upgrade (напр. 401) и грешка завършват с `close`, където се решава всичко. */
+function endOnFailure(ws) {
+  ws.on('unexpected-response', (_req, res) => {
+    res.resume();
+    ws.terminate();
+  });
+  ws.on('error', () => {});
+}
+
+/** Отворена сесия, която падне, казва го веднъж. */
+function ended(session, code, onClose) {
+  if (!session || session.closed) return;
+  session.closed = true;
+  onClose?.(session, `затворена (${code})`);
+}
+
+function connectOne(target, callbacks) {
+  const ws = openLanSocket(target);
+  return ws ? sessionFrom(ws, target.addr, callbacks) : Promise.resolve(null);
+}
+
+/** fpMac пази само отпечатъка, не адресите и порта: relay-ят може да ги смени. */
+function validTargets(info) {
+  if (!Number.isInteger(info.port) || info.port < 1 || info.port > 65535) return [];
+  return (info.addrs ?? []).filter((addr) => net.isIP(addr) !== 0);
 }
 
 /**
@@ -133,12 +144,9 @@ function connectOne(addr, port, clientKey, agent, timeoutMs, { onText, onClose }
  */
 export async function connectLan(info, clientKey, { timeoutMs = LAN_CONNECT_TIMEOUT_MS, onText, onClose } = {}) {
   if (!info?.fp || !fpMacValid(clientKey, info.fp, info.fpMac)) return null;
-  // fpMac пази само отпечатъка, не адресите и порта: relay-ят може да ги смени.
-  if (!Number.isInteger(info.port) || info.port < 1 || info.port > 65535) return null;
   const agent = new PinnedAgent(info.fp, timeoutMs);
-  for (const addr of info.addrs ?? []) {
-    if (net.isIPv4(addr) === false && net.isIPv6(addr) === false) continue;
-    const session = await connectOne(addr, info.port, clientKey, agent, timeoutMs, { onText, onClose });
+  for (const addr of validTargets(info)) {
+    const session = await connectOne({ addr, port: info.port, clientKey, agent, timeoutMs }, { onText, onClose });
     if (session) return session;
   }
   return null;
