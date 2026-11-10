@@ -62,6 +62,8 @@ const link = new LocalLink({
   },
   onDown: () => {
     ui.linkUp = false;
+    // Отговорите на чакащите заявки няма да дойдат: Node е рестартиран.
+    dropRequests();
     render();
   },
   onMessage,
@@ -69,7 +71,7 @@ const link = new LocalLink({
 
 const terminal = new TerminalView($('term'), $('term-area'), {
   onInput: (b64) => {
-    if (ui.phase === 'live') link.send({ t: 'input', b64 });
+    if (ui.phase === 'live') link.send({ t: 'input', b64, contentId: ui.openContentId });
   },
 });
 
@@ -136,7 +138,20 @@ function onMessage(m) {
       }
       break;
     case 'replaced':
+      // Отговорите вече отиват към другата страница.
+      dropRequests();
       $('replaced').hidden = false;
+      break;
+    case 'reset':
+      // Нов ключ за връзка: табът и списъкът са на стария relay.
+      ui.list = null;
+      ui.listText = '';
+      ui.openContentId = null;
+      ui.phase = 'none';
+      terminal.clear();
+      history.replaceState(null, '', location.pathname);
+      dropRequests();
+      render();
       break;
     default:
       break;
@@ -173,6 +188,12 @@ function newTab(worktreeId) {
   renderSessions();
 }
 
+function dropRequests() {
+  ui.suggestRef = null;
+  closeSuggestions();
+  if (ui.newTabRef) finishNewTab();
+}
+
 function finishNewTab() {
   ui.newTabRef = null;
   ui.newTabWorktreeId = null;
@@ -191,9 +212,12 @@ function moveWorktree(step) {
   const order = worktreeOrder(sessionRows(ui.list, ui.collapsed, ''));
   if (!order.length) return;
   const found = currentTab();
-  const i = found ? order.findIndex((r) => r.worktree.id === found.worktree.id) : -1;
+  // Без отворен таб: → тръгва от първия, ← от последния.
+  const at = found ? order.findIndex((r) => r.worktree.id === found.worktree.id) : -1;
+  const i = at >= 0 ? at : step > 0 ? -1 : 0;
   for (let k = 1; k <= order.length; k++) {
-    const wt = order[(i + step * k + order.length * k) % order.length].worktree;
+    const n = order.length;
+    const wt = order[(((i + step * k) % n) + n) % n].worktree;
     const tabs = wt.tabs ?? [];
     if (!tabs.length) continue;
     openTab((tabs.find((t) => t.focused) ?? tabs[0]).contentId);
@@ -212,8 +236,12 @@ function toggleLine(show = $('line-form').hidden) {
 /** Текстът и Enter като два `input`: бързо дошло парче Claude Code взима за paste. */
 function sendLine(text) {
   if (ui.phase !== 'live') return;
-  if (text) link.send({ t: 'input', b64: encodeText(text) });
-  setTimeout(() => link.send({ t: 'input', b64: encodeText('\r') }), text ? LINE_ENTER_DELAY_MS : 0);
+  // Табът се хваща сега: Enter след смяна на таба не бива да отиде в новия (Node го отказва).
+  const contentId = ui.openContentId;
+  if (text) link.send({ t: 'input', b64: encodeText(text), contentId });
+  setTimeout(() => {
+    if (ui.openContentId === contentId) link.send({ t: 'input', b64: encodeText('\r'), contentId });
+  }, text ? LINE_ENTER_DELAY_MS : 0);
 }
 
 function requestSuggestions() {
@@ -550,7 +578,12 @@ function handleShortcut(e) {
 // В capture фазата, за да не стигне комбинацията до xterm.js или до полето.
 window.addEventListener('keydown', (e) => {
   if (e.ctrlKey && e.metaKey) handleShortcut(e);
-  else if (e.key === 'Escape' && !$('suggestions').hidden) closeSuggestions();
+  else if (e.key === 'Escape' && !$('suggestions').hidden) {
+    // Esc само затваря предложенията: към агента би прекъснал работата му.
+    e.preventDefault();
+    e.stopPropagation();
+    closeSuggestions();
+  }
 }, true);
 
 render();

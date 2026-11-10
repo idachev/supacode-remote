@@ -102,7 +102,7 @@ test('втора страница взима управлението, първ�
   await waitFor(() => a.last('replaced'), 'replaced за A');
   // Входът от A вече не стига до Mac-а.
   const before = mock.log().length;
-  a.send({ t: 'input', b64: Buffer.from('echo from-a\r').toString('base64') });
+  a.send({ t: 'input', b64: Buffer.from('echo from-a\r').toString('base64'), contentId: 'content-shell-main' });
   await new Promise((r) => setTimeout(r, 200));
   assert.ok(!mock.log().slice(before).includes('from-a'));
 
@@ -115,4 +115,26 @@ test('втора страница взима управлението, първ�
   await waitFor(() => a.got.filter((m) => m.t === 'attached').length === 2, 'нов attached на A');
   a.ws.close();
   b.ws.close();
+});
+
+test('нов ключ за връзка чисти таба и списъка на страницата', async () => {
+  const p = page();
+  await p.opened;
+  await waitFor(() => p.last('state')?.hostSession != null, 'сесия');
+  p.send({ t: 'open', contentId: 'content-shell-main' });
+  await waitFor(() => p.last('attached'), 'attached');
+  // Същият ключ — нищо не се чисти.
+  p.send({ t: 'setup', connectionKey: mock.connectionKey });
+  await waitFor(() => p.got.filter((m) => m.t === 'setup.result').length === 1, 'setup.result');
+  assert.equal(p.last('reset'), undefined);
+  assert.equal(app.host.openContentId, 'content-shell-main');
+  // Друг ключ (relay-ят го отказва) — табът и списъкът са на стария.
+  p.send({ t: 'setup', connectionKey: `http://127.0.0.1:${mock.port}/other-key` });
+  await waitFor(() => p.last('reset'), 'reset');
+  assert.equal(app.host.openContentId, null);
+  assert.equal(app.host.lastList, null);
+  await waitFor(() => p.last('state')?.connection === 'unauthorized', 'unauthorized');
+  p.send({ t: 'setup', connectionKey: mock.connectionKey });
+  await waitFor(() => p.last('state')?.hostSession != null, 'пак сесия');
+  p.ws.close();
 });

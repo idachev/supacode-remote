@@ -58,13 +58,21 @@ export class HostController extends EventEmitter {
     this.lastAttachId = null;
   }
 
-  input(b64) {
-    if (!this.openContentId || this.relay.state.hostSession == null) return false;
+  /**
+   * Вход за таба `contentId`. Друг таб (закъснял Enter след смяна на таба) не получава нищо:
+   * байтовете биха изпълнили наполовина написан ред там.
+   */
+  input(b64, contentId) {
+    if (!this.openContentId || contentId !== this.openContentId) return false;
+    if (this.relay.state.hostSession == null) return false;
     return this.relay.send({ t: 'input', contentId: this.openContentId, b64 });
   }
 
   suggest(ref) {
-    if (!this.openContentId) return false;
+    if (!this.openContentId) {
+      this.emit('message', { t: 'error', ref, kind: 'suggest', message: 'Няма отворен таб' });
+      return false;
+    }
     return this.#request({ t: 'suggest', contentId: this.openContentId }, 'suggest', ref, this.tabNewTimeoutMs);
   }
 
@@ -76,6 +84,12 @@ export class HostController extends EventEmitter {
       message.rows = rows;
     }
     return this.#request(message, 'tab.new', ref, this.tabNewTimeoutMs);
+  }
+
+  /** Нов ключ за връзка: старият таб и списъкът са на стария relay. */
+  reset() {
+    this.close();
+    this.lastList = null;
   }
 
   /** `list` веднага. Без онлайн host не праща нищо: relay-ят би отговорил с грешка. */

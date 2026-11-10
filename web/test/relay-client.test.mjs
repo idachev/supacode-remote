@@ -42,8 +42,10 @@ test('онлайн Mac — hello, LAN път, list и терминал с вхо
   const attached = await waitFor(() => c.messages.find((m) => m.t === 'attached'), 'attached');
   assert.equal(attached.contentId, 'content-shell-main');
   assert.equal(attached.cols, 120);
-  c.host.input(Buffer.from('echo web-$((40+2))\r').toString('base64'));
+  c.host.input(Buffer.from('echo web-$((40+2))\r').toString('base64'), c.host.openContentId);
   await waitFor(() => c.text('content-shell-main').includes('web-42'), 'ехото на командата');
+  // Вход за друг таб (закъснял Enter след смяна) не тръгва.
+  assert.equal(c.host.input(Buffer.from('\r').toString('base64'), 'content-idle'), false);
   c.stop();
 });
 
@@ -54,11 +56,11 @@ test('LAN пада — обратно на relay-а и нов attach сам', as
   c.host.open('content-idle');
   await waitFor(() => c.messages.filter((m) => m.t === 'attached').length === 1, 'първи attached');
   const session = c.relay.state.hostSession;
-  c.host.input(Buffer.from('mock-lan-off\r').toString('base64'));
+  c.host.input(Buffer.from('mock-lan-off\r').toString('base64'), c.host.openContentId);
   await waitFor(() => c.relay.state.path === 'relay', 'relay път');
   assert.ok(c.relay.state.hostSession > session);
   await waitFor(() => c.messages.filter((m) => m.t === 'attached').length === 2, 'attached по relay-а');
-  c.host.input(Buffer.from('mock-lan-on\r').toString('base64'));
+  c.host.input(Buffer.from('mock-lan-on\r').toString('base64'), c.host.openContentId);
   // Нов hello по relay-а носи пак `lan` и пътят се връща на LAN, с нов attach.
   await waitFor(() => c.relay.state.path === 'lan', 'пак LAN', 10_000);
   await waitFor(() => c.messages.filter((m) => m.t === 'attached').length === 3, 'attached по LAN');
@@ -73,16 +75,16 @@ test('Mac-ът изчезва от relay-а и се връща — нов attach
   c.host.open('content-codex');
   await waitFor(() => c.messages.some((m) => m.t === 'attached'), 'attached');
   if (c.relay.state.path === 'lan') {
-    c.host.input(Buffer.from('mock-lan-off\r').toString('base64'));
+    c.host.input(Buffer.from('mock-lan-off\r').toString('base64'), c.host.openContentId);
     await waitFor(() => c.relay.state.path === 'relay', 'relay път');
   }
   const before = c.messages.filter((m) => m.t === 'attached').length;
-  c.host.input(Buffer.from('mock-offline\r').toString('base64'));
+  c.host.input(Buffer.from('mock-offline\r').toString('base64'), c.host.openContentId);
   await waitFor(() => !c.relay.state.hostOnline, 'офлайн');
   assert.equal(c.relay.state.hostSession, null);
   await waitFor(() => c.relay.state.hostOnline, 'пак онлайн', 10_000);
   await waitFor(() => c.messages.filter((m) => m.t === 'attached').length > before, 'нов attached');
-  c.host.input(Buffer.from('mock-lan-on\r').toString('base64'));
+  c.host.input(Buffer.from('mock-lan-on\r').toString('base64'), c.host.openContentId);
   c.stop();
 });
 

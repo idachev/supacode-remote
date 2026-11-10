@@ -86,7 +86,7 @@ export class BrowserLink {
         this.host.close();
         break;
       case 'input':
-        if (typeof m.b64 === 'string') this.host.input(m.b64);
+        if (typeof m.b64 === 'string') this.host.input(m.b64, m.contentId);
         break;
       case 'suggest':
         this.host.suggest(m.ref ?? null);
@@ -115,8 +115,13 @@ export class BrowserLink {
       return;
     }
     await this.config.save({ connectionKey: String(text).trim(), selectedHostId: this.selectedHostId });
+    const same = this.settings && this.settings.baseUrl === settings.baseUrl && this.settings.apiKey === settings.apiKey;
     this.settings = settings;
-    this.host.close();
+    if (!same) {
+      // Друг relay или ключ — може и друг Mac: старият таб и списъкът вече не важат.
+      this.host.reset();
+      this.#send(ws, { t: 'reset' });
+    }
     this.relay.configure(settings, this.selectedHostId);
     this.#send(ws, { t: 'setup.result', ok: true });
     this.#sendState();

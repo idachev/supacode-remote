@@ -85,7 +85,10 @@ export function createServer({ port = 8790, configDir, relayTiming } = {}) {
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: 4 * 1024 * 1024 });
   server.on('upgrade', (req, socket, head) => {
-    const path = new URL(req.url, 'http://x').pathname;
+    let path = null;
+    try {
+      path = new URL(req.url, 'http://x').pathname;
+    } catch { /* счупен адрес — отказ по-долу */ }
     if (path !== '/ws' || !hostAllowed(req) || !originAllowed(req)) {
       socket.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n');
       return;

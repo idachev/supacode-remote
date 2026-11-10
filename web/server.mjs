@@ -2,17 +2,18 @@
 import { spawn } from 'node:child_process';
 import { createServer } from './src/http-server.mjs';
 
-const port = Number(process.env.PORT ?? 8790);
+const port = Number(process.env.PORT || 8790);
 const app = createServer({ port });
 
+let bound;
 try {
-  await app.listen();
+  bound = await app.listen();
 } catch (err) {
   console.error(`Не мога да слушам на 127.0.0.1:${port}: ${err.message}`);
   process.exit(1);
 }
 
-const url = `http://localhost:${port}`;
+const url = `http://localhost:${bound}`;
 console.log(`Supacode Remote (уеб) на ${url}  — Ctrl+C спира.`);
 if (!process.argv.includes('--no-open') && process.platform === 'darwin') {
   spawn('open', [url], { stdio: 'ignore', detached: true }).unref();

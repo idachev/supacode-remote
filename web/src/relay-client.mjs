@@ -27,6 +27,7 @@ export const DEFAULT_TIMING = Object.freeze({
   silenceLimitMs: 75_000,
   firstRetryMs: 1_000,
   maxRetryMs: 30_000,
+  handshakeTimeoutMs: 15_000,
   lanConnectTimeoutMs: 2_500,
   /** След паднал или неуспешен LAN опит: нов `hello` по relay-а след толкова, двойно до max. */
   lanRetryFirstMs: 10_000,
@@ -109,8 +110,10 @@ export class RelayClient extends EventEmitter {
 
   #set(patch) {
     let changed = false;
+    // Списъците (`hosts`) идват наново при всяко `relay` съобщение: сравнение по съдържание.
+    const same = (a, b) => a === b || (Array.isArray(a) && Array.isArray(b) && JSON.stringify(a) === JSON.stringify(b));
     for (const [k, v] of Object.entries(patch)) {
-      if (this.state[k] !== v) {
+      if (!same(this.state[k], v)) {
         this.state[k] = v;
         changed = true;
       }
@@ -196,7 +199,10 @@ export class RelayClient extends EventEmitter {
       let opened = false;
       let lastFrameAt = Date.now();
       let finished = false;
-      const ws = new WebSocket(url, { headers: { Authorization: `Bearer ${apiKey}` }, perMessageDeflate: false });
+      // handshakeTimeout: upgrade без отговор (след sleep, мрежа, която гълта заявката) иначе виси.
+      const ws = new WebSocket(url, {
+        headers: { Authorization: `Bearer ${apiKey}` }, perMessageDeflate: false, handshakeTimeout: this.timing.handshakeTimeoutMs,
+      });
       const current = () => !finished && attempt === this.attempt;
       const finish = (outcome) => {
         if (finished) return;
