@@ -3,7 +3,7 @@
 // а с `host=<id>` е свързан с този Mac.
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer as createHttpServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -61,7 +61,7 @@ async function app(config) {
   closers.push(async () => ws.close());
   const last = (t) => got.filter((m) => m.t === t).at(-1);
   const saved = async () => JSON.parse(await readFile(join(dir, 'config.json'), 'utf8'));
-  return { got, last, saved, send: (m) => ws.send(JSON.stringify(m)) };
+  return { dir, got, last, saved, send: (m) => ws.send(JSON.stringify(m)) };
 }
 
 test('без записан избор и с един Mac на линия — той се избира и записва', async () => {
@@ -107,3 +107,31 @@ test('нов relay, който не знае нито един Mac — „Mac-о
   assert.deepEqual(p.last('state').hosts, []);
   assert.equal(p.last('state').hostPick, true);
 });
+
+test('неуспешен запис — изборът остава стар и следващият опит минава', async () => {
+  const relay = await fakeRelay([{ id: 'mac-a', name: 'A', online: true }, { id: 'mac-b', name: 'B', online: true }]);
+  const p = await app({ connectionKey: relay.key });
+  await waitFor(() => p.last('state')?.hostPick === true, 'hostPick');
+  // Папка на мястото на временния файл: записът пада.
+  await mkdir(join(p.dir, 'config.json.tmp'));
+  p.send({ t: 'host.select', id: 'mac-b' });
+  await waitFor(() => p.last('error'), 'грешка');
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(p.last('state').selectedHostId, null);
+  assert.ok(relay.urls.every((u) => u === '/client'));
+  await rm(join(p.dir, 'config.json.tmp'), { recursive: true });
+  p.send({ t: 'host.select', id: 'mac-b' });
+  await waitFor(() => p.last('state')?.boundHost === 'mac-b' && p.last('state')?.hostOnline, 'свързан с B');
+  assert.equal((await p.saved()).selectedHostId, 'mac-b');
+});
+
+test('смяна към Mac извън линия — името на стария Mac не остава', async () => {
+  const relay = await fakeRelay([{ id: 'mac-a', name: 'Office Mac', online: true }, { id: 'mac-b', name: 'Home Mac', online: false }]);
+  const p = await app({ connectionKey: relay.key });
+  await waitFor(() => p.last('state')?.hostName === 'Office Mac', 'hello от A');
+  p.send({ t: 'host.select', id: 'mac-b' });
+  await waitFor(() => p.last('state')?.boundHost === 'mac-b', 'свързан с B');
+  assert.equal(p.last('state').hostOnline, false);
+  assert.equal(p.last('state').hostName, null);
+});
+

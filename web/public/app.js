@@ -88,6 +88,8 @@ function onMessage(m) {
       ui.state = m;
       // Няма какво да се избере само (няколко Mac-а или записаният го няма): „Mac-ове“ се отваря.
       if (m.hostPick && !pickBefore) showHosts();
+      // Изборът стана сам (напр. Mac излезе на линия): списъкът вече не трябва.
+      else if (!m.hostPick && pickBefore) $('hosts').hidden = true;
       else if (!$('hosts').hidden) renderHosts();
       // Връзката с Mac-а падна: Node ще закачи таба наново, щом се върне.
       if (m.hostSession == null && ui.phase === 'live') ui.phase = 'opening';

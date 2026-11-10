@@ -159,7 +159,8 @@ export class RelayClient extends EventEmitter {
       old.terminate();
     }
     this.#closeLan();
-    this.#set({ hostOnline: false, hosts: null, boundHost: null });
+    // Името и id-то са от hello на стария Mac: след смяна на Mac-а не бива да остават.
+    this.#set({ hostOnline: false, hosts: null, boundHost: null, hostName: null, hostId: null });
     this.#updateRoute();
     if (!this.settings) {
       this.#set({ connection: 'idle', retryInMs: 0, reason: null });

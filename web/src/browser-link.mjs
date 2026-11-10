@@ -103,8 +103,9 @@ export class BrowserLink {
   /** Записва избора и се свързва наново с `?host=<id>`; старият списък и таб не важат. */
   async #selectHost(id) {
     if (!this.settings || typeof id !== 'string' || !id) return;
-    this.selectedHostId = id;
+    // Първо записът: при грешка изборът остава стар, а автоматичният избор може да опита пак.
     await this.config.save({ connectionKey: this.connectionKey, selectedHostId: id });
+    this.selectedHostId = id;
     this.host.reset();
     this.#send(this.active, { t: 'reset' });
     this.relay.configure(this.settings, id);
