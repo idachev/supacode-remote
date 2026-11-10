@@ -195,6 +195,15 @@ function moveWorktree(step) {
   if (wt) openTab((wt.tabs.find((t) => t.focused) ?? wt.tabs[0]).contentId);
 }
 
+/** ЗД12: таба на Mac-а с толкова колони и редове, колкото влизат тук при шрифта от „Настройка“. */
+function resizeToScreen() {
+  const fontPx = newTabFont();
+  const grid = terminal.gridAt(fontPx);
+  if (ui.phase !== 'live' || !grid) return;
+  terminal.holdFont({ ...grid, fontPx });
+  link.send({ t: 'resize', contentId: ui.openContentId, cols: grid.cols, rows: grid.rows });
+}
+
 function toggleSidebar(hidden = !$('sessions').classList.contains('hidden')) {
   $('sessions').classList.toggle('hidden', hidden);
   writeStorage(SIDEBAR_KEY, hidden);
@@ -282,6 +291,7 @@ function wireControls() {
   on('suggest-button', 'click', requestSuggestions);
   on('line-button', 'click', () => toggleLine());
   on('copy-all-button', 'click', copyAll);
+  on('fit-button', 'click', resizeToScreen);
   on('toggle-sessions', 'click', () => toggleSidebar());
   on('search', 'input', (e) => { ui.query = e.target.value; renderSessions(); });
   on('search', 'keydown', onSearchKey);

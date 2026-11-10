@@ -145,12 +145,18 @@ export class BrowserLink {
       input: (_ws, m) => str(m.b64) && this.host.input(m.b64, m.contentId),
       line: (_ws, m) => str(m.text) && this.host.line(m.text, m.contentId),
       suggest: (_ws, m) => this.host.suggest(m.ref ?? null),
+      resize: (_ws, m) => this.#resize(m),
       'tab.new': (_ws, m) => str(m.worktreeId) && this.host.newTab({ worktreeId: m.worktreeId, cols: m.cols, rows: m.rows, ref: m.ref ?? null }),
       refresh: () => this.host.refresh(),
       'host.select': (_ws, m) => this.#selectHost(m.id),
       reconnect: () => this.relay.reconnectNow(),
       setup: (ws, m) => this.#setup(ws, m.connectionKey),
     };
+  }
+
+  #resize(m) {
+    const sent = this.host.resize({ contentId: m.contentId, cols: m.cols, rows: m.rows });
+    this.log.info('terminal.resize_requested', { cols: m.cols, rows: m.rows, sent });
   }
 
   /** Грешката отива и в лога, и в страницата като съобщение. */

@@ -93,6 +93,16 @@ export class HostController extends EventEmitter {
     return true;
   }
 
+  /**
+   * Размер на отворения таб по екрана на страницата (ЗД12, само от бутон). Host-ът ограничава до
+   * 20…500 × 5…200 и отговаря със `size`; стар host не отговаря нищо.
+   */
+  resize({ contentId, cols, rows }) {
+    if (!this.openContentId || contentId !== this.openContentId) return false;
+    if (!Number.isInteger(cols) || !Number.isInteger(rows) || this.relay.state.hostSession == null) return false;
+    return this.relay.send({ t: 'resize', contentId, cols, rows });
+  }
+
   suggest(ref) {
     if (!this.openContentId) {
       this.emit('message', { t: 'error', ref, kind: 'suggest', message: 'Няма отворен таб' });

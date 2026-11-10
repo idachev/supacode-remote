@@ -118,6 +118,24 @@ test('Ctrl+⌘+↓ сменя таба, нов таб тръгва с разме
   assert.ok(Number(rows) > 30 && Number(rows) !== 40, `rows ${rows}`);
 });
 
+test('„Размер по този екран“ сменя таба на Mac-а и шрифтът остава', async (t) => {
+  if (!browser) return t.skip('няма Google Chrome');
+  // Табът codex е с размера на Mac-а (120 × 40): шрифтът е вписан, не 14 px.
+  await page.locator('.tab', { hasText: 'codex review' }).click();
+  await waitLive();
+  const fontOf = () => page.evaluate(() => getComputedStyle(document.querySelector('.xterm-rows')).fontSize);
+  assert.notEqual(await fontOf(), '14px');
+  const from = mock.log().length;
+  await page.locator('#fit-button').click();
+  await waitFor(() => /resize content-codex \d+x\d+/.test(mock.log().slice(from)), 'resize в mock-а');
+  const [, cols, rows] = /resize content-codex (\d+)x(\d+)/.exec(mock.log().slice(from));
+  assert.notDeepEqual([Number(cols), Number(rows)], [120, 40]);
+  await waitFor(async () => (await fontOf()) === '14px', 'шрифтът е този от „Настройка“');
+  // Mac-ът връща своя размер (тук: mock-resize) — шрифтът пак се вписва.
+  await typeInTerminal('mock-resize');
+  await waitFor(async () => (await fontOf()) !== '14px', 'вписан шрифт след size от Mac-а');
+});
+
 test('презареждане отваря същия таб наново', async (t) => {
   if (!browser) return t.skip('няма Google Chrome');
   const url = page.url();

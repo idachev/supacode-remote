@@ -154,3 +154,22 @@ test('ред от полето: Enter след 150 ms, а след смяна н
   }
 });
 
+test('размер по екрана: само за отворения таб, host-ът ограничава и отговаря със size', async () => {
+  const c = connect();
+  try {
+    c.host.setActive(true);
+    await waitFor(() => c.relay.state.hostSession != null, 'сесия');
+    c.host.open('content-notes');
+    await waitFor(() => c.messages.some((m) => m.t === 'attached'), 'attached');
+    assert.equal(c.host.resize({ contentId: 'content-idle', cols: 150, rows: 45 }), false);
+    assert.equal(c.host.resize({ contentId: 'content-notes', cols: 150.5, rows: 45 }), false);
+    assert.equal(c.host.resize({ contentId: 'content-notes', cols: 150, rows: 45 }), true);
+    const size = await waitFor(() => c.messages.find((m) => m.t === 'size'), 'size');
+    assert.deepEqual([size.cols, size.rows], [150, 45]);
+    c.host.resize({ contentId: 'content-notes', cols: 9999, rows: 1 });
+    await waitFor(() => c.messages.some((m) => m.t === 'size' && m.cols === 500 && m.rows === 5), 'ограничен size');
+  } finally {
+    c.stop();
+  }
+});
+

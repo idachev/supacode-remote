@@ -145,8 +145,28 @@ export class TerminalView {
     };
   }
 
+  /**
+   * След „Размер по този екран“: докато размерът на Mac-а е поисканият, шрифтът остава този, по
+   * който е сметнат, вместо да се вписва. Друг размер (Mac-ът е върнал своя) пуска вписването.
+   */
+  holdFont({ cols, rows, fontPx }) {
+    this.held = { cols, rows, fontPx };
+  }
+
+  #heldFontApplies() {
+    const held = this.held;
+    if (!held) return false;
+    if (held.cols !== this.term.cols || held.rows !== this.term.rows) {
+      this.held = null;
+      return false;
+    }
+    this.term.options.fontSize = held.fontPx;
+    return true;
+  }
+
   /** Шрифтът, при който колоните и редовете на Mac-а влизат в мястото. */
   fit() {
+    if (this.#heldFontApplies()) return;
     const avail = this.#avail();
     if (avail.w <= 0 || avail.h <= 0) return;
     for (let i = 0; i < 4; i++) {

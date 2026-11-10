@@ -43,6 +43,7 @@ export function renderTerminalBar() {
   $('suggest-button').disabled = !live;
   $('line-button').disabled = !live;
   $('copy-all-button').disabled = ui.phase === 'none';
+  $('fit-button').disabled = !live;
 }
 
 export function renderTerminalStatus() {

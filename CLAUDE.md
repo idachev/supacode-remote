@@ -172,7 +172,8 @@ Navigation 3. compileSdk и targetSdk са 36 (template-ът иска 37, но p
   WebSocket-ът `/ws` иска `Host` и `Origin` от `localhost` / `127.0.0.1`.
 - Логиката е пренесена от Android с имената от `docs/CONTEXT.md` (`RelayClient`,
   `TerminalStreamGate`, LAN пинът). Промяна в протокола минава и през `web/src/protocol.mjs`.
-- Размерът на съществуващ таб е на Mac-а; само `tab.new` носи `cols`/`rows` от прозореца (ОП27).
+- Размерът на съществуващ таб е на Mac-а; `tab.new` носи `cols`/`rows` от прозореца (ОП27), а
+  `resize` тръгва само от бутона „Размер по този екран“ (ЗД12). Нищо автоматично.
 - xterm.js не отговаря на въпросите на програмата (parser hooks в `public/terminal.js`): отговаря
   Ghostty на Mac-а.
 

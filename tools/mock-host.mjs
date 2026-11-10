@@ -18,6 +18,9 @@
 //   mock-lan-off  — LAN endpoint-ът спира (затваря LAN връзките), `hello` вече няма `lan`;
 //   mock-lan-on   — LAN endpoint-ът тръгва пак.
 //
+// `resize` (ЗД12) сменя размера на таба, към който връзката е закачена (20…500 × 5…200), и праща
+// `size` на всички закачени към него; иначе се пренебрегва.
+//
 // `tab.new` отваря нов shell в worktree-то. С `cols` и `rows` (и двете, цели числа) той
 // тръгва с този размер, ограничен до 20…500 × 5…200; без тях — 120 × 40, както на Mac-а.
 //
@@ -348,6 +351,21 @@ function handle(c, msg) {
       session(contentId, cols, rows);
       log('tab.new', msg.worktreeId, contentId, `${cols}x${rows}`);
       send(c, { t: 'tab.new', id: msg.id, worktreeId: msg.worktreeId, tabId, contentId });
+      break;
+    }
+    case 'resize': {
+      const s = sessions.get(msg.contentId);
+      if (!s || c.attached !== msg.contentId || !Number.isInteger(msg.cols) || !Number.isInteger(msg.rows)) {
+        log('resize ignored', JSON.stringify(msg));
+        break;
+      }
+      s.cols = clamp(msg.cols, 20, 500);
+      s.rows = clamp(msg.rows, 5, 200);
+      s.proc.resize(s.cols, s.rows);
+      log('resize', msg.contentId, `${s.cols}x${s.rows}`);
+      for (const other of clients) {
+        if (other.attached === msg.contentId) send(other, { t: 'size', contentId: msg.contentId, cols: s.cols, rows: s.rows });
+      }
       break;
     }
     case 'suggest':
