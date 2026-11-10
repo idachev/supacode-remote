@@ -142,10 +142,19 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
         if (state.bars.topBar) TopAppBar(
           title = {
             Column {
-              Text(key.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
-              (state.phase as? AttachPhase.Attached)?.let {
-                Text("${it.cols} × ${it.rows}", style = MaterialTheme.typography.labelMedium)
+              val attached = state.phase as? AttachPhase.Attached
+              Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(key.title, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                attached?.let { Text("  ${it.cols} × ${it.rows}", style = MaterialTheme.typography.labelMedium, maxLines = 1) }
               }
+              // Само по натискане: телефонът иначе никога не сменя размера на таба на Mac-а.
+              if (attached != null) Text(
+                "Размер по този екран",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+                maxLines = 1,
+                modifier = Modifier.clickable(onClick = vm::fitToScreen).testTag("terminal-fit-screen"),
+              )
             }
           },
           navigationIcon = { TextButton(onClick = onBack) { Text("Назад") } },
@@ -187,6 +196,7 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
         onOverscroll = vm::onOverscroll,
         onInput = vm::onWheelInput,
         onScreenSignature = vm::onScreenSignature,
+        onGrid = vm::onGrid,
         fontSize = textSize,
         onSelection = vm::onSelection,
         // Цял екран (без горната лента и полето за писане): по един празен ред горе и долу.

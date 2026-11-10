@@ -230,4 +230,12 @@ class ProtocolCodecTest {
     )
     assertNull((ProtocolCodec.decode("""{"t":"hello","v":1,"host":"Mac"}""") as HelloReply).hostId)
   }
+
+  @Test
+  fun `resize към host-а носи таба и новия размер`() {
+    assertSameJson(
+      """{"t":"resize","contentId":"c","cols":64,"rows":38}""",
+      ProtocolCodec.encode(ResizeRequest(contentId = "c", cols = 64, rows = 38)),
+    )
+  }
 }

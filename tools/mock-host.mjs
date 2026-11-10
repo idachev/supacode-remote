@@ -17,7 +17,8 @@
 // Ключът за връзка от emulator-а: http://10.0.2.2:8787/test-key
 //
 // Специални редове, написани в кой да е таб (за ръчна проба):
-//   mock-resize   — host-ът сменя размера на 100x30 и праща `size`;
+//   mock-resize   — host-ът сменя размера на 100x30 и праща `size`
+//                   (`resize` от телефона прави същото с поискания размер, 20…500 × 5…200);
 //   mock-await    — агентът на този таб чака вход (`awaitingInput`), за известията;
 //   mock-busy     — агентът пак работи (`busy`);
 //   mock-offline  — host-ът „изчезва“ от relay-а за 5 s (`relay hostOnline:false`, после
@@ -316,6 +317,21 @@ function input(c, host, msg) {
   watchLine(s, text);
 }
 
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
+/** „Размер по този екран“ (ЗД12): само за закачен таб; host-ът ограничава и праща `size` на всички. */
+function resize(c, host, msg) {
+  const s = host.sessions.get(msg.contentId);
+  if (!s || c.attached !== msg.contentId || !Number.isInteger(msg.cols) || !Number.isInteger(msg.rows)) {
+    log('resize ignored', { host: host.id, content: msg.contentId ?? null, client: c.id });
+    return;
+  }
+  const cols = clamp(msg.cols, 20, 500);
+  const rows = clamp(msg.rows, 5, 200);
+  log('resize applied', { host: host.id, content: msg.contentId, client: c.id, cols, rows });
+  if (cols !== s.cols || rows !== s.rows) resizeSession(s, cols, rows);
+}
+
 function suggest(c, msg) {
   const suggestions = ['git status', 'echo здравей 👋', 'ls -la'];
   setTimeout(() => send(c, { t: 'suggest', id: msg.id, contentId: msg.contentId, suggestions }), 2000);
@@ -327,6 +343,7 @@ const messageHandlers = {
   attach,
   detach: (c, host, msg) => { if (c.attached === msg.contentId) c.attached = null; },
   input,
+  resize,
   suggest: (c, host, msg) => suggest(c, msg),
 };
 

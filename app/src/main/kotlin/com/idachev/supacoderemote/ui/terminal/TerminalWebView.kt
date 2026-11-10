@@ -25,6 +25,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.viewinterop.AndroidView
 import com.idachev.supacoderemote.protocol.ProtocolCodec
 import com.idachev.supacoderemote.settings.TextSize
@@ -52,6 +54,8 @@ fun TerminalWebView(
   onOverscroll: (up: Boolean) -> Unit = {},
   onInput: (String) -> Unit = {},
   onScreenSignature: (Int) -> Unit = {},
+  /** Колко колони и реда влизат в мястото на терминала (отговорът на `MeasureGrid`). */
+  onGrid: (cols: Int, rows: Int) -> Unit = { _, _ -> },
   fontSize: Int = TextSize.FIT,
   onSelection: (TerminalSelection?) -> Unit = {},
   /**
@@ -68,6 +72,9 @@ fun TerminalWebView(
   val currentOnInput by rememberUpdatedState(onInput)
   val currentOnScreenSignature by rememberUpdatedState(onScreenSignature)
   val currentOnSelection by rememberUpdatedState(onSelection)
+  val currentOnGrid by rememberUpdatedState(onGrid)
+  // Цялото място за терминала (dp), не височината на WebView-то: тя е колкото терминала на Mac-а.
+  var areaHeight by remember { mutableStateOf(0) }
   var ready by remember { mutableStateOf(false) }
   // Височината на терминала в страницата (dp); до първия доклад WebView-то е цялото място.
   var pageHeight by remember { mutableStateOf<Int?>(null) }
@@ -165,6 +172,12 @@ fun TerminalWebView(
           main.post { currentOnScreenSignature(hash) }
         }
 
+        /** Отговорът на `supa.measureGrid`: размерът, който влиза в мястото на терминала. */
+        @JavascriptInterface
+        fun grid(cols: Int, rows: Int) {
+          main.post { currentOnGrid(cols, rows) }
+        }
+
         /** Байтовете на xterm.js за скрола от `supa.wheel` (mouse report или стрелки). */
         @JavascriptInterface
         fun input(data: String) {
@@ -191,7 +204,11 @@ fun TerminalWebView(
 
   LaunchedEffect(webView, ready) {
     if (!ready) return@LaunchedEffect
-    commands.collect { cmd -> webView.evaluateJavascript(cmd.toJs(), null) }
+    commands.collect { cmd ->
+      // Мястото знае само Compose, затова тази команда носи височината му.
+      val js = if (cmd == TerminalCommand.MeasureGrid) "supa.measureGrid($areaHeight)" else cmd.toJs()
+      webView.evaluateJavascript(js, null)
+    }
   }
 
   // height е предпочитана височина: по-висок терминал взема цялото място, а страницата показва частта с курсора.
@@ -199,7 +216,14 @@ fun TerminalWebView(
   // Отстъпът е отвън, височината отвътре: по-висок терминал се свива с двата реда, а
   // страницата вижда новата височина и показва частта с курсора в нея.
   val pad = Modifier.padding(vertical = if (rowPadding) rowHeight.dp else 0.dp)
-  AndroidView(factory = { webView }, modifier = modifier.then(pad).then(size))
+  val density = LocalDensity.current
+  // Ограничението отвън, преди височината на WebView-то: това е мястото, което терминалът може да вземе.
+  val area = Modifier.layout { measurable, constraints ->
+    if (constraints.hasBoundedHeight) areaHeight = with(density) { constraints.maxHeight.toDp().value.toInt() }
+    val placeable = measurable.measure(constraints)
+    layout(placeable.width, placeable.height) { placeable.place(0, 0) }
+  }
+  AndroidView(factory = { webView }, modifier = modifier.then(pad).then(area).then(size))
 }
 
 private const val TAG = "TerminalWebView"
@@ -251,6 +275,7 @@ private fun TerminalCommand.toJs(): String = when (this) {
   is TerminalCommand.Wheel -> "supa.wheel(${if (up) -1 else 1},$lines,$programOnly)"
   TerminalCommand.ReportScreen -> "supa.reportScreen()"
   TerminalCommand.RequestText -> "supa.copyText()"
+  TerminalCommand.MeasureGrid -> error("MeasureGrid носи височината на мястото, виж TerminalWebView")
   is TerminalCommand.Select -> "supa.selectRange(${start.col},${start.row},${end.col},${end.row})"
   TerminalCommand.CopySelection -> "supa.copySelection()"
   TerminalCommand.ClearSelection -> "supa.clearSelection()"

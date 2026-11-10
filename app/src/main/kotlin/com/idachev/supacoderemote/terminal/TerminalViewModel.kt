@@ -10,6 +10,7 @@ import com.idachev.supacoderemote.protocol.ErrorReply
 import com.idachev.supacoderemote.protocol.InputRequest
 import com.idachev.supacoderemote.protocol.Output
 import com.idachev.supacoderemote.protocol.ServerMessage
+import com.idachev.supacoderemote.protocol.ResizeRequest
 import com.idachev.supacoderemote.protocol.SizeChanged
 import com.idachev.supacoderemote.protocol.SuggestRequest
 import com.idachev.supacoderemote.protocol.Suggestions
@@ -59,6 +60,9 @@ sealed interface TerminalCommand {
 
   /** Целият текст на терминала (историята и екрана) обратно към приложението, за копиране. */
   data object RequestText : TerminalCommand
+
+  /** Колко колони и реда влизат в мястото на терминала при сегашния шрифт; идва през `onGrid`. */
+  data object MeasureGrid : TerminalCommand
 
   /** Показва точно този диапазон като маркирано (след ◀ ▶ в лентата за маркиране). */
   data class Select(val start: Cell, val end: Cell) : TerminalCommand
@@ -387,6 +391,20 @@ class TerminalViewModel(
 
   private fun setBars(change: (TerminalBars) -> TerminalBars) {
     _state.update { it.copy(bars = change(it.bars)) }
+  }
+
+  /** „Размер по този екран“: първо страницата мери колко влиза, после [onGrid] праща `resize`. */
+  fun fitToScreen() {
+    _commands.trySend(TerminalCommand.MeasureGrid)
+  }
+
+  /**
+   * Размерът, който влиза в екрана. Само за закачен таб: host-ът приема `resize` само за свой
+   * attach. Отговорът е обикновеният `size`.
+   */
+  fun onGrid(cols: Int, rows: Int) {
+    if (_state.value.phase !is AttachPhase.Attached) return
+    link.send(ResizeRequest(contentId = contentId, cols = cols, rows = rows))
   }
 
   /** Иска текста на терминала; идва обратно през `onText` на WebView-то. */

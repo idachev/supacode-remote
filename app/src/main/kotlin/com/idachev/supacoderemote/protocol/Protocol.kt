@@ -43,6 +43,14 @@ data class InputRequest(val contentId: String, val b64: String) : ClientMessage
 @SerialName("suggest")
 data class SuggestRequest(val id: Int, val contentId: String) : ClientMessage
 
+/**
+ * „Размер по този екран“: host-ът прави таба [cols] × [rows] (сам ги ограничава) и праща `size` на
+ * всички закачени. Само по изрично натискане — телефонът никога не праща размер сам.
+ */
+@Serializable
+@SerialName("resize")
+data class ResizeRequest(val contentId: String, val cols: Int, val rows: Int) : ClientMessage
+
 /** Нов терминален таб в worktree [worktreeId]; отговорът е [TabNewReply] или `error` със същото [id]. */
 @Serializable
 @SerialName("tab.new")

@@ -10,6 +10,7 @@ import com.idachev.supacoderemote.protocol.Detached
 import com.idachev.supacoderemote.protocol.ErrorReply
 import com.idachev.supacoderemote.protocol.InputRequest
 import com.idachev.supacoderemote.protocol.Output
+import com.idachev.supacoderemote.protocol.ResizeRequest
 import com.idachev.supacoderemote.protocol.ServerMessage
 import com.idachev.supacoderemote.protocol.SizeChanged
 import com.idachev.supacoderemote.protocol.SuggestRequest
@@ -687,5 +688,25 @@ class TerminalViewModelTest {
     store.put("second", second)
     assertEquals(TerminalBars(topBar = false, input = false), second.state.value.bars)
     assertEquals(TerminalBars(topBar = true, input = true), first.state.value.bars)
+  }
+
+  @Test
+  fun `Размер по този екран пита страницата и праща resize с нейния размер`() = runTest(dispatcher) {
+    link.hostSession.value = 1
+    runCurrent()
+    vm.onWebReady()
+    val commands = collectCommands()
+    emit(Attached(1, "c1", 120, 40))
+    vm.fitToScreen()
+    runCurrent()
+    assertTrue(TerminalCommand.MeasureGrid in commands)
+    vm.onGrid(64, 38)
+    assertEquals(ResizeRequest("c1", 64, 38), link.sent.last())
+  }
+
+  @Test
+  fun `без attach размерът от страницата не тръгва`() = runTest(dispatcher) {
+    vm.onGrid(64, 38)
+    assertTrue(link.sent.none { it is ResizeRequest })
   }
 }

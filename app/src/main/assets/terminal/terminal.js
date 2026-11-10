@@ -4,11 +4,13 @@
 // selectStart / selectMove / selectEnd (от дългото натискане в Android), selectRange /
 // copySelection / clearSelection (от лентата за маркиране); страницата вика
 // SupaBridge.ready(), text(), copy(), selection(), selectionGone(), overscroll(), input(),
-// height() и rowHeight().
+// height(), rowHeight() и grid().
 //
 // Размерът на терминала е винаги този на Mac-а (cols × rows от `attached` и `size`).
 // Страницата никога не го сменя сама: вместо това подбира шрифта така, че всички колони
 // да влязат в ширината на екрана, или ползва фиксирания от „Размер на текста“. Zoom няма.
+// Единственото изключение е бутонът „Размер по този екран“: supa.measureGrid мери колко влиза,
+// а приложението праща `resize` към Mac-а.
 (function () {
   'use strict';
 
@@ -60,7 +62,23 @@
   // „Размер на текста“: 0 — по ширина (колоните влизат в екрана), иначе точно толкова px.
   var fixedFont = 0;
 
+  // „Размер по този екран“: размерът, поискан от Mac-а, и шрифтът, при който е мерен. Докато
+  // терминалът е точно толкова, шрифтът остава (иначе fit() би го наместил по ширината); друг
+  // `size` от Mac-а го освобождава.
+  var requestedGrid = null;
+
+  function keepRequestedFont() {
+    if (!requestedGrid || requestedGrid.cols !== term.cols || requestedGrid.rows !== term.rows) return false;
+    if (term.options.fontSize !== requestedGrid.font) term.options.fontSize = requestedGrid.font;
+    return true;
+  }
+
+  function releaseRequestedGrid(cols, rows) {
+    if (requestedGrid && (requestedGrid.cols !== cols || requestedGrid.rows !== rows)) requestedGrid = null;
+  }
+
   function fit() {
+    if (keepRequestedFont()) return;
     if (fixedFont > 0) {
       if (term.options.fontSize !== fixedFont) term.options.fontSize = fixedFont;
       return;
@@ -99,6 +117,7 @@
       term.write('', function () {
         releasePan();
         term.reset();
+        releaseRequestedGrid(cols, rows);
         term.resize(cols, rows);
         fit();
       });
@@ -109,6 +128,7 @@
     resize: function (cols, rows) {
       term.write('', function () {
         releasePan();
+        releaseRequestedGrid(cols, rows);
         term.resize(cols, rows);
         fit();
       });
@@ -120,6 +140,20 @@
     scrollToBottom: function () {
       releasePan();
       term.scrollToBottom();
+    },
+    /**
+     * „Размер по този екран“: колко колони влизат в ширината и колко реда в [height] (dp, цялото
+     * място за терминала) при сегашния шрифт. Отговорът е SupaBridge.grid(cols, rows).
+     */
+    measureGrid: function (height) {
+      var screen = term.element.querySelector('.xterm-screen');
+      if (!screen || !term.cols || !term.rows || !height) return;
+      var rect = screen.getBoundingClientRect();
+      var cols = Math.floor(document.documentElement.clientWidth / (rect.width / term.cols));
+      var rows = Math.floor(height / (rect.height / term.rows));
+      if (cols < 1 || rows < 1) return;
+      requestedGrid = { cols: cols, rows: rows, font: term.options.fontSize };
+      if (bridge.grid) bridge.grid(cols, rows);
     },
     /** „Размер на текста“: [px] 0 е по ширина. По-широк терминал се мести хоризонтално. */
     fontSize: function (px) {
