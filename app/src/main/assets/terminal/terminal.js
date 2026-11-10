@@ -116,6 +116,56 @@
     }
   }
 
+  // „Размер по този екран“ при „по ширина“ (решение на собственика): винаги толкова колони, а
+  // редовете — колкото влизат при шрифта, при който те запълват ширината. Иначе ситният шрифт за
+  // широкия Mac би добавил само редове.
+  var PHONE_COLS = 120;
+
+  /** Ширина и височина на клетка (CSS px) при сегашния шрифт; `null` преди първото рисуване. */
+  function cellSize() {
+    var screen = term.element.querySelector('.xterm-screen');
+    if (!screen || !term.cols || !term.rows) return null;
+    var rect = screen.getBoundingClientRect();
+    return rect.width ? { w: rect.width / term.cols, h: rect.height / term.rows } : null;
+  }
+
+  /** Фиксиран „Размер на текста“: колкото колони и реда влизат при него. */
+  function gridAtFont(height) {
+    var cell = cellSize();
+    var cols = Math.floor(document.documentElement.clientWidth / cell.w);
+    return { cols: cols, rows: Math.floor(height / cell.h), font: term.options.fontSize };
+  }
+
+  /**
+   * „По ширина“: шрифтът, при който PHONE_COLS колони влизат точно в ширината, се мери наистина
+   * (xterm.js закръгля клетките, пропорция би сбъркала с по ред на всеки няколко), после
+   * шрифтът се връща.
+   */
+  function gridAtPhoneCols(height) {
+    var current = term.options.fontSize;
+    var font = fontForCols(PHONE_COLS);
+    var rows = Math.floor(height / cellSize().h);
+    term.options.fontSize = current;
+    return { cols: PHONE_COLS, rows: rows, font: font };
+  }
+
+  /** Като fit(), но за [cols] колони вместо за тези на терминала. */
+  function fontForCols(cols) {
+    var avail = document.documentElement.clientWidth;
+    var size = term.options.fontSize;
+    for (var i = 0; i < 4; i++) {
+      var next = size * avail / (cellSize().w * cols);
+      if (Math.abs(next - size) < 0.01) break;
+      size = next;
+      term.options.fontSize = size;
+    }
+    while (cellSize().w * cols > avail && size > 2) {
+      size -= 0.1;
+      term.options.fontSize = size;
+    }
+    return size;
+  }
+
   function decode(b64) {
     var bin = atob(b64);
     var bytes = new Uint8Array(bin.length);
@@ -161,14 +211,11 @@
      * място за терминала) при сегашния шрифт. Отговорът е SupaBridge.grid(cols, rows).
      */
     measureGrid: function (height) {
-      var screen = term.element.querySelector('.xterm-screen');
-      if (!screen || !term.cols || !term.rows || !height) return;
-      var rect = screen.getBoundingClientRect();
-      var cols = Math.floor(document.documentElement.clientWidth / (rect.width / term.cols));
-      var rows = Math.floor(height / (rect.height / term.rows));
-      if (cols < 1 || rows < 1) return;
-      pendingGrid = { cols: cols, rows: rows, font: term.options.fontSize };
-      if (bridge.grid) bridge.grid(cols, rows);
+      if (!cellSize() || !height) return;
+      var grid = fixedFont > 0 ? gridAtFont(height) : gridAtPhoneCols(height);
+      if (!grid || grid.cols < 1 || grid.rows < 1) return;
+      pendingGrid = grid;
+      if (bridge.grid) bridge.grid(grid.cols, grid.rows);
     },
     /** „Размер на текста“: [px] 0 е по ширина. По-широк терминал се мести хоризонтално. */
     fontSize: function (px) {
