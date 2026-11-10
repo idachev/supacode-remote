@@ -42,6 +42,24 @@ class AgentAlerts(
 
   private var job: Job? = null
 
+  init {
+    // При смяна на Mac-а се махат всички известия „агент чака“, и тези, които tracker-ът не
+    // помни: пуснати преди изключване на известията или преди рестарт на процеса.
+    scope.launch {
+      var last = boundHostId.value
+      boundHostId.collect { current ->
+        if (current == last) return@collect
+        last = current
+        cancelAllAwaiting()
+      }
+    }
+  }
+
+  private fun cancelAllAwaiting() {
+    val manager = context.getSystemService(NotificationManager::class.java) ?: return
+    manager.activeNotifications.filter { it.tag == TAG }.forEach { manager.cancel(TAG, it.id) }
+  }
+
   fun setEnabled(enabled: Boolean) {
     job?.cancel()
     job = null
