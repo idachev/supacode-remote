@@ -5,6 +5,7 @@ import { renderBanner, renderTerminalBar, renderTerminalStatus, renderTopbar } f
 import { $, readJson, toast, writeStorage } from './dom.js';
 import { followHostPick, hideHosts, initHostsView, showHosts } from './hosts-view.js';
 import { LocalLink } from './link.js';
+import { initNotifyView, notifyAwaiting, resetAwaiting } from './notify-view.js';
 import { findTab, sessionRows, worktreeOrder } from './session-groups.js';
 import { initSessionsView, renderSessions } from './sessions-view.js';
 import { initSetupView, setupResult, showSetup } from './setup-view.js';
@@ -73,6 +74,7 @@ function onList(m) {
   const found = !ui.list && ui.openContentId ? findTab(m, ui.openContentId) : null;
   if (found) ui.expanded.add(found.worktree.id);
   ui.list = m;
+  notifyAwaiting(m);
   renderSessions();
   renderTopbar();
   renderTerminalBar();
@@ -130,6 +132,7 @@ function onReset() {
   ui.listText = '';
   ui.openContentId = null;
   ui.phase = 'none';
+  resetAwaiting();
   terminal.clear();
   history.replaceState(null, '', location.pathname);
   dropRequests();
@@ -312,6 +315,7 @@ function wireControls() {
 }
 
 initSessionsView({ openTab, newTab });
+initNotifyView({ onOpen: openTab });
 initHostsView((id) => link.send({ t: 'host.select', id }));
 initSetupView({ onSave: (connectionKey) => link.send({ t: 'setup', connectionKey }), onClosed: () => terminal.focus() });
 initSuggestions({ link, terminal });

@@ -27,7 +27,7 @@ before(async () => {
   }
   if (!browser) return;
   page = await browser.newPage({ viewport: { width: 1400, height: 850 } });
-  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: base });
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write', 'notifications'], { origin: base });
 });
 
 after(async () => {
@@ -161,6 +161,38 @@ test('OSC 52 от програмата копира в clipboard-а на бра�
   await new Promise((r) => setTimeout(r, 500));
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), 'копирано от Mac-а');
   assert.ok(!/1b5d3532/.test(mock.log().slice(from)), 'отговор с OSC 52 към PTY-то');
+});
+
+test('„агент чака“: известие при преход, когато страницата не е пред очите (УА2)', async (t) => {
+  if (!browser) return t.skip('няма Google Chrome');
+  // Chrome без прозорец не показва известия: записваме ги и казваме, че прозорецът не е на фокус.
+  await page.evaluate(() => {
+    window.notes = [];
+    window.Notification = class {
+      static permission = 'granted';
+      static requestPermission = async () => 'granted';
+      constructor(title, options) { Object.assign(this, { title, ...options }); window.notes.push(this); }
+      close() {}
+    };
+    document.hasFocus = () => false;
+  });
+  await page.locator('#setup-button').click();
+  await page.locator('#setup-notify').check();
+  await page.locator('#setup-cancel').click();
+  await page.locator('.tab', { hasText: 'codex review' }).click();
+  await waitLive();
+  await typeInTerminal('mock-await');
+  await waitFor(async () => (await page.evaluate(() => window.notes.length)) === 1, 'едно известие');
+  const note = await page.evaluate(() => ({ title: window.notes[0].title, body: window.notes[0].body }));
+  assert.equal(note.title, 'Агент чака вход');
+  assert.match(note.body, /codex review$/);
+  // Щракване по известието отваря таба.
+  await page.locator('.tab', { hasText: 'claude' }).click();
+  await waitLive();
+  await page.evaluate(() => window.notes[0].onclick());
+  await waitFor(() => page.url().endsWith('#c=content-codex'), 'табът от известието');
+  await waitLive();
+  await typeInTerminal('mock-busy');
 });
 
 test('презареждане отваря същия таб наново', async (t) => {
