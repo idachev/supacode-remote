@@ -33,6 +33,8 @@ function hostRow(h) {
   row.append(el('span', 'name', hostLabel(h)));
   row.append(el('span', h.online ? 'online' : 'offline', h.online ? 'на линия' : 'извън линия'));
   if (h.id === ui.state?.selectedHostId) row.append(el('span', 'badge', 'избран'));
+  // Версията (УА6) е от `hello`, значи е известна само за Mac-а, с който сме свързани.
+  if (h.id === ui.state?.boundHost && ui.state?.hostApp) row.append(el('span', 'app', ui.state.hostApp));
   row.addEventListener('click', () => {
     hideHosts();
     if (h.id !== ui.state?.selectedHostId) selectHost(h.id);

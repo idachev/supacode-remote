@@ -41,10 +41,12 @@ code { background: var(--panel-2); padding: 1px 4px; border-radius: 4px; }
 .host-name { font-weight: 600; background: none; border-color: transparent; padding: 3px 6px; }
 .host-name:disabled { opacity: 1; cursor: default; }
 .host-list { display: flex; flex-direction: column; gap: 4px; }
-.host-row { display: flex; align-items: center; gap: 10px; text-align: left; padding: 8px 10px; }
+.host-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; text-align: left; padding: 8px 10px; }
 .host-row .name { flex: 1; font-weight: 600; }
 .host-row .online { color: var(--accent); }
 .host-row .offline { color: var(--muted); }
+/* Версията на Supacode е на свой ред: с датата и sha е дълга. */
+.host-row .app { flex-basis: 100%; color: var(--muted); font-size: 12px; }
 .chip { font-size: 11px; padding: 1px 8px; border-radius: 10px; border: 1px solid var(--accent); color: var(--accent); }
 .chip.relay { border-color: var(--muted); color: var(--muted); }
 
