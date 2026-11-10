@@ -69,6 +69,17 @@ fun boundHostName(): String? {
   return HostLabels.boundName(hosts, boundHostId, hostName)
 }
 
+/** Какво казва банерът, когато свързаният Mac не е на линия, или когато няма свързан. */
+@Composable
+private fun hostOfflineText(): String {
+  val relay = LocalAppContainer.current.relay
+  val boundHostId by relay.boundHostId.collectAsStateWithLifecycle()
+  val multiHost by relay.multiHost.collectAsStateWithLifecycle()
+  val boundName = boundHostName()
+  if (multiHost && boundHostId == null) return "Няма избран Mac"
+  return boundName?.let { HostLabels.offlineBanner(it) } ?: "Mac-ът е офлайн"
+}
+
 /** Лентата под заглавието: няма връзка, Mac-ът е офлайн, грешен ключ. При добра връзка я няма. */
 @Composable
 fun ConnectionBanner(modifier: Modifier = Modifier) {
@@ -76,15 +87,9 @@ fun ConnectionBanner(modifier: Modifier = Modifier) {
   val state by relay.state.collectAsStateWithLifecycle()
   val hostOnline by relay.hostOnline.collectAsStateWithLifecycle()
   val path by relay.path.collectAsStateWithLifecycle()
-  val boundHostId by relay.boundHostId.collectAsStateWithLifecycle()
-  val multiHost by relay.multiHost.collectAsStateWithLifecycle()
-  val boundName = boundHostName()
+  val offlineText = hostOfflineText()
   // По LAN Mac-ът е там, каквото и да казва relay-ът.
   if (path == LinkPath.LAN) return
-  val offlineText = when {
-    multiHost && boundHostId == null -> "Няма избран Mac"
-    else -> boundName?.let { HostLabels.offlineBanner(it) } ?: "Mac-ът е офлайн"
-  }
   val text: String = when (val s = state) {
     ConnectionState.Idle -> return
     ConnectionState.Connecting -> "Свързване с relay-а…"

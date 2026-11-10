@@ -48,15 +48,14 @@ fun MainNavigation() {
     if (backStack.size > 1 && backStack.lastOrNull() == key) backStack.removeLastOrNull()
   }
 
-  // Relay-ят казва, че потребителят трябва да избере Mac (АН2): „Mac-ове“ веднъж на всяко
-  // поискване. Не над „Настройка“ — там се чака, докато тя се затвори.
-  val pickRequests by container.relay.hostPickRequests.collectAsStateWithLifecycle()
-  val top = backStack.lastOrNull()
-  LaunchedEffect(pickRequests, top) {
-    if (pickRequests <= container.handledHostPicks || top is SetupKey) return@LaunchedEffect
-    container.handledHostPicks = pickRequests
-    // Поискано, докато екранът не се е виждал, и вече решено (напр. автоматичен избор): нищо.
-    if (top !is HostsKey && container.relay.hostPickPending.value) backStack.add(HostsKey)
+  OpenHostsWhenAsked(backStack)
+
+  // Друг Mac: worktree и терминал в стека са от стария — само „Сесии“ остава. Същият Mac:
+  // връзката не се сменя и отвореното под „Mac-ове“ остава.
+  fun pickHost(id: String, hostsKey: NavKey) {
+    if (id == container.relay.boundHostId.value && backStack.size > 1) return closeScreen(hostsKey)
+    container.relay.selectHost(id)
+    resetTo(SessionsKey)
   }
 
   // 401 от relay-а: ключът е грешен, връщаме към „Настройка“ с обяснение.
@@ -119,16 +118,7 @@ fun MainNavigation() {
           HostsScreen(
             canGoBack = backStack.size > 1,
             onBack = { closeScreen(key) },
-            // Worktree и терминал в стека са от стария Mac — само „Сесии“ остава.
-            onPick = { id ->
-              if (id == container.relay.boundHostId.value && backStack.size > 1) {
-                // Същият Mac: връзката не се сменя, отвореното под „Mac-ове“ остава.
-                closeScreen(key)
-              } else {
-                container.relay.selectHost(id)
-                resetTo(SessionsKey)
-              }
-            },
+            onPick = { id -> pickHost(id, key) },
           )
         }
         entry<WorktreeKey> { key ->
@@ -148,5 +138,22 @@ fun MainNavigation() {
       // Горе, под лентата: долу е полето за писане на терминала.
       modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 56.dp),
     )
+  }
+}
+
+/**
+ * Relay-ят казва, че потребителят трябва да избере Mac (АН2): „Mac-ове“ веднъж на всяко
+ * поискване. Не над „Настройка“ — там се чака, докато тя се затвори. Поискано, докато екранът не
+ * се е виждал, и вече решено (напр. автоматичен избор) — нищо.
+ */
+@Composable
+private fun OpenHostsWhenAsked(backStack: MutableList<NavKey>) {
+  val container = LocalAppContainer.current
+  val pickRequests by container.relay.hostPickRequests.collectAsStateWithLifecycle()
+  val top = backStack.lastOrNull()
+  LaunchedEffect(pickRequests, top) {
+    if (pickRequests <= container.handledHostPicks || top is SetupKey) return@LaunchedEffect
+    container.handledHostPicks = pickRequests
+    if (top !is HostsKey && container.relay.hostPickPending.value) backStack.add(HostsKey)
   }
 }

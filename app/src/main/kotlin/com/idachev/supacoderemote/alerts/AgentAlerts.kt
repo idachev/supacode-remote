@@ -66,30 +66,39 @@ class AgentAlerts(
     if (!enabled) return
     createChannels(context)
     // Нов tracker при всяко включване: чакащите в този момент дават известие, ако сме във фон.
-    val tracker = AwaitingTracker()
+    val watch = HostWatch(AwaitingTracker(), boundHostId.value)
     job = scope.launch {
-      var hostId = boundHostId.value
-      // Един събирач за двете, за да не се засичат списък и смяна на Mac-а в tracker-а. Смяната
-      // се познава по текущия Mac при всяко събитие: списъкът на новия Mac може да дойде преди
-      // самото събитие за смяната.
+      // Един събирач за двете, за да не се засичат списък и смяна на Mac-а в tracker-а.
       merge(
         repos.filterNotNull().map { AlertEvent.List(it) },
         boundHostId.map { AlertEvent.HostChanged },
-      ).collect { event ->
-        val current = boundHostId.value
-        if (current != hostId) {
-          tracker.reset().forEach { cancel(hostId, it) }
-          hostId = current
-        }
-        when (event) {
-          AlertEvent.HostChanged -> Unit
-          is AlertEvent.List -> {
-            val changes = tracker.update(event.repos)
-            changes.ended.forEach { cancel(hostId, it) }
-            if (!appInForeground.value) changes.started.forEach { post(hostId, it) }
-          }
-        }
-      }
+      ).collect { watch.onEvent(it) }
+    }
+  }
+
+  /** Известията на свързания Mac: кой е той ([hostId]) и кои табове вече чакат ([tracker]). */
+  private inner class HostWatch(private val tracker: AwaitingTracker, private var hostId: String?) {
+
+    fun onEvent(event: AlertEvent) {
+      followBoundHost()
+      if (event is AlertEvent.List) onList(event.repos)
+    }
+
+    /**
+     * Смяната се познава по текущия Mac при всяко събитие: списъкът на новия Mac може да дойде
+     * преди самото събитие за смяната.
+     */
+    private fun followBoundHost() {
+      val current = boundHostId.value
+      if (current == hostId) return
+      tracker.reset().forEach { cancel(hostId, it) }
+      hostId = current
+    }
+
+    private fun onList(repos: List<Repository>) {
+      val changes = tracker.update(repos)
+      changes.ended.forEach { cancel(hostId, it) }
+      if (!appInForeground.value) changes.started.forEach { post(hostId, it) }
     }
   }
 

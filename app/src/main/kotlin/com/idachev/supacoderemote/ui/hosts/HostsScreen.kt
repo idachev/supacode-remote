@@ -57,17 +57,20 @@ fun HostsScreen(canGoBack: Boolean, onBack: () -> Unit, onPick: (String) -> Unit
       }
     },
   ) { padding ->
-    if (hosts.isEmpty()) {
-      Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-        Text("Relay-ят още не познава друг Mac.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-      }
-    } else {
-      LazyColumn(Modifier.fillMaxSize().padding(padding).testTag("hosts-list")) {
-        items(hosts, key = { it.id }) { host ->
-          HostRow(host, selected = host.id == bound) { onPick(host.id) }
-        }
-      }
+    Box(Modifier.fillMaxSize().padding(padding)) { HostList(hosts, bound, onPick) }
+  }
+}
+
+@Composable
+private fun HostList(hosts: List<HostInfo>, bound: String?, onPick: (String) -> Unit) {
+  if (hosts.isEmpty()) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+      Text("Relay-ят още не познава друг Mac.", color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
+    return
+  }
+  LazyColumn(Modifier.fillMaxSize().testTag("hosts-list")) {
+    items(hosts, key = { it.id }) { host -> HostRow(host, selected = host.id == bound) { onPick(host.id) } }
   }
 }
 
@@ -83,20 +86,25 @@ private fun HostRow(host: HostInfo, selected: Boolean, onClick: () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(16.dp)) {
       OnlineDot(host.online)
       Spacer(Modifier.width(12.dp))
-      Column(verticalArrangement = Arrangement.spacedBy(2.dp), modifier = Modifier.weight(1f)) {
-        Text(
-          HostLabels.displayName(host.name),
-          style = MaterialTheme.typography.bodyLarge,
-          fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
-        Text(HostLabels.status(host.online), style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
-      }
+      HostText(host, selected, Modifier.weight(1f))
       if (selected) {
         Text("избран", style = MaterialTheme.typography.labelLarge, color = colors.primary)
       }
     }
+  }
+}
+
+@Composable
+private fun HostText(host: HostInfo, selected: Boolean, modifier: Modifier) {
+  Column(verticalArrangement = Arrangement.spacedBy(2.dp), modifier = modifier) {
+    Text(
+      HostLabels.displayName(host.name),
+      style = MaterialTheme.typography.bodyLarge,
+      fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+      maxLines = 1,
+      overflow = TextOverflow.Ellipsis,
+    )
+    Text(HostLabels.status(host.online), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
   }
 }
 

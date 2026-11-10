@@ -124,10 +124,10 @@ class RelayClient(
   /** Името от `hello` на свързания Mac. При стар relay е единственото име. */
   val hostName: StateFlow<String?> = _hostName.asStateFlow()
 
-  private val _hosts = MutableStateFlow<List<HostInfo>>(emptyList())
+  private val roster = HostRoster()
 
   /** Mac-овете, които relay-ят познава, подредени от него. Празно при стар relay. */
-  val hosts: StateFlow<List<HostInfo>> = _hosts.asStateFlow()
+  val hosts: StateFlow<List<HostInfo>> = roster.hosts
 
   private val _boundHostId = MutableStateFlow(selection.selectedHostId.value)
 
@@ -138,33 +138,20 @@ class RelayClient(
    */
   val boundHostId: StateFlow<String?> = _boundHostId.asStateFlow()
 
-  private val _multiHost = MutableStateFlow(false)
-
   /** Последното `relay` е носило `hosts`: нов relay с няколко Mac-а. При стар relay — `false`. */
-  val multiHost: StateFlow<Boolean> = _multiHost.asStateFlow()
-
-  private val _hostPickRequests = MutableStateFlow(0)
+  val multiHost: StateFlow<Boolean> = roster.multiHost
 
   /**
    * Расте всеки път, когато потребителят трябва да избере Mac (виж [HostChoice]). Брояч, а не
    * флаг: списъкът идва пак и пак, а „Mac-ове“ се отваря само веднъж на преход.
    */
-  val hostPickRequests: StateFlow<Int> = _hostPickRequests.asStateFlow()
-
-  private val _hostPickPending = MutableStateFlow(false)
+  val hostPickRequests: StateFlow<Int> = roster.pickRequests
 
   /**
    * Поисканият избор още е нужен. Автоматичен избор, записан Mac в списъка или нов ключ го
    * решават, без потребителят да види „Mac-ове“ — тогава навигацията не го отваря.
    */
-  val hostPickPending: StateFlow<Boolean> = _hostPickPending.asStateFlow()
-
-  /** Вече е поискан избор и нищо не се е променило оттогава. Пази се с [lock]. */
-  private var pickAsked = false
-    set(value) {
-      field = value
-      _hostPickPending.value = value
-    }
+  val hostPickPending: StateFlow<Boolean> = roster.pickPending
 
   /**
    * Номер на текущата „сесия с host-а“: расте всеки път, когато връзката е горе и
@@ -233,10 +220,7 @@ class RelayClient(
     synchronized(lock) {
       if (newSettings == settings && _state.value != ConnectionState.Unauthorized) return
       if (newSettings != settings) {
-        // Друг relay: списъкът на стария не важи, а изборът на Mac се пита наново.
-        _hosts.value = emptyList()
-        _multiHost.value = false
-        pickAsked = false
+        roster.clear()
       }
       settings = newSettings
       restartLocked()
@@ -276,7 +260,7 @@ class RelayClient(
     synchronized(lock) {
       if (id == _boundHostId.value && id == selection.selectedHostId.value) return
       selection.setSelectedHostId(id)
-      pickAsked = false
+      roster.pickResolved()
       // Името от `hello` е на стария Mac; новият ще прати свое.
       _hostName.value = null
       restartLocked()
@@ -483,18 +467,10 @@ class RelayClient(
   private fun onRelayStatus(webSocket: WebSocket, status: RelayStatus, attempt: Int): Boolean {
     synchronized(lock) {
       if (attempt != attempts.get()) return false
-      _multiHost.value = status.hosts != null
-      status.hosts?.let { _hosts.value = it }
-      when (val decision = HostChoice.decide(selection.selectedHostId.value, status)) {
-        is HostChoice.Decision.Select -> {
-          selectHost(decision.id)
-          return false
-        }
-        HostChoice.Decision.AskUser -> if (!pickAsked) {
-          pickAsked = true
-          _hostPickRequests.value += 1
-        }
-        HostChoice.Decision.None -> pickAsked = false
+      val decision = roster.update(selection.selectedHostId.value, status)
+      if (decision is HostChoice.Decision.Select) {
+        selectHost(decision.id)
+        return false
       }
     }
     onHostOnline(webSocket, status.hostOnline, attempt)
@@ -564,7 +540,7 @@ class RelayClient(
    */
   private fun isForeignHello(hello: HelloReply): Boolean {
     val bound = _boundHostId.value
-    return _multiHost.value && hello.hostId != null && bound != null && hello.hostId != bound
+    return multiHost.value && hello.hostId != null && bound != null && hello.hostId != bound
   }
 
   /** `hello` по relay-а донесе `lan`: опит за пряка връзка, ако вече няма такава. */

@@ -70,10 +70,6 @@ fun SessionsScreen(
   // Сгънатите групи — изборът на телефона; без избор важи `collapsed` от Mac-а.
   var collapsed by rememberSaveable { mutableStateOf(mapOf<String, Boolean>()) }
   val refreshing by container.sessions.refreshing.collectAsStateWithLifecycle()
-  val boundName = boundHostName()
-  val multiHost by container.relay.multiHost.collectAsStateWithLifecycle()
-  val hostOnline by container.relay.hostOnline.collectAsStateWithLifecycle()
-  val path by container.relay.path.collectAsStateWithLifecycle()
   // Търсенето е тук, а не в хранилището: важи само докато екранът е отворен (и при завъртане).
   var query by rememberSaveable { mutableStateOf("") }
   PollSessionsWhileVisible()
@@ -82,18 +78,7 @@ fun SessionsScreen(
     topBar = {
       Column {
         TopAppBar(
-          title = {
-            Column {
-              Text("Сесии")
-              HostTitle(
-                name = boundName,
-                // По LAN Mac-ът е там, каквото и да казва relay-ът.
-                online = hostOnline || path == LinkPath.LAN,
-                // При стар relay няма списък и няма към какво да се смени.
-                onSwitch = if (multiHost) onOpenHosts else null,
-              )
-            }
-          },
+          title = { SessionsTitle(onOpenHosts) },
           actions = {
             PathChip()
             TextButton(onClick = onOpenSettings) { Text("Настройка") }
@@ -138,6 +123,25 @@ fun SessionsScreen(
         }
       }
     }
+  }
+}
+
+/** „Сесии“ и под него свързаният Mac. */
+@Composable
+private fun SessionsTitle(onOpenHosts: () -> Unit) {
+  val relay = LocalAppContainer.current.relay
+  val multiHost by relay.multiHost.collectAsStateWithLifecycle()
+  val hostOnline by relay.hostOnline.collectAsStateWithLifecycle()
+  val path by relay.path.collectAsStateWithLifecycle()
+  Column {
+    Text("Сесии")
+    HostTitle(
+      name = boundHostName(),
+      // По LAN Mac-ът е там, каквото и да казва relay-ът.
+      online = hostOnline || path == LinkPath.LAN,
+      // При стар relay няма списък и няма към какво да се смени.
+      onSwitch = if (multiHost) onOpenHosts else null,
+    )
   }
 }
 
