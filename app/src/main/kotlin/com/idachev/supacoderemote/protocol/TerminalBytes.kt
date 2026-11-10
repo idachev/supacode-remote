@@ -25,6 +25,9 @@ object TerminalKeys {
   const val TAB = "\t"
   const val CTRL_C = "\u0003"
   const val CTRL_D = "\u0004"
+
+  /** Прерисува екрана; агентите го искат веднага след `^D`. */
+  const val CTRL_L = "\u000c"
   const val UP = "\u001b[A"
   const val DOWN = "\u001b[B"
   const val RIGHT = "\u001b[C"

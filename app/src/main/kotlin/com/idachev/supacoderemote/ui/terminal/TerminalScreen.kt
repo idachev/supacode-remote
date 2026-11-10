@@ -464,6 +464,7 @@ private fun InputBar(
       KeyButton("Ctrl", highlighted = ctrlSticky) { vm.toggleCtrl() }
       KeyButton("^C") { vm.sendKey(TerminalKeys.CTRL_C) }
       KeyButton("^D") { vm.sendKey(TerminalKeys.CTRL_D) }
+      KeyButton("^L") { vm.sendKey(TerminalKeys.CTRL_L) }
       KeyButton("↑") { vm.sendKey(TerminalKeys.UP) }
       KeyButton("↓") { vm.sendKey(TerminalKeys.DOWN) }
       KeyButton("←") { vm.sendKey(TerminalKeys.LEFT) }

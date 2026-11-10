@@ -42,4 +42,10 @@ class TerminalBytesTest {
     assertNull(TerminalKeys.control('1'))
     assertNull(TerminalKeys.control('я'))
   }
+
+  @Test
+  fun `бутонът ^L праща същия байт като Ctrl и L`() {
+    assertEquals("\u000c", TerminalKeys.CTRL_L)
+    assertEquals(TerminalKeys.control('l'), TerminalKeys.CTRL_L)
+  }
 }
