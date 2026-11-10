@@ -34,7 +34,8 @@
   `multiHost: StateFlow<Boolean>` (последното `relay` е носило `hosts`) и
   `hostPickRequests: StateFlow<Int>` — брояч, расте при **преход** към `AskUser` в една
   връзка. Навигацията пуска „Mac-ове“ веднъж на стойност (пази последната обработена в
-  `rememberSaveable`), затова повтарящият се списък не я отваря пак след Back.
+  `AppContainer.handledHostPicks`, колкото живее и броячът), затова повтарящият се списък не
+  я отваря пак след Back.
 - **РШ4. `boundHostId` = id-то в URL-а на текущата връзка** (записаният избор). Не става
   `null` при reconnect или фон. Смяна е само промяна между id-та.
 - **РШ5. LAN проверка на `hostId`** само в `multiHost`, с двата id не-`null`. Чуждо `hostId`
