@@ -64,7 +64,8 @@ code { background: var(--panel-2); padding: 1px 4px; border-radius: 4px; }
 .row-group::before { content: "▾"; width: 10px; }
 .row-group.collapsed::before { content: "▸"; }
 .row-repo { margin-top: 6px; font-weight: 600; }
-.icon { width: 16px; height: 16px; flex: none; fill: currentColor; }
+/* Само SVG иконите в „Сесии“: бутоните ☰ и ? също са `.icon` и не бива да стават 16 × 16. */
+svg.icon { width: 16px; height: 16px; flex: none; fill: currentColor; }
 .row-repo .icon { color: var(--muted); }
 .row-wt .icon-worktree { color: var(--accent); }
 .row-wt .icon-open { width: 14px; height: 14px; color: var(--muted); transition: transform .12s; }
