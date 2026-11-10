@@ -48,7 +48,9 @@ function newTabFont() {
   return Number.isFinite(v) && v >= 8 && v <= 24 ? v : 14;
 }
 
-const nextRef = () => `r${++ui.refs}`;
+/** Случайно начало на всяка страница: отговор за заявка на друга страница не съвпада с наша. */
+const REF_PREFIX = Math.random().toString(36).slice(2, 10);
+const nextRef = () => `${REF_PREFIX}-${++ui.refs}`;
 
 // ---- връзката с Node ----
 
@@ -248,9 +250,14 @@ function sendLine(text) {
   if (ui.phase !== 'live') return;
   // Табът се хваща сега: Enter след смяна на таба не бива да отиде в новия (Node го отказва).
   const contentId = ui.openContentId;
+  // И връзката се хваща: текстът по паднала връзка може да е изгубен, а Enter по новата би
+  // изпълнил стария ред в shell-а.
+  const session = ui.state?.hostSession;
   if (text) link.send({ t: 'input', b64: encodeText(text), contentId });
   setTimeout(() => {
-    if (ui.openContentId === contentId) link.send({ t: 'input', b64: encodeText('\r'), contentId });
+    if (ui.openContentId === contentId && ui.state?.hostSession === session) {
+      link.send({ t: 'input', b64: encodeText('\r'), contentId });
+    }
   }, text ? LINE_ENTER_DELAY_MS : 0);
 }
 
