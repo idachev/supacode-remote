@@ -22,6 +22,8 @@ export const ui = {
   newTabRef: null,
   newTabWorktreeId: null,
   suggestRef: null,
+  /** „Размер по този екран“, докато чака `size`: таб, поискан размер и таймер. */
+  resizeAsk: null,
   refs: 0,
 };
 

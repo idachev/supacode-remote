@@ -131,6 +131,9 @@ test('„Размер по този екран“ сменя таба на Mac-�
   await waitFor(() => resized.test(mock.log().slice(from)), 'resize в mock-а');
   const [, cols, rows] = resized.exec(mock.log().slice(from));
   assert.notDeepEqual([Number(cols), Number(rows)], [120, 40]);
+  // Потребителят вижда отговора на Mac-а, а второ натискане казва, че размерът вече е такъв.
+  const toastText = () => page.locator('#toast').textContent();
+  await waitFor(async () => (await toastText()) === `Mac-ът смени таба на ${cols} × ${rows}`, 'съобщение за отговора');
   // Мрежата е сметната при 14 px; дошлият `size` вписва шрифта наново (ОП36): малко над 14 px.
   const rowCount = () => page.evaluate(() => document.querySelectorAll('.xterm-rows > div').length);
   await waitFor(async () => (await rowCount()) === Number(rows), 'редовете на страницата са поисканите');
@@ -142,6 +145,8 @@ test('„Размер по този екран“ сменя таба на Mac-�
     return screen.width <= area.width && screen.height <= area.height;
   });
   assert.equal(fits, true);
+  await page.locator('#fit-button').click();
+  await waitFor(async () => (await toastText()) === `Табът вече е ${cols} × ${rows}`, 'същият размер');
   // Shell-ът на Mac-а вижда поискания размер.
   await typeInTerminal('stty size');
   await waitFor(async () => (await screenText()).includes(`${rows} ${cols}`), 'stty size');

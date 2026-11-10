@@ -233,6 +233,11 @@ export class TerminalView {
   }
 
   /** Целият текст: историята и екранът. */
+  /** Колоните и редовете, които Mac-ът е дал последно. */
+  size() {
+    return { cols: this.term.cols, rows: this.term.rows };
+  }
+
   allText() {
     const buffer = this.term.buffer.active;
     const lines = [];
