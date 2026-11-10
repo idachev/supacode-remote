@@ -85,6 +85,13 @@ test('hello пази hostId и lan', () => {
   assert.equal(decode('{"t":"hello","v":1}').lan, null);
 });
 
+test('hello пази версията на Supacode (`app`); стар host или празно — без версия', () => {
+  assert.equal(decode('{"t":"hello","v":1,"app":"Supacode 0.11.5 (154)"}').app, 'Supacode 0.11.5 (154)');
+  assert.equal(decode('{"t":"hello","v":1}').app, null);
+  assert.equal(decode('{"t":"hello","v":1,"app":""}').app, null);
+  assert.equal(decode('{"t":"hello","v":1,"app":7}').app, null);
+});
+
 test('терминалните съобщения без задължително поле се изхвърлят', () => {
   assert.equal(decode('{"t":"out","b64":"aGk="}'), null);
   assert.equal(decode('{"t":"attached","contentId":"c","cols":"x","rows":2}'), null);

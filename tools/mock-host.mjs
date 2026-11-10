@@ -297,7 +297,7 @@ function send(c, msg) {
 function helloMessage(c, host) {
   return {
     // Стар Supacode (`default`) не знае своя hostId.
-    t: 'hello', v: 1, host: host.name ?? 'Mac', ...(host.id === 'default' ? {} : { hostId: host.id }),
+    t: 'hello', v: 1, host: host.name ?? 'Mac', ...(host.id === 'default' ? {} : { hostId: host.id, app: 'Supacode 0.0.0-mock (1)' }),
     ...(host.lan && lanOn && !c.lan ? { lan: { addrs: LAN_ADDRS, port: LAN_PORT, fp: LAN_FP, fpMac: LAN_FP_MAC } } : {}),
   };
 }

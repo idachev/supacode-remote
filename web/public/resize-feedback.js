@@ -19,3 +19,8 @@ export function resizeReplyText(asked, size) {
   if (asked.cols === size.cols && asked.rows === size.rows) return `Mac-ът смени таба на ${dims(size)}`;
   return `Mac-ът върна ${dims(size)} (поискано ${dims(asked)})`;
 }
+
+/** Версията на Supacode на Mac-а към съобщение за грешка или отговор (УА6); стар Mac не я казва. */
+export function withHostApp(text, app) {
+  return app ? `${text} · ${app}` : text;
+}

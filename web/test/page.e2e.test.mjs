@@ -133,7 +133,9 @@ test('„Размер по този екран“ сменя таба на Mac-�
   assert.notDeepEqual([Number(cols), Number(rows)], [120, 40]);
   // Потребителят вижда отговора на Mac-а, а второ натискане казва, че размерът вече е такъв.
   const toastText = () => page.locator('#toast').textContent();
-  await waitFor(async () => (await toastText()) === `Mac-ът смени таба на ${cols} × ${rows}`, 'съобщение за отговора');
+  // Отговорът на Mac-а носи и версията на Supacode там (УА6).
+  await waitFor(async () => (await toastText()) === `Mac-ът смени таба на ${cols} × ${rows} · Supacode 0.0.0-mock (1)`, 'съобщение за отговора');
+  assert.equal(await page.locator('#host-name').getAttribute('title'), 'Supacode 0.0.0-mock (1)');
   // Мрежата е сметната при 14 px; дошлият `size` вписва шрифта наново (ОП36): малко над 14 px.
   const rowCount = () => page.evaluate(() => document.querySelectorAll('.xterm-rows > div').length);
   await waitFor(async () => (await rowCount()) === Number(rows), 'редовете на страницата са поисканите');

@@ -6,7 +6,7 @@ import { $, readJson, toast, writeStorage } from './dom.js';
 import { followHostPick, hideHosts, initHostsView, showHosts } from './hosts-view.js';
 import { LocalLink } from './link.js';
 import { initNotifyView, notifyAwaiting, resetAwaiting } from './notify-view.js';
-import { RESIZE_REPLY_MS, RESIZE_SILENT, resizeAskText, resizeReplyText } from './resize-feedback.js';
+import { RESIZE_REPLY_MS, RESIZE_SILENT, resizeAskText, resizeReplyText, withHostApp } from './resize-feedback.js';
 import { findTab, sessionRows, worktreeOrder } from './session-groups.js';
 import { initSessionsView, renderSessions } from './sessions-view.js';
 import { initSetupView, setupResult, showSetup } from './setup-view.js';
@@ -97,7 +97,7 @@ function onSize(m) {
   const asked = ui.resizeAsk;
   if (asked?.contentId === m.contentId) {
     cancelResizeAsk();
-    toast(resizeReplyText(asked, m));
+    toastWithApp(resizeReplyText(asked, m));
   }
   terminal.resize(m.cols, m.rows);
 }
@@ -123,7 +123,7 @@ function onSuggest(m) {
 function onError(m) {
   if (m.ref && m.ref === ui.newTabRef) finishNewTab();
   if (m.ref && m.ref === ui.suggestRef) closeSuggestions();
-  toast(m.message || 'Грешка от host-а');
+  toastWithApp(m.message || 'Грешка от host-а');
 }
 
 function onReplaced() {
@@ -228,10 +228,15 @@ function resizeToScreen() {
   // Отговорът е `size`; без него след малко потребителят разбира, че нищо няма да стане.
   const timer = setTimeout(() => {
     ui.resizeAsk = null;
-    toast(RESIZE_SILENT);
+    toastWithApp(RESIZE_SILENT);
   }, RESIZE_REPLY_MS);
   ui.resizeAsk = { contentId: ui.openContentId, ...grid, timer };
   link.send({ t: 'resize', contentId: ui.openContentId, cols: grid.cols, rows: grid.rows });
+}
+
+/** Грешка или отговор от Mac-а: с версията на Supacode там, ако Mac-ът я е казал (УА6). */
+function toastWithApp(text) {
+  toast(withHostApp(text, ui.state?.hostApp));
 }
 
 function cancelResizeAsk() {

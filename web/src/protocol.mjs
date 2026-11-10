@@ -99,6 +99,8 @@ const DECODERS = {
     t: 'hello', v: isInt(o.v) ? o.v : PROTOCOL_VERSION,
     host: isStr(o.host) ? o.host : null,
     hostId: isStr(o.hostId) ? o.hostId : null,
+    // Версията на Supacode („Supacode 0.11.5 (154)“); стар host я изпуска.
+    app: isStr(o.app) && o.app ? o.app : null,
     lan: lanInfo(o.lan),
   }),
   // Списъкът минава до екрана почти както е: там непознати стойности се търпят поотделно.

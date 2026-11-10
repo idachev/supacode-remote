@@ -19,7 +19,8 @@ function renderHostName(s) {
   $('host-name').textContent = s?.hostName || (multi ? hostLabel(boundHost(s)) : 'Supacode Remote');
   // С нов relay (списък с Mac-ове) името отваря „Mac-ове“; със стар е само заглавие.
   $('host-name').disabled = !multi;
-  $('host-name').title = multi ? 'Смени Mac-а' : '';
+  // Версията на Supacode на Mac-а (УА6) е в подсказката, до „Смени Mac-а“.
+  $('host-name').title = [s?.hostApp, multi ? 'Смени Mac-а' : ''].filter(Boolean).join(' · ');
 }
 
 function renderPathChip(s) {

@@ -37,7 +37,7 @@ export const DEFAULT_TIMING = Object.freeze({
 function initialState() {
   return {
     connection: 'idle', retryInMs: 0, reason: null,
-    hostOnline: false, hostName: null, hostId: null,
+    hostOnline: false, hostName: null, hostId: null, hostApp: null,
     path: 'none', hostSession: null,
     // multi-host: `null` — стар relay без списък; `[]` — нов relay, който не знае Mac.
     hosts: null, boundHost: null,
@@ -183,7 +183,7 @@ export class RelayClient extends EventEmitter {
     this.attempt += 1;
     this.#dropConnections();
     // Името и id-то са от hello на стария Mac: след смяна на Mac-а не бива да остават.
-    this.#set({ hostOnline: false, hosts: null, boundHost: null, hostName: null, hostId: null });
+    this.#set({ hostOnline: false, hosts: null, boundHost: null, hostName: null, hostId: null, hostApp: null });
     this.#updateRoute();
     this.#startLoop();
   }
@@ -341,7 +341,7 @@ export class RelayClient extends EventEmitter {
   }
 
   #onRelayHello(hello) {
-    this.#set({ hostName: hello.host, hostId: hello.hostId });
+    this.#set({ hostName: hello.host, hostId: hello.hostId, hostApp: hello.app });
     this.lanPath.offer(hello, { apiKey: this.settings?.apiKey, boundHostId: this.hostId });
   }
 
@@ -365,7 +365,7 @@ export class RelayClient extends EventEmitter {
     const message = decode(text);
     if (!message) return;
     // `lan` в hello по самия LAN не значи нищо ново.
-    if (message.t === 'hello') this.#set({ hostName: message.host, hostId: message.hostId });
+    if (message.t === 'hello') this.#set({ hostName: message.host, hostId: message.hostId, hostApp: message.app });
     this.#deliver(session, message);
   }
 }
