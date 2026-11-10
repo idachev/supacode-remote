@@ -77,8 +77,9 @@ code { background: var(--panel-2); padding: 1px 4px; border-radius: 4px; }
 .row-wt .dot.working { background: var(--accent); }
 .row-wt .dot.awaiting { background: var(--await); }
 .row-wt.current { background: var(--panel-2); }
-.tabs { padding: 2px 0 4px 44px; }
-.tab { display: flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 4px; cursor: pointer; }
+.tabs { padding: 4px 0 6px 44px; }
+.tab { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 4px; cursor: pointer; }
+.tab + .tab { margin-top: 2px; }
 .tab:hover { background: var(--panel-2); }
 .tab.open { background: #23405a; }
 .tab .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
