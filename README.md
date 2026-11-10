@@ -43,9 +43,11 @@ in the fork.
 - **Sessions list that mirrors the Supacode sidebar**: Active (an agent or script is running),
   Pinned, your sidebar groups (collapsible), then ungrouped repositories. Each worktree shows its
   branch, custom title and agent badges (`claude · awaiting input`, `codex · busy`, …).
-- **Live terminal at the Mac's size**: xterm.js renders the tab at the Mac's columns and rows.
-  The phone never resizes the session; it picks a font size that fits the columns and lets you
-  pinch-zoom the page.
+- **Live terminal at the Mac's size**: xterm.js renders the tab at the Mac's columns and rows and
+  picks a font size that fits them. The client changes the size only on an explicit „Размер по
+  този екран“ (resize to this screen): the Mac replies with the new `size` (or a `resize_failed`
+  error), wakes a tab that was hidden on the Mac, and sends Ctrl+L to the terminal so a TUI
+  redraws. A new tab opened from the client starts at the client's grid.
 - **Input bar and key row**: type a line and send it with Enter, or use the keys Esc, Tab,
   sticky Ctrl, ^C, ^D, arrows, PgUp, PgDn, Home, End, Enter, `!` and `/`. PgUp/PgDn go to the
   program (Claude Code scrolls its own history with them); separate buttons scroll the phone's
