@@ -55,7 +55,8 @@ fun MainNavigation() {
   LaunchedEffect(pickRequests, top) {
     if (pickRequests <= container.handledHostPicks || top is SetupKey) return@LaunchedEffect
     container.handledHostPicks = pickRequests
-    if (top !is HostsKey) backStack.add(HostsKey)
+    // Поискано, докато екранът не се е виждал, и вече решено (напр. автоматичен избор): нищо.
+    if (top !is HostsKey && container.relay.hostPickPending.value) backStack.add(HostsKey)
   }
 
   // 401 от relay-а: ключът е грешен, връщаме към „Настройка“ с обяснение.

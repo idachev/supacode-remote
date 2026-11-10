@@ -338,4 +338,21 @@ class RelayClientTest {
     relay.configure(RelaySettings(base(), "k2"))
     withTimeout(5_000) { relay.hostPickRequests.first { it == 2 } }
   }
+
+  @Test
+  fun `поискан избор, решен после от автоматичния избор, вече не чака`() = runBlocking<Unit> {
+    // Два онлайн: пита. После единият излиза: телефонът избира сам и изборът вече не е нужен.
+    server.enqueue(hostUpgrade(relay(false, null, officeOn, homeOn)))
+    server.enqueue(hostUpgrade(relay(true, "office", officeOn)))
+    val selection = MemoryHostSelection()
+    val relay = client(selection)
+    relay.configure(RelaySettings(base(), "k"))
+    relay.setForeground(true)
+    withTimeout(5_000) { relay.hostPickPending.first { it } }
+    assertEquals(1, relay.hostPickRequests.value)
+    serverSocket!!.send(relay(false, null, officeOn, """{"id":"home","name":"Home Mac","online":false}"""))
+    withTimeout(5_000) { relay.hostSession.first { it != null } }
+    assertEquals("office", selection.selectedHostId.value)
+    assertFalse(relay.hostPickPending.value)
+  }
 }

@@ -151,8 +151,20 @@ class RelayClient(
    */
   val hostPickRequests: StateFlow<Int> = _hostPickRequests.asStateFlow()
 
+  private val _hostPickPending = MutableStateFlow(false)
+
+  /**
+   * Поисканият избор още е нужен. Автоматичен избор, записан Mac в списъка или нов ключ го
+   * решават, без потребителят да види „Mac-ове“ — тогава навигацията не го отваря.
+   */
+  val hostPickPending: StateFlow<Boolean> = _hostPickPending.asStateFlow()
+
   /** Вече е поискан избор и нищо не се е променило оттогава. Пази се с [lock]. */
   private var pickAsked = false
+    set(value) {
+      field = value
+      _hostPickPending.value = value
+    }
 
   /**
    * Номер на текущата „сесия с host-а“: расте всеки път, когато връзката е горе и
