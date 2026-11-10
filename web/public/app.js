@@ -21,7 +21,7 @@ import { nextWorktree } from './view-model.js';
 import { closeWorktreeDialog, initWorktreeDialog, openWorktreeDialog, renderWorktreeDialog } from './worktree-dialog.js';
 
 /** Отговорът на `worktree.new` не дойде: таймаут или паднала връзка (К2, К3). */
-const WORKTREE_UNKNOWN = 'Mac-ът още създава worktree-то или връзката падна. Ако стане, ще се появи в списъка; ако не, Mac-ът показва защо. Можеш да опиташ пак със същото име.';
+const WORKTREE_UNKNOWN = 'Mac-ът още създава worktree-то или връзката падна, затова не знам как е свършило. Worktree-то може да се появи в списъка по-късно. Можеш да опиташ пак със същото име.';
 /** Тези кодове значат „отговорът няма да дойде“, а не „Mac-ът отказа“. */
 const WORKTREE_UNKNOWN_CODES = ['worktree_timeout', 'worktree_lost'];
 
