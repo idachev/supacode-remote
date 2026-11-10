@@ -116,6 +116,7 @@ class RelayClientTest {
     assertEquals("Bearer abcde-fghij", request.headers["Authorization"])
     assertEquals("""{"t":"hello","v":1}""", next())
     withTimeout(5_000) { relay.hostName.first { it == "Test Mac" } }
+    assertNull(relay.hostApp.value)
     assertEquals(1, relay.hostSession.value)
     assertEquals("ping", next())
   }
@@ -325,6 +326,17 @@ class RelayClientTest {
     assertEquals("""{"t":"hello","v":1}""", next())
     Thread.sleep(300)
     assertNull(relay.hostName.value)
+    assertNull(relay.hostApp.value)
+  }
+
+  @Test
+  fun `hello на свързания Mac носи версията на Supacode, стар host — без версия`() = runBlocking<Unit> {
+    server.enqueue(hostUpgrade(hello = """{"t":"hello","v":1,"host":"Test Mac","app":"Supacode 0.11.5 (154)"}"""))
+    val relay = client()
+    relay.configure(RelaySettings(base(), "k"))
+    relay.setForeground(true)
+    assertEquals("""{"t":"hello","v":1}""", next())
+    withTimeout(5_000) { relay.hostApp.first { it == "Supacode 0.11.5 (154)" } }
   }
 
   @Test

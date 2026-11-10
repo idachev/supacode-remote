@@ -709,4 +709,45 @@ class TerminalViewModelTest {
     vm.onGrid(64, 38)
     assertTrue(link.sent.none { it is ResizeRequest })
   }
+
+  @Test
+  fun `size със същия размер пак преоразмерява страницата`() = runTest(dispatcher) {
+    link.hostSession.value = 1
+    runCurrent()
+    vm.onWebReady()
+    val commands = collectCommands()
+    emit(Attached(1, "c1", 120, 40))
+    emit(SizeChanged("c1", 120, 40))
+    emit(SizeChanged("c1", 120, 40))
+    assertEquals(
+      listOf(TerminalCommand.Init(120, 40), TerminalCommand.Resize(120, 40), TerminalCommand.Resize(120, 40)),
+      commands,
+    )
+  }
+
+  @Test
+  fun `resize_failed за този таб освобождава чакащия размер в страницата`() = runTest(dispatcher) {
+    link.hostSession.value = 1
+    runCurrent()
+    vm.onWebReady()
+    val commands = collectCommands()
+    emit(Attached(1, "c1", 120, 40))
+    vm.onGrid(64, 38)
+    emit(ErrorReply(null, "terminal not ready", code = ErrorReply.RESIZE_FAILED, contentId = "c1"))
+    assertEquals(listOf(TerminalCommand.Init(120, 40), TerminalCommand.ResizeFailed), commands)
+    // Терминалът остава закачен със стария размер: грешката е само за размера.
+    assertEquals(AttachPhase.Attached(120, 40), vm.state.value.phase)
+  }
+
+  @Test
+  fun `resize_failed за друг таб или друга грешка не пипа размера`() = runTest(dispatcher) {
+    link.hostSession.value = 1
+    runCurrent()
+    vm.onWebReady()
+    val commands = collectCommands()
+    emit(Attached(1, "c1", 120, 40))
+    emit(ErrorReply(null, "gone", code = ErrorReply.RESIZE_FAILED, contentId = "other"))
+    emit(ErrorReply(null, "boom", code = "brand_new", contentId = "c1"))
+    assertEquals(listOf<TerminalCommand>(TerminalCommand.Init(120, 40)), commands)
+  }
 }

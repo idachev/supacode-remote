@@ -83,6 +83,8 @@ data class HelloReply(
   val lan: LanInfo? = null,
   /** Id-то на Mac-а, който отговаря; липсва при стар Supacode. */
   val hostId: String? = null,
+  /** Версията на Supacode на Mac-а, напр. „Supacode 0.11.5 (154)“; стар host я изпуска. */
+  val app: String? = null,
 ) : ServerMessage
 
 /**
@@ -140,8 +142,22 @@ data class Suggestions(val id: Int? = null, val contentId: String, val suggestio
 data class TabNewReply(val id: Int? = null, val worktreeId: String = "", val tabId: String = "", val contentId: String) :
   ServerMessage
 
+/**
+ * Грешка от host-а или relay-а. [code] е машинната причина (засега само [RESIZE_FAILED]) — низ, а
+ * не enum: непознат код не бива да чупи четенето, екранът показва [message]. [contentId] е
+ * терминалът, за който е грешката, при заявки без `id` (`resize`).
+ */
 @Serializable
-data class ErrorReply(val id: Int? = null, val message: String = "") : ServerMessage
+data class ErrorReply(
+  val id: Int? = null,
+  val message: String = "",
+  val code: String? = null,
+  val contentId: String? = null,
+) : ServerMessage {
+  companion object {
+    const val RESIZE_FAILED = "resize_failed"
+  }
+}
 
 /**
  * Repository от sidebar-а на Supacode. [group] е групата на sidebar-а (напр. „Work“);

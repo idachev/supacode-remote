@@ -1,6 +1,6 @@
 // Мостът между xterm.js и приложението.
 //
-// Kotlin вика supa.init / write / resize / scrollPages / scrollToBottom / wheel / copyText;
+// Kotlin вика supa.init / write / resize / resizeFailed / scrollPages / scrollToBottom / wheel / copyText;
 // selectStart / selectMove / selectEnd (от дългото натискане в Android), selectRange /
 // copySelection / clearSelection (от лентата за маркиране); страницата вика
 // SupaBridge.ready(), text(), copy(), selection(), selectionGone(), overscroll(), input(),
@@ -63,9 +63,10 @@
   var fixedFont = 0;
 
   // „Размер по този екран“: [pendingGrid] е поисканият размер и шрифтът, при който е мерен;
-  // [heldGrid] — същото, след като Mac-ът е отговорил със `size` точно толкова. Само тогава
-  // шрифтът остава (иначе fit() би го наместил по ширината). Без отговор (размерът вече е бил
-  // такъв, стар host) задържане няма. Друг `size` от Mac-а освобождава и двете.
+  // [heldGrid] — същото, след като Mac-ът е отговорил със `size` точно толкова (нов host
+  // отговаря и когато размерът вече е бил такъв). Само тогава шрифтът остава (иначе fit() би го
+  // наместил по ширината). Без отговор (стар host) задържане няма. Друг `size` от Mac-а
+  // освобождава и двете, а `resize_failed` — чакащия (resizeFailed).
   var pendingGrid = null;
   var heldGrid = null;
 
@@ -215,6 +216,15 @@
         onHostSize(cols, rows);
         term.resize(cols, rows);
         fit();
+      });
+    },
+    /**
+     * Mac-ът отказа поискания размер (`resize_failed`). В опашката след вече дошлите `size`:
+     * така отказ след `size` с друг размер не пипа задържането, решено от него.
+     */
+    resizeFailed: function () {
+      term.write('', function () {
+        pendingGrid = null;
       });
     },
     /** Историята на xterm.js (scrollback); програмата в PTY-то не разбира. */

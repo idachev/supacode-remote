@@ -45,6 +45,7 @@ fun HostsScreen(canGoBack: Boolean, onBack: () -> Unit, onPick: (String) -> Unit
   val relay = LocalAppContainer.current.relay
   val hosts by relay.hosts.collectAsStateWithLifecycle()
   val bound by relay.boundHostId.collectAsStateWithLifecycle()
+  val app by relay.hostApp.collectAsStateWithLifecycle()
 
   Scaffold(
     topBar = {
@@ -57,12 +58,12 @@ fun HostsScreen(canGoBack: Boolean, onBack: () -> Unit, onPick: (String) -> Unit
       }
     },
   ) { padding ->
-    Box(Modifier.fillMaxSize().padding(padding)) { HostList(hosts, bound, onPick) }
+    Box(Modifier.fillMaxSize().padding(padding)) { HostList(hosts, bound, app, onPick) }
   }
 }
 
 @Composable
-private fun HostList(hosts: List<HostInfo>, bound: String?, onPick: (String) -> Unit) {
+private fun HostList(hosts: List<HostInfo>, bound: String?, boundApp: String?, onPick: (String) -> Unit) {
   if (hosts.isEmpty()) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
       Text("Relay-ят още не познава друг Mac.", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -70,12 +71,16 @@ private fun HostList(hosts: List<HostInfo>, bound: String?, onPick: (String) -> 
     return
   }
   LazyColumn(Modifier.fillMaxSize().testTag("hosts-list")) {
-    items(hosts, key = { it.id }) { host -> HostRow(host, selected = host.id == bound) { onPick(host.id) } }
+    items(hosts, key = { it.id }) { host ->
+      val selected = host.id == bound
+      // Версията е от `hello`, а него го има само от свързания Mac.
+      HostRow(host, selected, app = boundApp.takeIf { selected }) { onPick(host.id) }
+    }
   }
 }
 
 @Composable
-private fun HostRow(host: HostInfo, selected: Boolean, onClick: () -> Unit) {
+private fun HostRow(host: HostInfo, selected: Boolean, app: String?, onClick: () -> Unit) {
   val colors = MaterialTheme.colorScheme
   Surface(
     onClick = onClick,
@@ -86,7 +91,7 @@ private fun HostRow(host: HostInfo, selected: Boolean, onClick: () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(16.dp)) {
       OnlineDot(host.online)
       Spacer(Modifier.width(12.dp))
-      HostText(host, selected, Modifier.weight(1f))
+      HostText(host, selected, app, Modifier.weight(1f))
       if (selected) {
         Text("избран", style = MaterialTheme.typography.labelLarge, color = colors.primary)
       }
@@ -95,7 +100,7 @@ private fun HostRow(host: HostInfo, selected: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun HostText(host: HostInfo, selected: Boolean, modifier: Modifier) {
+private fun HostText(host: HostInfo, selected: Boolean, app: String?, modifier: Modifier) {
   Column(verticalArrangement = Arrangement.spacedBy(2.dp), modifier = modifier) {
     Text(
       HostLabels.displayName(host.name),
@@ -104,7 +109,7 @@ private fun HostText(host: HostInfo, selected: Boolean, modifier: Modifier) {
       maxLines = 1,
       overflow = TextOverflow.Ellipsis,
     )
-    Text(HostLabels.status(host.online), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Text(HostLabels.status(host.online, app), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
   }
 }
 

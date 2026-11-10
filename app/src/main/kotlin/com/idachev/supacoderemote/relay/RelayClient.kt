@@ -124,6 +124,11 @@ class RelayClient(
   /** Името от `hello` на свързания Mac. При стар relay е единственото име. */
   val hostName: StateFlow<String?> = _hostName.asStateFlow()
 
+  private val _hostApp = MutableStateFlow<String?>(null)
+
+  /** Версията на Supacode от `hello` на свързания Mac; `null` при стар host и преди `hello`. */
+  val hostApp: StateFlow<String?> = _hostApp.asStateFlow()
+
   private val roster = HostRoster()
 
   /** Mac-овете, които relay-ят познава, подредени от него. Празно при стар relay. */
@@ -263,6 +268,7 @@ class RelayClient(
       roster.pickResolved()
       // Името от `hello` е на стария Mac; новият ще прати свое.
       _hostName.value = null
+      _hostApp.value = null
       restartLocked()
     }
   }
@@ -409,7 +415,7 @@ class RelayClient(
         when (message) {
           is RelayStatus -> if (!onRelayStatus(webSocket, message, attempt)) return
           is HelloReply -> {
-            if (!isForeignHello(message)) _hostName.value = message.host
+            if (!isForeignHello(message)) onOwnHello(message)
             onRelayHello(message)
           }
           else -> Unit
@@ -509,6 +515,12 @@ class RelayClient(
     }
   }
 
+  /** `hello` от свързания Mac (по relay-а или по LAN): името и версията му за екраните. */
+  private fun onOwnHello(hello: HelloReply) {
+    _hostName.value = hello.host
+    _hostApp.value = hello.app
+  }
+
   // ---- LAN пътят ----
 
   /**
@@ -577,7 +589,7 @@ class RelayClient(
       lanLastFrameAt = System.currentTimeMillis()
       val message = ProtocolCodec.decode(text) ?: return
       // `lan` в hello по самия LAN не значи нищо ново.
-      if (message is HelloReply) _hostName.value = message.host
+      if (message is HelloReply) onOwnHello(message)
       deliver(session, message)
     }
 

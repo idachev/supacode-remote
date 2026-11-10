@@ -232,6 +232,30 @@ class ProtocolCodecTest {
   }
 
   @Test
+  fun `hello носи версията на Supacode, а стар host я изпуска`() {
+    assertEquals(
+      "Supacode 0.11.5 (154)",
+      (ProtocolCodec.decode("""{"t":"hello","v":1,"host":"Mac","app":"Supacode 0.11.5 (154)"}""") as HelloReply).app,
+    )
+    assertNull((ProtocolCodec.decode("""{"t":"hello","v":1,"host":"Mac"}""") as HelloReply).app)
+  }
+
+  @Test
+  fun `error resize_failed носи code и contentId`() {
+    assertEquals(
+      ErrorReply(null, "terminal not ready", code = ErrorReply.RESIZE_FAILED, contentId = "c1"),
+      ProtocolCodec.decode(
+        """{"t":"error","id":null,"message":"terminal not ready","code":"resize_failed","contentId":"c1"}""",
+      ),
+    )
+    // Непознат код се чете като низ: екранът показва message.
+    assertEquals(
+      ErrorReply(7, "nope", code = "brand_new"),
+      ProtocolCodec.decode("""{"t":"error","id":7,"message":"nope","code":"brand_new"}"""),
+    )
+  }
+
+  @Test
   fun `resize към host-а носи таба и новия размер`() {
     assertSameJson(
       """{"t":"resize","contentId":"c","cols":64,"rows":38}""",

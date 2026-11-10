@@ -271,6 +271,7 @@ private fun installSelectionGesture(webView: WebView) {
 private fun TerminalCommand.toJs(): String = when (this) {
   is TerminalCommand.Init -> "supa.init($cols,$rows)"
   is TerminalCommand.Resize -> "supa.resize($cols,$rows)"
+  TerminalCommand.ResizeFailed -> "supa.resizeFailed()"
   is TerminalCommand.ScrollPages -> "supa.scrollPages($pages)"
   TerminalCommand.ScrollToBottom -> "supa.scrollToBottom()"
   is TerminalCommand.Wheel -> "supa.wheel(${if (up) -1 else 1},$lines,$programOnly)"

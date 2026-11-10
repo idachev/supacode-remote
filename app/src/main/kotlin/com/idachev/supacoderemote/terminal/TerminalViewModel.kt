@@ -38,6 +38,12 @@ sealed interface TerminalCommand {
 
   data class Resize(val cols: Int, val rows: Int) : TerminalCommand
 
+  /**
+   * Mac-ът не смени размера (`resize_failed`): поисканият размер вече не чака отговор, иначе
+   * по-късен `size` със същия размер би задържал шрифта, мерен за отказа.
+   */
+  data object ResizeFailed : TerminalCommand
+
   /** Превърта историята на самия xterm.js с [pages] страници (минус е нагоре). */
   data class ScrollPages(val pages: Int) : TerminalCommand
 
@@ -241,6 +247,9 @@ class TerminalViewModel(
       is ErrorReply -> {
         // Самото съобщение вече е в snackbar-а (AppContainer); тук само спираме чакането.
         if (message.id != null && message.id == suggestId) finishSuggest()
+        if (message.code == ErrorReply.RESIZE_FAILED && message.contentId == contentId) {
+          _commands.trySend(TerminalCommand.ResizeFailed)
+        }
         if (message.id != null && message.id == attachId) {
           attachId = null
           _state.update { it.copy(phase = AttachPhase.Detached(message.message)) }
@@ -400,7 +409,8 @@ class TerminalViewModel(
 
   /**
    * Размерът, който влиза в екрана. Само за закачен таб: host-ът приема `resize` само за свой
-   * attach. Отговорът е обикновеният `size`.
+   * attach. Отговорът е обикновеният `size` (и при същия размер), а при отказ — `error` с
+   * `resize_failed`; стар host не отговаря нищо.
    */
   fun onGrid(cols: Int, rows: Int) {
     if (_state.value.phase !is AttachPhase.Attached) return

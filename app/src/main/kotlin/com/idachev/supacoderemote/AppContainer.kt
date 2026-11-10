@@ -7,6 +7,7 @@ import com.idachev.supacoderemote.relay.RelayClient
 import com.idachev.supacoderemote.sessions.SessionsRepository
 import com.idachev.supacoderemote.settings.KeystoreSettingsStore
 import com.idachev.supacoderemote.settings.SettingsStore
+import com.idachev.supacoderemote.ui.hosts.HostLabels
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -66,7 +67,7 @@ class AppContainer(context: Context) {
     appScope.launch { settingsStore.notifyAwaiting.collect { agentAlerts.setEnabled(it) } }
     appScope.launch { settingsStore.settings.collect { relay.configure(it) } }
     appScope.launch {
-      relay.messages.filterIsInstance<ErrorReply>().collect { notices.show(it.message.ifBlank { "Грешка от host-а" }) }
+      relay.messages.filterIsInstance<ErrorReply>().collect { notices.show(HostLabels.error(it, relay.hostApp.value)) }
     }
   }
 }
