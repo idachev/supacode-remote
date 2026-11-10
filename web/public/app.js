@@ -84,13 +84,11 @@ function onAttached(m) {
 }
 
 /**
- * `size` за отворения таб. Шрифтът се задържа само когато това е поисканият размер (потвърден
- * „Размер по този екран“); всеки друг `size` е размерът на Mac-а и шрифтът се вписва.
+ * `size` за отворения таб: шрифтът винаги се вписва в размера на Mac-а, и след „Размер по този
+ * екран“ (ОП36). Вписаният шрифт излиза малко над този от „Настройка“, но без задържан шрифт
+ * няма състояние, което да се разминава с размера, който Mac-ът наистина държи.
  */
 function onSize(m) {
-  const asked = ui.pendingResize;
-  ui.pendingResize = null;
-  if (asked?.contentId === m.contentId && asked.cols === m.cols && asked.rows === m.rows) terminal.holdFont(asked);
   terminal.resize(m.cols, m.rows);
 }
 
@@ -130,8 +128,6 @@ function onReset() {
   ui.listText = '';
   ui.openContentId = null;
   ui.phase = 'none';
-  ui.pendingResize = null;
-  terminal.releaseFont();
   terminal.clear();
   history.replaceState(null, '', location.pathname);
   dropRequests();
@@ -166,9 +162,6 @@ function openTab(contentId) {
   ui.openContentId = contentId;
   ui.phase = 'opening';
   ui.endReason = null;
-  // Задържаният шрифт и чакащият размер са на предишния таб.
-  ui.pendingResize = null;
-  terminal.releaseFont();
   terminal.clear();
   history.replaceState(null, '', `#c=${encodeURIComponent(contentId)}`);
   const found = findTab(ui.list, contentId);
@@ -213,11 +206,8 @@ function moveWorktree(step) {
 
 /** ЗД12: таба на Mac-а с толкова колони и редове, колкото влизат тук при шрифта от „Настройка“. */
 function resizeToScreen() {
-  const fontPx = newTabFont();
-  const grid = terminal.gridAt(fontPx);
+  const grid = terminal.gridAt(newTabFont());
   if (ui.phase !== 'live' || !grid) return;
-  // Шрифтът се задържа чак при потвърждението (`onSize`), не сега.
-  ui.pendingResize = { contentId: ui.openContentId, ...grid, fontPx };
   link.send({ t: 'resize', contentId: ui.openContentId, cols: grid.cols, rows: grid.rows });
 }
 

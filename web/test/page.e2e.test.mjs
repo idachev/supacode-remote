@@ -118,35 +118,35 @@ test('Ctrl+⌘+↓ сменя таба, нов таб тръгва с разме
   assert.ok(Number(rows) > 30 && Number(rows) !== 40, `rows ${rows}`);
 });
 
-test('„Размер по този екран“ сменя таба на Mac-а и шрифтът остава', async (t) => {
+test('„Размер по този екран“ сменя таба на Mac-а, шрифтът се вписва в новия размер', async (t) => {
   if (!browser) return t.skip('няма Google Chrome');
   // Табът codex е с размера на Mac-а (120 × 40): шрифтът е вписан, не 14 px.
   await page.locator('.tab', { hasText: 'codex review' }).click();
   await waitLive();
-  const fontOf = () => page.evaluate(() => getComputedStyle(document.querySelector('.xterm-rows')).fontSize);
-  assert.notEqual(await fontOf(), '14px');
+  const fontPx = () => page.evaluate(() => parseFloat(getComputedStyle(document.querySelector('.xterm-rows')).fontSize));
+  assert.ok(Math.abs((await fontPx()) - 14) >= 0.5, `шрифт ${await fontPx()}`);
   const from = mock.log().length;
   await page.locator('#fit-button').click();
   await waitFor(() => /resize content-codex \d+x\d+/.test(mock.log().slice(from)), 'resize в mock-а');
   const [, cols, rows] = /resize content-codex (\d+)x(\d+)/.exec(mock.log().slice(from));
   assert.notDeepEqual([Number(cols), Number(rows)], [120, 40]);
-  await waitFor(async () => (await fontOf()) === '14px', 'шрифтът е този от „Настройка“');
-  // Мрежата е измерена при 14 px: целият терминал влиза в мястото.
+  // Мрежата е сметната при 14 px; дошлият `size` вписва шрифта наново (ОП36): малко над 14 px.
+  const rowCount = () => page.evaluate(() => document.querySelectorAll('.xterm-rows > div').length);
+  await waitFor(async () => (await rowCount()) === Number(rows), 'редовете на страницата са поисканите');
+  await waitFor(async () => { const f = await fontPx(); return f >= 14 && f < 15; }, 'шрифтът е между 14 и 15 px');
+  // Целият терминал влиза в мястото.
   const fits = await page.evaluate(() => {
     const screen = document.querySelector('.xterm-screen').getBoundingClientRect();
     const area = document.getElementById('term-area').getBoundingClientRect();
     return screen.width <= area.width && screen.height <= area.height;
   });
   assert.equal(fits, true);
-  // Задържаният шрифт е на този таб: друг таб се вписва в размера на своя Mac.
-  await page.locator('.tab', { hasText: 'claude' }).click();
-  await waitLive();
-  await waitFor(async () => (await fontOf()) !== '14px', 'вписан шрифт на другия таб');
-  await page.locator('.tab', { hasText: 'codex review' }).click();
-  await waitLive();
+  // Shell-ът на Mac-а вижда поискания размер.
+  await typeInTerminal('stty size');
+  await waitFor(async () => (await screenText()).includes(`${rows} ${cols}`), 'stty size');
   // Mac-ът връща своя размер (тук: mock-resize) — шрифтът пак се вписва.
   await typeInTerminal('mock-resize');
-  await waitFor(async () => (await fontOf()) !== '14px', 'вписан шрифт след size от Mac-а');
+  await waitFor(async () => (await rowCount()) === 30, 'размерът на Mac-а');
 });
 
 test('презареждане отваря същия таб наново', async (t) => {

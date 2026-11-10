@@ -22,8 +22,6 @@ export const ui = {
   newTabRef: null,
   newTabWorktreeId: null,
   suggestRef: null,
-  /** Поисканият с „Размер по този екран“ размер, докато Mac-ът не го потвърди със `size`. */
-  pendingResize: null,
   refs: 0,
 };
 
