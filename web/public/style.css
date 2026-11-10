@@ -91,6 +91,9 @@ svg.icon { width: 16px; height: 16px; flex: none; fill: currentColor; }
 .badge.busy { color: var(--accent); }
 .badge.error { color: var(--error); }
 .new-tab { margin: 2px 8px; font-size: 12px; }
+.row-repo .name { flex: 1; }
+.repo-new { padding: 0 8px; font-size: 14px; line-height: 20px; }
+.dialog .mono { font-family: ui-monospace, Menlo, monospace; }
 
 .terminal-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; background: var(--term-bg); }
 .terminal-bar { display: flex; align-items: center; gap: 8px; padding: 4px 8px; background: var(--panel);

@@ -73,6 +73,22 @@
     </form>
   </div>
 
+  <div id="worktree" class="overlay" hidden>
+    <form id="worktree-form" class="dialog">
+      <h2 id="worktree-title">Нов worktree</h2>
+      <label for="worktree-name">Име на branch</label>
+      <input id="worktree-name" class="mono" type="text" placeholder="напр. feature-x" autocomplete="off"
+        autocapitalize="off" autocorrect="off" spellcheck="false">
+      <p id="worktree-hint" class="muted" hidden></p>
+      <p id="worktree-error" class="error" hidden></p>
+      <p class="muted">Mac-ът създава worktree-то като бутона в Supacode, избира го и отваря първия му таб.</p>
+      <div class="dialog-buttons">
+        <button id="worktree-cancel" type="button">Затвори</button>
+        <button id="worktree-create" type="submit">Създай</button>
+      </div>
+    </form>
+  </div>
+
   <div id="help" class="overlay" hidden>
     <div class="dialog">
       <h2>Клавишни комбинации</h2>

@@ -22,6 +22,11 @@ export const ui = {
   newTabRef: null,
   newTabWorktreeId: null,
   suggestRef: null,
+  /**
+   * Диалогът „Нов worktree“ (ЗД11): `{repositoryId, repositoryName, name, error, ref}`; `ref` е
+   * заявката, която чака отговор от Mac-а. `null` — диалогът е затворен.
+   */
+  newWorktree: null,
   /** „Размер по този екран“, докато чака `size`: таб, поискан размер и таймер. */
   resizeAsk: null,
   refs: 0,

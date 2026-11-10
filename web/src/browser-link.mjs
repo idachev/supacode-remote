@@ -153,6 +153,9 @@ export class BrowserLink {
       suggest: (_ws, m) => this.host.suggest(m.ref ?? null),
       resize: (_ws, m) => this.#resize(m),
       'tab.new': (_ws, m) => str(m.worktreeId) && this.host.newTab({ worktreeId: m.worktreeId, cols: m.cols, rows: m.rows, ref: m.ref ?? null }),
+      'worktree.new': (_ws, m) => str(m.repositoryId) && this.host.newWorktree({
+        repositoryId: m.repositoryId, name: m.name, cols: m.cols, rows: m.rows, ref: m.ref ?? null,
+      }),
       refresh: () => this.host.refresh(),
       'host.select': (_ws, m) => this.#selectHost(m.id),
       reconnect: () => this.relay.reconnectNow(),

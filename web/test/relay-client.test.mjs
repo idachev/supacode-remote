@@ -108,6 +108,63 @@ test('нов таб с размера на прозореца', async () => {
   c.stop();
 });
 
+test('нов worktree: първият таб с размера на прозореца, после в list и под repository-то', async () => {
+  const c = connect();
+  c.host.setActive(true);
+  await waitFor(() => c.relay.state.hostSession != null, 'сесия');
+  const list = await waitFor(() => c.messages.find((m) => m.t === 'list'), 'list');
+  assert.equal(list.repos.find((r) => r.id === 'repo-supacode').canCreateWorktree, true);
+  assert.equal(list.repos.find((r) => r.id === 'repo-notes').canCreateWorktree, false);
+  c.host.newWorktree({ repositoryId: 'repo-supacode', name: '  wt-web-test  ', cols: 88, rows: 28, ref: 'w1' });
+  const reply = await waitFor(() => c.messages.find((m) => m.t === 'worktree.new'), 'worktree.new', 5_000);
+  assert.equal(reply.ref, 'w1');
+  assert.equal(reply.name, 'wt-web-test');
+  assert.ok(reply.contentId);
+  c.host.open(reply.contentId);
+  const attached = await waitFor(() => c.messages.find((m) => m.t === 'attached'), 'attached');
+  assert.deepEqual([attached.cols, attached.rows], [88, 28]);
+  await waitFor(() => c.messages.some((m) => m.t === 'list' &&
+    m.repos.some((r) => r.id === 'repo-supacode' && r.rowIds?.includes(reply.worktreeId) &&
+      r.worktrees.some((w) => w.id === reply.worktreeId))), 'worktree-то в list');
+  c.stop();
+});
+
+test('нов worktree: грешките на Mac-а идват с ref-а и кода', async () => {
+  const c = connect();
+  c.host.setActive(true);
+  await waitFor(() => c.relay.state.hostSession != null, 'сесия');
+  const errorFor = (ref) => waitFor(() => c.messages.find((m) => m.t === 'error' && m.ref === ref), `грешка ${ref}`, 6_000);
+  c.host.newWorktree({ repositoryId: 'repo-supacode', name: 'main', ref: 'e1' });
+  assert.equal((await errorFor('e1')).code, 'worktree_failed');
+  c.host.newWorktree({ repositoryId: 'repo-notes', name: 'x', ref: 'e2' });
+  assert.equal((await errorFor('e2')).code, 'worktree_unsupported');
+  c.host.newWorktree({ repositoryId: 'repo-missing', name: 'x', ref: 'e3' });
+  assert.equal((await errorFor('e3')).code, 'worktree_invalid');
+  // Празно име не тръгва към Mac-а.
+  c.host.newWorktree({ repositoryId: 'repo-supacode', name: '   ', ref: 'e4' });
+  assert.equal((await errorFor('e4')).code, 'worktree_invalid');
+  c.host.newWorktree({ repositoryId: 'repo-supacode', name: 'mock-notab-1', ref: 'e5' });
+  const noTab = await waitFor(() => c.messages.find((m) => m.t === 'worktree.new' && m.ref === 'e5'), 'без таб', 5_000);
+  assert.equal(noTab.contentId, null);
+  c.stop();
+});
+
+test('нов worktree: смяна на пътя — отговорът няма да дойде, страницата го знае веднага', async () => {
+  const c = connect();
+  c.host.setActive(true);
+  await waitFor(() => c.relay.state.hostSession != null && c.relay.state.path === 'lan', 'LAN сесия', 10_000);
+  c.host.newWorktree({ repositoryId: 'repo-supacode', name: 'mock-slow-path', ref: 'p1' });
+  c.host.open('content-shell-main');
+  await waitFor(() => c.messages.some((m) => m.t === 'attached'), 'attached');
+  c.host.input(Buffer.from('mock-lan-off\r').toString('base64'), 'content-shell-main');
+  const lost = await waitFor(() => c.messages.find((m) => m.t === 'error' && m.ref === 'p1'), 'изгубен отговор', 6_000);
+  assert.equal(lost.code, 'worktree_lost');
+  await waitFor(() => c.messages.filter((m) => m.t === 'attached').length === 2, 'attached по relay-а');
+  c.host.input(Buffer.from('mock-lan-on\r').toString('base64'), c.host.openContentId);
+  await waitFor(() => c.relay.state.path === 'lan', 'пак LAN', 10_000);
+  c.stop();
+});
+
 test('предложенията идват с ref-а на страницата', async () => {
   const c = connect();
   c.host.setActive(true);

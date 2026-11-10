@@ -113,6 +113,15 @@ const DECODERS = {
   'tab.new': (o) => (isStr(o.contentId)
     ? { t: 'tab.new', id: optId(o.id), worktreeId: isStr(o.worktreeId) ? o.worktreeId : '', tabId: isStr(o.tabId) ? o.tabId : '', contentId: o.contentId }
     : null),
+  // ЗД11: успех и без `tabId`/`contentId` — worktree-то е създадено, но първият му таб не е
+  // дошъл; затова тук не се иска `contentId`, както при `tab.new`.
+  'worktree.new': (o) => (isStr(o.worktreeId)
+    ? {
+      t: 'worktree.new', id: optId(o.id), repositoryId: isStr(o.repositoryId) ? o.repositoryId : '',
+      worktreeId: o.worktreeId, name: isStr(o.name) ? o.name : '',
+      tabId: isStr(o.tabId) ? o.tabId : null, contentId: isStr(o.contentId) ? o.contentId : null,
+    }
+    : null),
   // `code` (напр. `resize_failed`) и `contentId` са незадължителни: стар host ги изпуска, а
   // непознат `code` страницата показва като обикновена грешка с `message`.
   error: (o) => ({

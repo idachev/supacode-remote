@@ -18,6 +18,12 @@ import {
 import { TerminalView } from './terminal.js';
 import { SIDEBAR_KEY, currentTab, newTabFont, nextRef, ui } from './ui-state.js';
 import { nextWorktree } from './view-model.js';
+import { closeWorktreeDialog, initWorktreeDialog, openWorktreeDialog, renderWorktreeDialog } from './worktree-dialog.js';
+
+/** Отговорът на `worktree.new` не дойде: таймаут или паднала връзка (К2, К3). */
+const WORKTREE_UNKNOWN = 'Mac-ът още създава worktree-то или връзката падна. Ако стане, ще се появи в списъка; ако не, Mac-ът показва защо. Можеш да опиташ пак със същото име.';
+/** Тези кодове значат „отговорът няма да дойде“, а не „Mac-ът отказа“. */
+const WORKTREE_UNKNOWN_CODES = ['worktree_timeout', 'worktree_lost'];
 
 function render() {
   renderBanner();
@@ -66,6 +72,7 @@ function onState(m) {
   if (m.hostSession == null && ui.phase === 'live') ui.phase = 'opening';
   if (m.connection === 'unauthorized' || !m.configured) showSetup();
   render();
+  renderWorktreeDialog();
 }
 
 function onList(m) {
@@ -79,6 +86,8 @@ function onList(m) {
   ui.list = m;
   notifyAwaiting(m);
   renderSessions();
+  // Подсказката „вече има“ е по пълния списък, а той може да се е сменил.
+  renderWorktreeDialog();
   renderTopbar();
   renderTerminalBar();
 }
@@ -116,6 +125,33 @@ function onTabNew(m) {
   openTab(m.contentId);
 }
 
+/** Новият worktree е готов: разгъва се и първият му таб се отваря, както след „Нов таб“. */
+function onWorktreeNew(m) {
+  if (!ui.newWorktree || m.ref !== ui.newWorktree.ref) {
+    // Диалогът е затворен, докато Mac-ът създаваше (ЗД11): само се казва, че е готово.
+    toast(`Worktree-то „${m.name}“ е създадено`);
+    return;
+  }
+  closeWorktreeDialog();
+  ui.expanded.add(m.worktreeId);
+  if (m.contentId) openTab(m.contentId);
+  else toast(`Worktree-то „${m.name}“ е създадено, но първият му таб не се отвори. Отвори „+ Нов таб“ под него.`);
+  renderSessions();
+}
+
+/** `worktree_timeout` носи английски текст от Mac-а; на потребителя се казва на български. */
+function worktreeErrorText(m) {
+  return WORKTREE_UNKNOWN_CODES.includes(m.code) ? WORKTREE_UNKNOWN : (m.message || 'Грешка от host-а');
+}
+
+/** Грешката за отворения диалог стои в него, с името, за да се поправи и пусне пак. */
+function onWorktreeError(m) {
+  ui.newWorktree.ref = null;
+  ui.newWorktree.error = worktreeErrorText(m);
+  renderWorktreeDialog();
+  renderSessions();
+}
+
 function onSuggest(m) {
   if (m.ref !== ui.suggestRef) return;
   ui.suggestRef = null;
@@ -127,9 +163,14 @@ function onError(m) {
     onResizeFailed(m);
     return;
   }
+  if (m.ref && m.ref === ui.newWorktree?.ref) {
+    onWorktreeError(m);
+    return;
+  }
   if (m.ref && m.ref === ui.newTabRef) finishNewTab();
   if (m.ref && m.ref === ui.suggestRef) closeSuggestions();
-  toastWithApp(m.message || 'Грешка от host-а');
+  // Затворен диалог „Нов worktree“: отказът му идва тук, на български за `worktree_timeout`.
+  toastWithApp(m.kind === 'worktree.new' ? worktreeErrorText(m) : (m.message || 'Грешка от host-а'));
 }
 
 /**
@@ -144,6 +185,7 @@ function onResizeFailed(m) {
 function onReplaced() {
   // Отговорите вече отиват към другата страница.
   dropRequests();
+  closeWorktreeDialog();
   $('replaced').hidden = false;
 }
 
@@ -158,6 +200,7 @@ function onReset() {
   terminal.clear();
   history.replaceState(null, '', location.pathname);
   dropRequests();
+  closeWorktreeDialog();
   render();
 }
 
@@ -174,6 +217,7 @@ const MESSAGES = {
   size: forOpenTab(onSize),
   detached: forOpenTab(onDetached),
   'tab.new': onTabNew,
+  'worktree.new': onWorktreeNew,
   suggest: onSuggest,
   error: onError,
   'setup.result': setupResult,
@@ -208,6 +252,22 @@ function newTab(worktreeId) {
   renderSessions();
 }
 
+/** ЗД11: `cols`/`rows` на първия таб — както при „Нов таб“ (ОП27); Mac-ът после взима своя размер. */
+function newWorktree(d) {
+  if (d.ref) return;
+  const grid = terminal.gridAt(newTabFont());
+  const ref = nextRef();
+  if (!link.send({ t: 'worktree.new', repositoryId: d.repositoryId, name: d.name.trim(), cols: grid?.cols, rows: grid?.rows, ref })) {
+    d.error = 'Няма връзка — не е изпратено';
+    renderWorktreeDialog();
+    return;
+  }
+  d.ref = ref;
+  d.error = null;
+  renderWorktreeDialog();
+  renderSessions();
+}
+
 function finishNewTab() {
   ui.newTabRef = null;
   ui.newTabWorktreeId = null;
@@ -217,6 +277,7 @@ function finishNewTab() {
 function dropRequests() {
   closeSuggestions();
   if (ui.newTabRef) finishNewTab();
+  if (ui.newWorktree?.ref) onWorktreeError({ code: 'worktree_lost' });
 }
 
 function moveTab(step) {
@@ -357,7 +418,8 @@ function wireControls() {
   window.addEventListener('keydown', onKeyCapture, true);
 }
 
-initSessionsView({ openTab, newTab });
+initSessionsView({ openTab, newTab, newWorktree: openWorktreeDialog });
+initWorktreeDialog(newWorktree);
 initNotifyView({ onOpen: openTab });
 initHostsView((id) => link.send({ t: 'host.select', id }));
 initSetupView({ onSave: (connectionKey) => link.send({ t: 'setup', connectionKey }), onClosed: () => terminal.focus() });

@@ -5,8 +5,8 @@ import { icon } from './icons.js';
 import { activityLabel, displayName, isAwaiting, sessionRows } from './session-groups.js';
 import { COLLAPSED_KEY, currentTab, ui } from './ui-state.js';
 
-/** `openTab(contentId)` и `newTab(worktreeId)` идват от app.js. */
-let actions = { openTab() {}, newTab() {} };
+/** `openTab(contentId)`, `newTab(worktreeId)` и `newWorktree(repository)` идват от app.js. */
+let actions = { openTab() {}, newTab() {}, newWorktree() {} };
 
 export function initSessionsView(given) {
   actions = given;
@@ -49,7 +49,19 @@ const ROW_VIEWS = {
 function repositoryRow(repository) {
   const node = el('div', 'row row-repo');
   node.append(icon('repository'), el('span', 'name', repository.name));
+  // ЗД11: само щом Mac-ът каже, че може; стар host не праща `canCreateWorktree`.
+  if (repository.canCreateWorktree === true) node.append(newWorktreeButton(repository));
   return node;
+}
+
+function newWorktreeButton(repository) {
+  const button = el('button', 'repo-new', '+');
+  button.type = 'button';
+  button.title = `Нов worktree в ${repository.name}`;
+  button.setAttribute('aria-label', button.title);
+  button.disabled = ui.state?.hostSession == null || ui.newWorktree?.ref != null;
+  button.addEventListener('click', () => actions.newWorktree(repository));
+  return button;
 }
 
 function worktreeRows(row, open) {

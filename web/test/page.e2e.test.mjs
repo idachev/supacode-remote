@@ -237,3 +237,30 @@ test('презареждане отваря същия таб наново', asy
   assert.equal(page.url(), url);
   assert.equal(await page.locator('.tab.open').count(), 1);
 });
+
+test('„+“ на repository-то: подсказки, грешка от Mac-а в диалога, после новият worktree с отворен таб (ЗД11)', async (t) => {
+  if (!browser) return t.skip('няма Google Chrome');
+  // notes-app е папка: Mac-ът казва `canCreateWorktree: false` и бутон няма.
+  assert.equal(await page.locator('.row-repo', { hasText: 'notes-app' }).locator('.repo-new').count(), 0);
+  await page.locator('.row-repo', { hasText: 'supacode' }).locator('.repo-new').click();
+  assert.equal(await page.locator('#worktree-title').textContent(), 'Нов worktree в supacode');
+  assert.ok(await page.locator('#worktree-create').isDisabled(), 'празно име');
+  await page.locator('#worktree-name').fill('a b');
+  assert.equal(await page.locator('#worktree-hint').textContent(), 'Без интервали в името');
+  assert.ok(await page.locator('#worktree-create').isDisabled());
+  await page.locator('#worktree-name').fill('Resume-Picker');
+  assert.match(await page.locator('#worktree-hint').textContent(), /Вече има/);
+  // Грешка от git на Mac-а: остава в диалога с името, без тост.
+  await page.locator('#worktree-name').fill('mock-fail-e2e');
+  await page.locator('#worktree-create').click();
+  await page.locator('#worktree-error').waitFor({ state: 'visible', timeout: 5_000 });
+  assert.match(await page.locator('#worktree-error').textContent(), /mock git failure/);
+  assert.equal(await page.locator('#worktree-name').inputValue(), 'mock-fail-e2e');
+  await page.locator('#worktree-name').fill('wt-e2e');
+  await page.locator('#worktree-name').press('Enter');
+  await waitFor(() => /#c=content-new-\d+$/.test(page.url()), 'табът на новия worktree', 6_000);
+  await waitLive();
+  assert.ok(await page.locator('#worktree').isHidden());
+  await page.locator('.row-wt', { hasText: 'wt-e2e' }).waitFor({ timeout: 6_000 });
+  assert.equal(await page.locator('.tab.open').count(), 1);
+});

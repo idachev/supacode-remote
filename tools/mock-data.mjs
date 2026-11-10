@@ -8,6 +8,7 @@ export const officeRepos = [
   {
     id: 'repo-supacode',
     name: 'supacode',
+    canCreateWorktree: true,
     worktrees: [
       {
         id: 'wt-main', name: 'main', branch: 'main', status: 'main', focused: false,
@@ -42,6 +43,8 @@ export const officeRepos = [
   {
     id: 'repo-notes',
     name: 'notes-app',
+    // Папка, а не git repository: без бутон „+“ (ЗД11).
+    canCreateWorktree: false,
     group: 'Personal',
     worktrees: [
       {
@@ -57,6 +60,7 @@ export const officeRepos = [
   {
     id: 'repo-shop',
     name: 'web-shop',
+    canCreateWorktree: true,
     group: 'Work',
     worktrees: [
       {
@@ -99,6 +103,7 @@ export const homeRepos = [
   {
     id: 'repo-dotfiles',
     name: 'dotfiles',
+    canCreateWorktree: true,
     worktrees: [
       {
         id: 'wt-dot-main', name: 'main', branch: 'main', status: 'main', focused: true, working: false,

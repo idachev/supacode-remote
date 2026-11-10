@@ -100,6 +100,15 @@ test('error пази незадължителните `code` и `contentId`; с�
   assert.equal(decode('{"t":"error","message":"x","code":5,"contentId":{}}').code, null);
 });
 
+test('worktree.new: успех с таб, успех без таб и без worktreeId', () => {
+  const withTab = decode('{"t":"worktree.new","id":7,"repositoryId":"r","worktreeId":"/w/x","name":"x","tabId":"t","contentId":"c"}');
+  assert.deepEqual(withTab, { t: 'worktree.new', id: 7, repositoryId: 'r', worktreeId: '/w/x', name: 'x', tabId: 't', contentId: 'c' });
+  const noTab = decode('{"t":"worktree.new","id":7,"repositoryId":"r","worktreeId":"/w/x","name":"x"}');
+  assert.equal(noTab.contentId, null);
+  assert.equal(noTab.tabId, null);
+  assert.equal(decode('{"t":"worktree.new","id":7,"repositoryId":"r"}'), null);
+});
+
 test('терминалните съобщения без задължително поле се изхвърлят', () => {
   assert.equal(decode('{"t":"out","b64":"aGk="}'), null);
   assert.equal(decode('{"t":"attached","contentId":"c","cols":"x","rows":2}'), null);

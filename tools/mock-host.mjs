@@ -38,6 +38,13 @@
 // `tab.new` отваря нов shell в worktree-то на свързания Mac. С `cols` и `rows` (и двете, цели
 // числа) той тръгва с този размер, ограничен до 20…500 × 5…200; без тях — 120 × 40, както на Mac-а.
 //
+// `worktree.new` (ЗД11) създава worktree с първи таб в repository-то, след 1 s. Грешките са като на
+// Mac-а: `worktree_invalid` (няма repository / име, име над 200 байта), `worktree_unsupported`
+// (notes-app е папка), `worktree_busy` (същото име още се създава), `worktree_failed` (име, което
+// вече има). Имената пробват другите случаи: `mock-fail…` — грешка от git, `mock-slow…` — 6 s,
+// `mock-timeout…` — `worktree_timeout` след 3 s, `mock-notab…` — успех без таб. Старият host
+// (MOCK_LEGACY) не праща `canCreateWorktree` и отговаря на `worktree.new` с „unknown type“.
+//
 // LAN пътят (раздел „LAN shortcut“ в протокола): wss://127.0.0.1:LAN_PORT/lan (8788), от
 // emulator-а 10.0.2.2. TLS 1.3 със самоподписан сертификат от паметта, `fp` и `fpMac` в
 // `hello`. LAN=0 го изключва.
@@ -121,7 +128,7 @@ for (const h of singleHost ? [makeHost({ ...office, name: 'Mock Mac' })] : [
 if (process.env.MOCK_LEGACY === '1') {
   // Стар Supacode: без име и без hostId, relay-ят го води `default`. Дълбоко копие: `tab.new`
   // добавя в масива с табове, а общ масив би показал новия таб и в „Home Mac“.
-  const legacyRepos = structuredClone(homeRepos).map((r) => ({ ...r, id: 'legacy-' + r.id }));
+  const legacyRepos = structuredClone(homeRepos).map(({ canCreateWorktree, ...r }) => ({ ...r, id: 'legacy-' + r.id }));
   hosts.set('default', makeHost({ id: 'default', online: true, repos: legacyRepos }));
 }
 const officeHost = hosts.get('0f1ce0ff1ce0ff1c');
@@ -376,6 +383,73 @@ function newTab(c, host, msg) {
   send(c, { t: 'tab.new', id: msg.id, worktreeId: msg.worktreeId, tabId, contentId });
 }
 
+/** Заявките `worktree.new`, които още чакат: repository + име с малки букви (`worktree_busy`). */
+const creatingWorktrees = new Set();
+
+function worktreeError(c, msg, code, message) {
+  log('worktree.new failed', { code, client: c.id });
+  send(c, { t: 'error', id: msg.id ?? null, message, code });
+}
+
+/** Проверките, които Mac-ът прави, преди да пусне git. `null` — може. */
+function worktreeRequestError(host, msg) {
+  if (typeof msg.repositoryId !== 'string') return ['worktree_invalid', 'worktree.new needs a repositoryId'];
+  const repo = host.repos.find((r) => r.id === msg.repositoryId);
+  if (!repo) return ['worktree_invalid', 'no such repository'];
+  const name = typeof msg.name === 'string' ? msg.name.trim() : '';
+  if (!name) return ['worktree_invalid', 'worktree.new needs a branch name'];
+  if (Buffer.byteLength(name) > 200) return ['worktree_invalid', 'the branch name is too long'];
+  if (repo.canCreateWorktree !== true) return ['worktree_unsupported', 'worktrees are only supported for git repositories'];
+  return null;
+}
+
+/** Нов worktree като бутона на Supacode: името е branch-ът, а първият таб се отваря сам. */
+function newWorktree(c, host, msg) {
+  // Стар Supacode (MOCK_LEGACY) не познава съобщението — точно като истинския router.
+  if (host.id === 'default') return send(c, { t: 'error', id: msg.id ?? null, message: 'unknown message type: worktree.new' });
+  const problem = worktreeRequestError(host, msg);
+  if (problem) return worktreeError(c, msg, ...problem);
+  const repo = host.repos.find((r) => r.id === msg.repositoryId);
+  const name = msg.name.trim();
+  const key = `${host.id}/${repo.id}/${name.toLowerCase()}`;
+  if (creatingWorktrees.has(key)) return worktreeError(c, msg, 'worktree_busy', 'a worktree with this branch is already being created');
+  creatingWorktrees.add(key);
+  const delay = name.startsWith('mock-slow') ? 6_000 : name.startsWith('mock-timeout') ? 3_000 : 1_000;
+  log('worktree.new started', { host: host.id, repo: repo.id, name, client: c.id });
+  setTimeout(() => {
+    creatingWorktrees.delete(key);
+    finishWorktree(c, host, repo, name, msg);
+  }, delay);
+}
+
+function finishWorktree(c, host, repo, name, msg) {
+  const lower = name.toLowerCase();
+  if (repo.worktrees.some((w) => w.name.toLowerCase() === lower || w.branch?.toLowerCase() === lower)) {
+    return worktreeError(c, msg, 'worktree_failed', 'Branch name already exists: Choose a different branch name and try again.');
+  }
+  if (name.startsWith('mock-fail')) return worktreeError(c, msg, 'worktree_failed', 'Unable to create worktree: fatal: mock git failure');
+  if (name.startsWith('mock-timeout')) {
+    return worktreeError(c, msg, 'worktree_timeout', 'worktree creation is still running on the Mac; it will appear in the list when it finishes');
+  }
+  const worktree = { id: `/mock/${repo.name}/${name}`, name, branch: name, status: 'unpinned', focused: true, working: false, tabs: [] };
+  repo.worktrees.push(worktree);
+  // Иначе списъкът по секции не го показва: под repository-то стоят само id-тата от `rowIds`.
+  if (host.rowIds?.[repo.id]) host.rowIds[repo.id].push(worktree.id);
+  const reply = { t: 'worktree.new', id: msg.id ?? null, repositoryId: repo.id, worktreeId: worktree.id, name };
+  if (!name.startsWith('mock-notab')) {
+    const sized = Number.isInteger(msg.cols) && Number.isInteger(msg.rows);
+    newTabCounter += 1;
+    const contentId = `content-new-${newTabCounter}`;
+    const tabId = `tab-new-${newTabCounter}`;
+    worktree.tabs.push({ id: tabId, contentId, title: 'zsh', focused: true, working: false, readOnly: false, agents: [] });
+    host.knownContent.add(contentId);
+    session(host, contentId, sized ? clamp(msg.cols, 20, 500) : COLS, sized ? clamp(msg.rows, 5, 200) : ROWS);
+    Object.assign(reply, { tabId, contentId });
+  }
+  log('worktree.new created', { host: host.id, repo: repo.id, name, content: reply.contentId ?? null, client: c.id });
+  send(c, reply);
+}
+
 function suggest(c, msg) {
   const suggestions = ['git status', 'echo здравей 👋', 'ls -la'];
   setTimeout(() => send(c, { t: 'suggest', id: msg.id, contentId: msg.contentId, suggestions }), 2000);
@@ -389,6 +463,7 @@ const messageHandlers = {
   input,
   resize,
   'tab.new': newTab,
+  'worktree.new': newWorktree,
   suggest: (c, host, msg) => suggest(c, msg),
 };
 
