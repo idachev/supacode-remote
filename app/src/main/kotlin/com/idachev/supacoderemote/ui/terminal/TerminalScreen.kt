@@ -469,6 +469,8 @@ private fun InputBar(
         label = { Text("Живи клавиши") },
         modifier = Modifier.height(36.dp).testTag("live-keys"),
       )
+      // В реда с клавиши, а не под „Прати“: там собственикът го натискаше вместо „Прати“.
+      SuggestButton(suggesting, onClick = vm::suggest)
       KeyButton("Esc") { vm.sendKey(TerminalKeys.ESC) }
       KeyButton("Tab") { vm.sendKey(TerminalKeys.TAB) }
       KeyButton("Ctrl", highlighted = ctrlSticky) { vm.toggleCtrl() }
@@ -514,28 +516,31 @@ private fun InputBar(
         modifier = Modifier.weight(1f).focusRequester(fieldFocus).testTag("terminal-input"),
         )
       }
-      Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        if (!liveKeys) {
-          Button(
-            onClick = { if (vm.sendLine(field.text)) field = TextFieldValue("") },
-            contentPadding = PaddingValues(horizontal = 12.dp),
-            modifier = Modifier.height(40.dp).testTag("terminal-send"),
-          ) { Text("Прати") }
-        }
-        OutlinedButton(
-          onClick = vm::suggest,
-          enabled = !suggesting,
-          contentPadding = PaddingValues(horizontal = 8.dp),
-          modifier = Modifier.height(36.dp).testTag("terminal-suggest"),
-        ) {
-          if (suggesting) {
-            CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(14.dp))
-            Text(" Мисля…")
-          } else {
-            Text("Предложи")
-          }
-        }
+      if (!liveKeys) {
+        Button(
+          onClick = { if (vm.sendLine(field.text)) field = TextFieldValue("") },
+          contentPadding = PaddingValues(horizontal = 12.dp),
+          modifier = Modifier.height(40.dp).testTag("terminal-send"),
+        ) { Text("Прати") }
       }
+    }
+  }
+}
+
+/** „Предложи“: предложенията само пълнят полето за ред, нищо не се праща само. */
+@Composable
+private fun SuggestButton(suggesting: Boolean, onClick: () -> Unit) {
+  OutlinedButton(
+    onClick = onClick,
+    enabled = !suggesting,
+    contentPadding = PaddingValues(horizontal = 10.dp),
+    modifier = Modifier.height(36.dp).testTag("terminal-suggest"),
+  ) {
+    if (suggesting) {
+      CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(14.dp))
+      Text(" Мисля…")
+    } else {
+      Text("Предложи")
     }
   }
 }
