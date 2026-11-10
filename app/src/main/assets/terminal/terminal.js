@@ -62,19 +62,34 @@
   // „Размер на текста“: 0 — по ширина (колоните влизат в екрана), иначе точно толкова px.
   var fixedFont = 0;
 
-  // „Размер по този екран“: размерът, поискан от Mac-а, и шрифтът, при който е мерен. Докато
-  // терминалът е точно толкова, шрифтът остава (иначе fit() би го наместил по ширината); друг
-  // `size` от Mac-а го освобождава.
-  var requestedGrid = null;
+  // „Размер по този екран“: [pendingGrid] е поисканият размер и шрифтът, при който е мерен;
+  // [heldGrid] — същото, след като Mac-ът е отговорил със `size` точно толкова. Само тогава
+  // шрифтът остава (иначе fit() би го наместил по ширината). Без отговор (размерът вече е бил
+  // такъв, стар host) задържане няма. Друг `size` от Mac-а освобождава и двете.
+  var pendingGrid = null;
+  var heldGrid = null;
 
   function keepRequestedFont() {
-    if (!requestedGrid || requestedGrid.cols !== term.cols || requestedGrid.rows !== term.rows) return false;
-    if (term.options.fontSize !== requestedGrid.font) term.options.fontSize = requestedGrid.font;
+    if (!heldGrid || heldGrid.cols !== term.cols || heldGrid.rows !== term.rows) return false;
+    if (term.options.fontSize !== heldGrid.font) term.options.fontSize = heldGrid.font;
     return true;
   }
 
-  function releaseRequestedGrid(cols, rows) {
-    if (requestedGrid && (requestedGrid.cols !== cols || requestedGrid.rows !== rows)) requestedGrid = null;
+  function sameGrid(grid, cols, rows) {
+    return grid !== null && grid.cols === cols && grid.rows === rows;
+  }
+
+  /** `size` от Mac-а: отговор на поискания размер или друга промяна. */
+  function onHostSize(cols, rows) {
+    if (sameGrid(pendingGrid, cols, rows)) heldGrid = pendingGrid;
+    else if (!sameGrid(heldGrid, cols, rows)) heldGrid = null;
+    pendingGrid = null;
+  }
+
+  /** Нов `attached`: не е отговор на поискания размер, само пази задържания, ако е същият. */
+  function onAttached(cols, rows) {
+    if (!sameGrid(heldGrid, cols, rows)) heldGrid = null;
+    pendingGrid = null;
   }
 
   function fit() {
@@ -117,7 +132,7 @@
       term.write('', function () {
         releasePan();
         term.reset();
-        releaseRequestedGrid(cols, rows);
+        onAttached(cols, rows);
         term.resize(cols, rows);
         fit();
       });
@@ -128,7 +143,7 @@
     resize: function (cols, rows) {
       term.write('', function () {
         releasePan();
-        releaseRequestedGrid(cols, rows);
+        onHostSize(cols, rows);
         term.resize(cols, rows);
         fit();
       });
@@ -152,7 +167,7 @@
       var cols = Math.floor(document.documentElement.clientWidth / (rect.width / term.cols));
       var rows = Math.floor(height / (rect.height / term.rows));
       if (cols < 1 || rows < 1) return;
-      requestedGrid = { cols: cols, rows: rows, font: term.options.fontSize };
+      pendingGrid = { cols: cols, rows: rows, font: term.options.fontSize };
       if (bridge.grid) bridge.grid(cols, rows);
     },
     /** „Размер на текста“: [px] 0 е по ширина. По-широк терминал се мести хоризонтално. */
