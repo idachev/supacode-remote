@@ -38,7 +38,10 @@ export function renderTopbar() {
 
 export function renderTerminalBar() {
   const found = currentTab();
-  $('terminal-title').textContent = found ? `${found.repo.name} · ${displayName(found.worktree)} · ${found.tab.title || 'Таб'}` : '';
+  const title = found ? `${found.repo.name} · ${displayName(found.worktree)} · ${found.tab.title || 'Таб'}` : '';
+  // Над два реда текстът се реже; целият е в подсказката.
+  $('terminal-title').textContent = title;
+  $('terminal-title').title = title;
   const live = ui.phase === 'live';
   $('suggest-button').disabled = !live;
   $('line-button').disabled = !live;
