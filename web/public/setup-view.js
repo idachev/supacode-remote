@@ -1,7 +1,8 @@
-// „Настройка“: ключът за връзка и шрифтът за нови табове. Ключът не идва в страницата: показва се
+// „Настройка“: ключът за връзка, шрифтът за нови табове и известията. Ключът не идва в страницата: показва се
 // само relay-ят, а ключът — със звездички.
 
 import { $, writeStorage } from './dom.js';
+import { syncNotifySetting } from './notify-view.js';
 import { FONT_KEY, newTabFont, ui } from './ui-state.js';
 
 let sendKey = () => {};
@@ -18,6 +19,7 @@ export function showSetup() {
   if (!$('setup').hidden) return;
   $('setup-error').hidden = true;
   $('setup-font').value = String(newTabFont());
+  syncNotifySetting();
   const label = ui.state?.relayLabel;
   $('setup-current').textContent = label ? `Записан: ${label}/••••••••` : '';
   $('setup-key').placeholder = label ? `${label}/••••••••` : 'Relay и ключ, разделени с „/“';

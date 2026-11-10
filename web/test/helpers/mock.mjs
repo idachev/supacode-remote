@@ -61,7 +61,8 @@ export async function startMock({ lan = true, key = 'test-key' } = {}) {
 export async function waitFor(predicate, what, timeoutMs = 8_000) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
-    const value = predicate();
+    // `await`: проверка в браузъра връща Promise, а той винаги е „истина“.
+    const value = await predicate();
     if (value) return value;
     await new Promise((r) => setTimeout(r, 20));
   }

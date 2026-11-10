@@ -5,6 +5,7 @@ import { renderBanner, renderTerminalBar, renderTerminalStatus, renderTopbar } f
 import { $, readJson, toast, writeStorage } from './dom.js';
 import { followHostPick, hideHosts, initHostsView, showHosts } from './hosts-view.js';
 import { LocalLink } from './link.js';
+import { initNotifyView, notifyAwaiting, resetAwaiting } from './notify-view.js';
 import { findTab, sessionRows, worktreeOrder } from './session-groups.js';
 import { initSessionsView, renderSessions } from './sessions-view.js';
 import { initSetupView, setupResult, showSetup } from './setup-view.js';
@@ -28,6 +29,8 @@ const terminal = new TerminalView($('term'), $('term-area'), {
   onInput: (b64) => {
     if (ui.phase === 'live') link.send({ t: 'input', b64, contentId: ui.openContentId });
   },
+  // УА4: маркираното в Claude Code (OSC 52) идва тук, не само в clipboard-а на Mac-а.
+  onClipboard: (text) => copyText(text),
 });
 
 function linkUp() {
@@ -71,6 +74,7 @@ function onList(m) {
   const found = !ui.list && ui.openContentId ? findTab(m, ui.openContentId) : null;
   if (found) ui.expanded.add(found.worktree.id);
   ui.list = m;
+  notifyAwaiting(m);
   renderSessions();
   renderTopbar();
   renderTerminalBar();
@@ -128,6 +132,7 @@ function onReset() {
   ui.listText = '';
   ui.openContentId = null;
   ui.phase = 'none';
+  resetAwaiting();
   terminal.clear();
   history.replaceState(null, '', location.pathname);
   dropRequests();
@@ -257,9 +262,13 @@ function onKeyCapture(e) {
 
 // ---- бутони и полета ----
 
-async function copyAll() {
+function copyAll() {
+  return copyText(terminal.allText());
+}
+
+async function copyText(text) {
   try {
-    await navigator.clipboard.writeText(terminal.allText());
+    await navigator.clipboard.writeText(text);
     toast('Копирано');
   } catch {
     toast('Не мога да пиша в clipboard-а');
@@ -306,6 +315,7 @@ function wireControls() {
 }
 
 initSessionsView({ openTab, newTab });
+initNotifyView({ onOpen: openTab });
 initHostsView((id) => link.send({ t: 'host.select', id }));
 initSetupView({ onSave: (connectionKey) => link.send({ t: 'setup', connectionKey }), onClosed: () => terminal.focus() });
 initSuggestions({ link, terminal });

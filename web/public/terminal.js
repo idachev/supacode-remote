@@ -9,6 +9,8 @@
 // втори отговор би влязъл в PTY-то като текст. Затова тези въпроси се спират в parser-а на
 // xterm.js, преди той да напише отговор.
 
+import { clipboardText } from './osc52.js';
+
 const MIN_FONT = 6;
 const MAX_FONT = 22;
 const BASE_FONT = 14;
@@ -78,12 +80,14 @@ function binaryToB64(data) {
 }
 
 export class TerminalView {
-  constructor(container, area, { onInput }) {
+  constructor(container, area, { onInput, onClipboard }) {
     this.area = area;
     this.onInput = onInput;
+    this.onClipboard = onClipboard;
     this.term = new window.Terminal(XTERM_OPTIONS);
     this.term.open(container);
     this.#blockReplies();
+    this.#wireClipboard();
     this.#wireInput();
     new ResizeObserver(() => this.fit()).observe(area);
   }
@@ -94,6 +98,15 @@ export class TerminalView {
     });
     this.term.onBinary((data) => this.onInput(binaryToB64(data)));
     this.term.attachCustomKeyEventHandler((e) => this.#onKey(e));
+  }
+
+  /** OSC 52: копираното в програмата отива в clipboard-а на лаптопа; `true` — без отговор към PTY-то. */
+  #wireClipboard() {
+    this.term.parser.registerOscHandler(52, (data) => {
+      const text = clipboardText(data);
+      if (text) this.onClipboard(text);
+      return true;
+    });
   }
 
   /** `false` — xterm.js да не обработва клавиша. ⌘ е на браузъра; Ctrl+⌘ хваща app.js по-рано. */

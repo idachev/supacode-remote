@@ -112,6 +112,7 @@ code { background: var(--panel-2); padding: 1px 4px; border-radius: 4px; }
   padding: 18px 20px; display: flex; flex-direction: column; gap: 8px; }
 .dialog h2 { margin: 0 0 4px; font-size: 16px; }
 .dialog p { margin: 0; }
+.dialog .check { display: flex; align-items: center; gap: 8px; }
 .dialog-buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
 .keys td { padding: 2px 12px 2px 0; }
 .keys td:first-child { white-space: nowrap; font-family: Menlo, monospace; }
