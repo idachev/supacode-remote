@@ -113,7 +113,12 @@ const DECODERS = {
   'tab.new': (o) => (isStr(o.contentId)
     ? { t: 'tab.new', id: optId(o.id), worktreeId: isStr(o.worktreeId) ? o.worktreeId : '', tabId: isStr(o.tabId) ? o.tabId : '', contentId: o.contentId }
     : null),
-  error: (o) => ({ t: 'error', id: optId(o.id), message: isStr(o.message) ? o.message : '' }),
+  // `code` (напр. `resize_failed`) и `contentId` са незадължителни: стар host ги изпуска, а
+  // непознат `code` страницата показва като обикновена грешка с `message`.
+  error: (o) => ({
+    t: 'error', id: optId(o.id), message: isStr(o.message) ? o.message : '',
+    code: isStr(o.code) ? o.code : null, contentId: isStr(o.contentId) ? o.contentId : null,
+  }),
 };
 
 function parseObject(text) {

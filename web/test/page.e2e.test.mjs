@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { chromium } from 'playwright-core';
 import { createServer } from '../src/http-server.mjs';
 import { startMock, waitFor } from './helpers/mock.mjs';
+import { RESIZE_REPLY_MS } from '../public/resize-feedback.js';
 
 let mock;
 let app;
@@ -155,6 +156,31 @@ test('„Размер по този екран“ сменя таба на Mac-�
   // Mac-ът връща своя размер (тук: mock-resize) — шрифтът пак се вписва.
   await typeInTerminal('mock-resize');
   await waitFor(async () => (await rowCount()) === 30, 'размерът на Mac-а');
+});
+
+test('„Размер по този екран“: отказ от Mac-а се казва веднага, без „не отговори“ после', async (t) => {
+  if (!browser) return t.skip('няма Google Chrome');
+  // След предишния тест табът е 100 × 30 (mock-resize), а при 14 px тук влиза друг размер.
+  await waitFor(async () => (await page.evaluate(() => document.querySelectorAll('.xterm-rows > div').length)) === 30, 'табът е 100 × 30');
+  const toastText = () => page.locator('#toast').textContent();
+  const sent = mock.log().length;
+  await typeInTerminal('mock-resize-fail');
+  const failHex = Buffer.from('mock-resize-fail\r').toString('hex');
+  await waitFor(() => inputsSince(sent, 'content-codex').join('').includes(failHex), 'mock-resize-fail в mock-а');
+  await page.locator('#fit-button').click();
+  const failed = 'Размерът не се смени: terminal did not start · Supacode 0.0.0-mock (1)';
+  await waitFor(async () => (await toastText()) === failed, 'съобщение за отказа');
+  // Отговорът е дошъл: след срока за `size` не идва „Mac-ът не отговори“.
+  await new Promise((r) => setTimeout(r, RESIZE_REPLY_MS + 500));
+  assert.equal(await toastText(), failed);
+  const okSent = mock.log().length;
+  await typeInTerminal('mock-resize-ok');
+  const okHex = Buffer.from('mock-resize-ok\r').toString('hex');
+  await waitFor(() => inputsSince(okSent, 'content-codex').join('').includes(okHex), 'mock-resize-ok в mock-а');
+  const from = mock.log().length;
+  await page.locator('#fit-button').click();
+  await waitFor(async () => /^Mac-ът смени таба на \d+ × \d+ · /.test(await toastText()), 'resize пак минава');
+  assert.ok(/resize applied, .*content: content-codex,/.test(mock.log().slice(from)));
 });
 
 test('OSC 52 от програмата копира в clipboard-а на браузъра (УА4)', async (t) => {

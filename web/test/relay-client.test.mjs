@@ -168,10 +168,10 @@ test('размер по екрана: само за отворения таб, h
     assert.equal(c.host.resize({ contentId: 'content-notes', cols: 150, rows: 45 }), true);
     const size = await waitFor(() => c.messages.find((m) => m.t === 'size'), 'size');
     assert.deepEqual([size.cols, size.rows], [150, 45]);
-    // Същият размер пак — няма промяна, няма `size`.
+    // Същият размер пак: по договора host-ът пак отговаря със `size`, за да не чака страницата.
     c.host.resize({ contentId: 'content-notes', cols: 150, rows: 45 });
-    await new Promise((r) => setTimeout(r, 300));
-    assert.equal(c.messages.filter((m) => m.t === 'size').length, 1);
+    await waitFor(() => c.messages.filter((m) => m.t === 'size').length === 2, 'втори size');
+    assert.deepEqual(c.messages.filter((m) => m.t === 'size').map((m) => [m.cols, m.rows]), [[150, 45], [150, 45]]);
     c.host.resize({ contentId: 'content-notes', cols: 9999, rows: 1 });
     await waitFor(() => c.messages.some((m) => m.t === 'size' && m.cols === 500 && m.rows === 5), 'ограничен size');
   } finally {

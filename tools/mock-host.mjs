@@ -20,6 +20,8 @@
 //
 // Специални редове, написани в кой да е таб (за ръчна проба):
 //   mock-resize   — host-ът сменя размера на 100x30 и праща `size`;
+//   mock-resize-fail / mock-resize-ok — следващите `resize` на този таб връщат `error` с
+//                   `code:"resize_failed"` / пак минават;
 //   mock-await    — агентът на този таб чака вход (`awaitingInput`), за известията;
 //   mock-busy     — агентът пак работи (`busy`);
 //   mock-offline  — host-ът „изчезва“ от relay-а за 5 s (`relay hostOnline:false`, после
@@ -221,6 +223,8 @@ function onShellExit(s, e) {
 /** Специалните редове от горния коментар, по края на реда. */
 const lineCommands = {
   'mock-resize': (s) => resizeSession(s, 100, 30),
+  'mock-resize-fail': (s) => { s.resizeFails = true; },
+  'mock-resize-ok': (s) => { s.resizeFails = false; },
   'mock-await': (s) => setActivity(s.host, s.contentId, 'awaitingInput'),
   'mock-busy': (s) => setActivity(s.host, s.contentId, 'busy'),
   'mock-rename': (s) => toggleHostName(s.host),
@@ -250,9 +254,9 @@ function endLine(s) {
 }
 
 function resizeSession(s, cols, rows) {
+  if (cols !== s.cols || rows !== s.rows) s.proc.resize(cols, rows);
   s.cols = cols;
   s.rows = rows;
-  s.proc.resize(cols, rows);
   attachedClients(s.host, s.contentId).forEach((c) => send(c, { t: 'size', contentId: s.contentId, cols, rows }));
 }
 
@@ -329,17 +333,25 @@ function input(c, host, msg) {
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
-/** „Размер по този екран“ (ЗД12): само за закачен таб; host-ът ограничава и праща `size` на всички. */
+/**
+ * „Размер по този екран“ (ЗД12): само за закачен таб; host-ът ограничава и праща `size` на всички,
+ * и когато размерът вече е такъв. Неуспех — `error` с `code:"resize_failed"` само на питащия.
+ */
 function resize(c, host, msg) {
   const s = host.sessions.get(msg.contentId);
   if (!s || c.attached !== msg.contentId || !Number.isInteger(msg.cols) || !Number.isInteger(msg.rows)) {
     log('resize ignored', { host: host.id, content: msg.contentId ?? null, client: c.id });
     return;
   }
+  if (s.resizeFails) {
+    log('resize failed', { host: host.id, content: msg.contentId, client: c.id });
+    send(c, { t: 'error', id: msg.id ?? null, message: 'terminal did not start', code: 'resize_failed', contentId: msg.contentId });
+    return;
+  }
   const cols = clamp(msg.cols, 20, 500);
   const rows = clamp(msg.rows, 5, 200);
   log('resize applied', { host: host.id, content: msg.contentId, client: c.id, cols, rows });
-  if (cols !== s.cols || rows !== s.rows) resizeSession(s, cols, rows);
+  resizeSession(s, cols, rows);
 }
 
 let newTabCounter = 0;

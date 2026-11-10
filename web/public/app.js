@@ -6,7 +6,9 @@ import { $, readJson, toast, writeStorage } from './dom.js';
 import { followHostPick, hideHosts, initHostsView, showHosts } from './hosts-view.js';
 import { LocalLink } from './link.js';
 import { initNotifyView, notifyAwaiting, resetAwaiting } from './notify-view.js';
-import { RESIZE_REPLY_MS, RESIZE_SILENT, resizeAskText, resizeReplyText, withHostApp } from './resize-feedback.js';
+import {
+  RESIZE_FAILED, RESIZE_REPLY_MS, RESIZE_SILENT, resizeAskText, resizeFailedText, resizeReplyText, withHostApp,
+} from './resize-feedback.js';
 import { findTab, sessionRows, worktreeOrder } from './session-groups.js';
 import { initSessionsView, renderSessions } from './sessions-view.js';
 import { initSetupView, setupResult, showSetup } from './setup-view.js';
@@ -121,9 +123,22 @@ function onSuggest(m) {
 }
 
 function onError(m) {
+  if (m.code === RESIZE_FAILED && m.contentId === ui.openContentId) {
+    onResizeFailed(m);
+    return;
+  }
   if (m.ref && m.ref === ui.newTabRef) finishNewTab();
   if (m.ref && m.ref === ui.suggestRef) closeSuggestions();
   toastWithApp(m.message || 'Грешка от host-а');
+}
+
+/**
+ * Mac-ът не смени размера: отговорът е дошъл, затова „не отговори“ по-късно би излъгал. Ако PTY-то
+ * държи друг размер, `size` с него е дошъл преди грешката и вече е вписал шрифта.
+ */
+function onResizeFailed(m) {
+  cancelResizeAsk();
+  toastWithApp(resizeFailedText(m.message));
 }
 
 function onReplaced() {

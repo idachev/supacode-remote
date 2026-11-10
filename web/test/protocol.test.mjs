@@ -92,6 +92,14 @@ test('hello пази версията на Supacode (`app`); стар host ил�
   assert.equal(decode('{"t":"hello","v":1,"app":7}').app, null);
 });
 
+test('error пази незадължителните `code` и `contentId`; стар host ги изпуска', () => {
+  const failed = decode('{"t":"error","id":null,"message":"terminal did not start","code":"resize_failed","contentId":"c1"}');
+  assert.deepEqual(failed, { t: 'error', id: null, message: 'terminal did not start', code: 'resize_failed', contentId: 'c1' });
+  const old = decode('{"t":"error","id":3,"message":"not attached"}');
+  assert.deepEqual(old, { t: 'error', id: 3, message: 'not attached', code: null, contentId: null });
+  assert.equal(decode('{"t":"error","message":"x","code":5,"contentId":{}}').code, null);
+});
+
 test('терминалните съобщения без задължително поле се изхвърлят', () => {
   assert.equal(decode('{"t":"out","b64":"aGk="}'), null);
   assert.equal(decode('{"t":"attached","contentId":"c","cols":"x","rows":2}'), null);

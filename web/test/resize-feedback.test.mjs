@@ -1,7 +1,7 @@
 // „Размер по този екран“: какво вижда потребителят след натискането (иначе нищо не се вижда).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { RESIZE_SILENT, resizeAskText, resizeReplyText, withHostApp } from '../public/resize-feedback.js';
+import { RESIZE_SILENT, resizeAskText, resizeFailedText, resizeReplyText, withHostApp } from '../public/resize-feedback.js';
 
 test('същият размер не се праща: табът вече е такъв', () => {
   assert.deepEqual(resizeAskText({ cols: 122, rows: 47 }, { cols: 122, rows: 47 }), { send: false, text: 'Табът вече е 122 × 47' });
@@ -23,4 +23,9 @@ test('без отговор: казва защо може да е', () => {
 test('версията на Supacode на Mac-а се добавя към съобщението, ако Mac-ът я е казал', () => {
   assert.equal(withHostApp('Mac-ът не отговори', 'Supacode 0.11.5 (154)'), 'Mac-ът не отговори · Supacode 0.11.5 (154)');
   assert.equal(withHostApp('Mac-ът не отговори', null), 'Mac-ът не отговори');
+});
+
+test('отказ от Mac-а: причината от host-а, а без нея само че размерът не се е сменил', () => {
+  assert.equal(resizeFailedText('terminal did not start'), 'Размерът не се смени: terminal did not start');
+  assert.equal(resizeFailedText(''), 'Размерът не се смени');
 });
