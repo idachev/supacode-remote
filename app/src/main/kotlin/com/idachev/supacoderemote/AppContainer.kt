@@ -7,6 +7,7 @@ import com.idachev.supacoderemote.relay.RelayClient
 import com.idachev.supacoderemote.sessions.SessionsRepository
 import com.idachev.supacoderemote.settings.KeystoreSettingsStore
 import com.idachev.supacoderemote.settings.SettingsStore
+import com.idachev.supacoderemote.terminal.TerminalGridMemory
 import com.idachev.supacoderemote.ui.hosts.HostLabels
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -44,6 +45,9 @@ class AppContainer(context: Context) {
   val sessions: SessionsRepository = SessionsRepository(relay, appScope)
 
   val notices: Notices = Notices()
+
+  /** Последният размер, премерен от терминала; с него тръгва нов таб (АН1). */
+  val terminalGrid: TerminalGridMemory = TerminalGridMemory()
 
   /** Дали приложението се вижда. Пише го [SupacodeRemoteApp] от ProcessLifecycleOwner. */
   val appInForeground: MutableStateFlow<Boolean> = MutableStateFlow(false)

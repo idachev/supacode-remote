@@ -1,10 +1,10 @@
 // Мостът между xterm.js и приложението.
 //
-// Kotlin вика supa.init / write / resize / resizeFailed / scrollPages / scrollToBottom / wheel / copyText;
+// Kotlin вика supa.init / write / resize / resizeFailed / reportGrid / scrollPages / scrollToBottom / wheel / copyText;
 // selectStart / selectMove / selectEnd (от дългото натискане в Android), selectRange /
 // copySelection / clearSelection (от лентата за маркиране); страницата вика
 // SupaBridge.ready(), text(), copy(), selection(), selectionGone(), overscroll(), input(),
-// height(), rowHeight() и grid().
+// height(), rowHeight(), grid() и gridEstimate().
 //
 // Размерът на терминала е винаги този на Mac-а (cols × rows от `attached` и `size`).
 // Страницата никога не го сменя сама: вместо това подбира шрифта така, че всички колони
@@ -245,6 +245,18 @@
       if (!grid || grid.cols < 1 || grid.rows < 1) return;
       pendingGrid = grid;
       if (bridge.grid) bridge.grid(grid.cols, grid.rows);
+    },
+    /**
+     * Същата мярка като measureGrid, но само като оценка за нов таб (SupaBridge.gridEstimate):
+     * без pendingGrid и без `resize`. В опашката на xterm.js — след вече дошлите init / resize.
+     */
+    reportGrid: function (height) {
+      term.write('', function () {
+        if (!cellSize() || !height) return;
+        var grid = fixedFont > 0 ? gridAtFont(height) : gridAtPhoneCols(height);
+        if (!grid || grid.cols < 1 || grid.rows < 1) return;
+        if (bridge.gridEstimate) bridge.gridEstimate(grid.cols, grid.rows);
+      });
     },
     /** „Размер на текста“: [px] 0 е по ширина. По-широк терминал се мести хоризонтално. */
     fontSize: function (px) {

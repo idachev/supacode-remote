@@ -8,6 +8,7 @@ import com.idachev.supacoderemote.protocol.ServerMessage
 import com.idachev.supacoderemote.protocol.TabNewReply
 import com.idachev.supacoderemote.protocol.TabNewRequest
 import com.idachev.supacoderemote.relay.HostLink
+import com.idachev.supacoderemote.terminal.GridSize
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -217,5 +218,24 @@ class NewTabViewModelTest {
     link.messages.emit(TabNewReply(id = 1, worktreeId = "w1", tabId = "t9", contentId = "c9"))
     runCurrent()
     assertEquals(0, refreshes)
+  }
+
+  @Test
+  fun `с мярка от терминала tab new носи cols и rows`() = runTest(dispatcher) {
+    val sized = NewTabViewModel(
+      link, notices, refresh = {}, appScope = appScope, timeoutMs = 12_000, startGrid = { GridSize(120, 113) },
+    )
+    store.put("sized", sized)
+    sized.setVisible(true)
+    sized.create("w1")
+    runCurrent()
+    assertEquals(listOf<ClientMessage>(TabNewRequest(1, "w1", cols = 120, rows = 113)), link.sent)
+  }
+
+  @Test
+  fun `без мярка tab new е без размер`() = runTest(dispatcher) {
+    vm.create("w1")
+    runCurrent()
+    assertEquals(listOf<ClientMessage>(TabNewRequest(1, "w1", cols = null, rows = null)), link.sent)
   }
 }

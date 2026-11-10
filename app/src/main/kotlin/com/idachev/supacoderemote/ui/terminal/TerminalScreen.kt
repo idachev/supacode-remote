@@ -197,6 +197,11 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
         onInput = vm::onWheelInput,
         onScreenSignature = vm::onScreenSignature,
         onGrid = vm::onGrid,
+        onGridEstimate = { cols, rows ->
+          // С отворено поле за писане (и клавиатура) мястото е много по-ниско, отколкото в новия
+          // таб, който се отваря на цял екран; такава мярка не се пази.
+          if (!state.bars.input) container.terminalGrid.remember(textSize, cols, rows)
+        },
         fontSize = textSize,
         onSelection = vm::onSelection,
         // Цял екран (без горната лента и полето за писане): по един празен ред горе и долу.

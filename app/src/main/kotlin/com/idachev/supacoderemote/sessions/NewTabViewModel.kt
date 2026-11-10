@@ -8,6 +8,7 @@ import com.idachev.supacoderemote.protocol.ServerMessage
 import com.idachev.supacoderemote.protocol.TabNewReply
 import com.idachev.supacoderemote.protocol.TabNewRequest
 import com.idachev.supacoderemote.relay.HostLink
+import com.idachev.supacoderemote.terminal.GridSize
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -36,6 +37,11 @@ class NewTabViewModel(
   private val appScope: CoroutineScope,
   /** Малко над 10-те секунди на Mac-а, за да дойде неговата грешка преди нашата. */
   private val timeoutMs: Long = TIMEOUT_MS,
+  /**
+   * Началният размер на новия таб — по правилото на „Размер по този екран“ (АН1), от последната
+   * мярка на терминала. `null` — няма мярка, host-ът решава сам.
+   */
+  private val startGrid: () -> GridSize? = { null },
 ) : ViewModel() {
 
   private val _pendingWorktreeId = MutableStateFlow<String?>(null)
@@ -78,7 +84,8 @@ class NewTabViewModel(
       return
     }
     val id = link.nextId()
-    if (!link.send(TabNewRequest(id = id, worktreeId = worktreeId))) {
+    val grid = startGrid()
+    if (!link.send(TabNewRequest(id = id, worktreeId = worktreeId, cols = grid?.cols, rows = grid?.rows))) {
       notices.show("Няма връзка — не е изпратено")
       return
     }

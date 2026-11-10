@@ -33,6 +33,7 @@ import com.idachev.supacoderemote.settings.TextSize
 import com.idachev.supacoderemote.terminal.Cell
 import com.idachev.supacoderemote.terminal.TerminalCommand
 import com.idachev.supacoderemote.terminal.TerminalSelection
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.builtins.serializer
 
@@ -56,6 +57,11 @@ fun TerminalWebView(
   onScreenSignature: (Int) -> Unit = {},
   /** Колко колони и реда влизат в мястото на терминала (отговорът на `MeasureGrid`). */
   onGrid: (cols: Int, rows: Int) -> Unit = { _, _ -> },
+  /**
+   * Същата мярка като [onGrid], но сама — при зареждане, смяна на шрифта и на мястото. Само за
+   * размера на нов таб: от нея не тръгва `resize`.
+   */
+  onGridEstimate: (cols: Int, rows: Int) -> Unit = { _, _ -> },
   fontSize: Int = TextSize.FIT,
   onSelection: (TerminalSelection?) -> Unit = {},
   /**
@@ -73,6 +79,7 @@ fun TerminalWebView(
   val currentOnScreenSignature by rememberUpdatedState(onScreenSignature)
   val currentOnSelection by rememberUpdatedState(onSelection)
   val currentOnGrid by rememberUpdatedState(onGrid)
+  val currentOnGridEstimate by rememberUpdatedState(onGridEstimate)
   // Цялото място за терминала (dp), не височината на WebView-то: тя е колкото терминала на Mac-а.
   // Дробно: закръглено надолу до цяло dp, понякога губи ред, който влиза.
   var areaHeight by remember { mutableStateOf(0f) }
@@ -179,6 +186,12 @@ fun TerminalWebView(
           main.post { currentOnGrid(cols, rows) }
         }
 
+        /** Отговорът на `supa.reportGrid`: мярката за нов таб. */
+        @JavascriptInterface
+        fun gridEstimate(cols: Int, rows: Int) {
+          main.post { currentOnGridEstimate(cols, rows) }
+        }
+
         /** Байтовете на xterm.js за скрола от `supa.wheel` (mouse report или стрелки). */
         @JavascriptInterface
         fun input(data: String) {
@@ -201,6 +214,14 @@ fun TerminalWebView(
   // „Размер на текста“ — и при всяко ново зареждане на страницата (ready).
   LaunchedEffect(webView, ready, fontSize) {
     if (ready) webView.evaluateJavascript("supa.fontSize($fontSize)", null)
+  }
+
+  // Мярката за нов таб. Пауза, защото мястото се мени на кадри (клавиатурата се отваря), а
+  // мярката при „По ширина“ сменя шрифта за миг: мери се само щом мястото спре да се мени.
+  LaunchedEffect(webView, ready, fontSize, areaHeight) {
+    if (!ready || areaHeight <= 0f) return@LaunchedEffect
+    delay(GRID_ESTIMATE_DELAY_MS)
+    webView.evaluateJavascript("supa.reportGrid($areaHeight)", null)
   }
 
   LaunchedEffect(webView, ready) {
@@ -228,6 +249,8 @@ fun TerminalWebView(
 }
 
 private const val TAG = "TerminalWebView"
+
+private const val GRID_ESTIMATE_DELAY_MS = 500L
 
 /**
  * Маркиране с дълго натискане. Хваща се тук, а не в страницата: щом Chromium сам познае

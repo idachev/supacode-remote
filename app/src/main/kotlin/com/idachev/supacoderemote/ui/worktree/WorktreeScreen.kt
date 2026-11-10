@@ -62,6 +62,7 @@ fun WorktreeScreen(key: WorktreeKey, onBack: () -> Unit, onOpenTab: (Tab) -> Uni
       notices = container.notices,
       refresh = { container.sessions.refresh() },
       appScope = container.appScope,
+      startGrid = { container.terminalGrid.gridFor(container.settingsStore.textSize.value) },
     )
   }
   val pendingNewTab by newTab.pendingWorktreeId.collectAsStateWithLifecycle()

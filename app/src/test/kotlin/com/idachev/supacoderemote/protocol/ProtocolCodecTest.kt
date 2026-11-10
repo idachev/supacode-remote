@@ -175,6 +175,11 @@ class ProtocolCodecTest {
   @Test
   fun `tab new заявката е точно като в протокола`() {
     assertSameJson("""{"t":"tab.new","id":4,"worktreeId":"w1"}""", ProtocolCodec.encode(TabNewRequest(4, "w1")))
+    // Началният размер — двете полета заедно; без мярка се изпускат, а не пращат null.
+    assertSameJson(
+      """{"t":"tab.new","id":4,"worktreeId":"w1","cols":120,"rows":113}""",
+      ProtocolCodec.encode(TabNewRequest(4, "w1", cols = 120, rows = 113)),
+    )
   }
 
   @Test

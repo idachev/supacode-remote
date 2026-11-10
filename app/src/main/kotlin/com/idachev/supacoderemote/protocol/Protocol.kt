@@ -51,10 +51,15 @@ data class SuggestRequest(val id: Int, val contentId: String) : ClientMessage
 @SerialName("resize")
 data class ResizeRequest(val contentId: String, val cols: Int, val rows: Int) : ClientMessage
 
-/** Нов терминален таб в worktree [worktreeId]; отговорът е [TabNewReply] или `error` със същото [id]. */
+/**
+ * Нов терминален таб в worktree [worktreeId]; отговорът е [TabNewReply] или `error` със същото [id].
+ * [cols] и [rows] са началният размер — винаги двете или нито едно (`null` се изпуска); без тях
+ * host-ът дава до 120 × 40, а стар host ги пренебрегва.
+ */
 @Serializable
 @SerialName("tab.new")
-data class TabNewRequest(val id: Int, val worktreeId: String) : ClientMessage
+data class TabNewRequest(val id: Int, val worktreeId: String, val cols: Int? = null, val rows: Int? = null) :
+  ClientMessage
 
 /** Съобщение към телефона: от relay-а (`relay`, `error`) или от host-а. */
 sealed interface ServerMessage
