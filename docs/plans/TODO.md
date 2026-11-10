@@ -19,6 +19,14 @@
 - **ТР6. UI тестове за лентите на терминала.** Фокус, клавиатура, Back и запазения текст се
   проверяват само в emulator-а; няма `androidTest`. Compose UI тест за тях (ЦЕ1 F4).
 
+- **УА1. Уеб app: избор на Mac (multi-host).** Шевовете са готови (`clientUrl(base, hostId)`,
+  `hosts` / `boundHost` в `state`, `selectedHostId` в `config.json`). Остава списъкът „Mac-ове“ в
+  страницата и правилото ОП20, щом relay-ят с `hosts` е deploy-нат.
+- **УА2. Уеб app: известие „агент чака“.** Браузърът може да показва Notification при преход към
+  `awaitingInput`; сега броят чакащи е само в заглавието на таба.
+- **УА3. Уеб app: проба срещу истински Mac.** Досега само срещу mock-а: relay с истинския ключ,
+  LAN пътят, Claude Code с мишка и скрол, paste с bracketed paste, маркиране с ⌥.
+
 ## 2. Проверки на телефона
 
 - **ПТ1.** Setup с истинския relay и клиентския ключ от `~/.config/supacode/remote-client-key.txt`.

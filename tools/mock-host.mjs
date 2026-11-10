@@ -18,6 +18,9 @@
 //   mock-lan-off  — LAN endpoint-ът спира (затваря LAN връзките), `hello` вече няма `lan`;
 //   mock-lan-on   — LAN endpoint-ът тръгва пак.
 //
+// `tab.new` отваря нов shell в worktree-то. С `cols` и `rows` (и двете, цели числа) той
+// тръгва с този размер, ограничен до 20…500 × 5…200; без тях — 120 × 40, както на Mac-а.
+//
 // LAN пътят (раздел „LAN shortcut“ в протокола): wss://127.0.0.1:LAN_PORT/lan (8788), от
 // emulator-а 10.0.2.2. TLS 1.3 със самоподписан сертификат от паметта, `fp` и `fpMac` в
 // `hello`. LAN=0 го изключва.
@@ -166,6 +169,8 @@ function listMessage(id) {
   return { t: 'list', id, repos: repos.map((r) => ({ ...r, rowIds: rowIds[r.id] })), sections };
 }
 
+let newTabCounter = 0;
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const knownContent = new Set(repos.flatMap((r) => r.worktrees.flatMap((w) => w.tabs.map((t) => t.contentId))));
 
 // ---- Сесиите: един shell на contentId, жив между attach-овете, както zmx на Mac-а ----
@@ -201,11 +206,11 @@ function spawnShell(cols, rows) {
   };
 }
 
-function session(contentId) {
+function session(contentId, cols = COLS, rows = ROWS) {
   let s = sessions.get(contentId);
   if (s) return s;
-  const proc = spawnShell(COLS, ROWS);
-  s = { proc, cols: COLS, rows: ROWS, screen: [], screenBytes: 0, line: '' };
+  const proc = spawnShell(cols, rows);
+  s = { proc, cols, rows, screen: [], screenBytes: 0, line: '' };
   sessions.set(contentId, s);
   proc.onData((buf) => {
     s.screen.push(buf);
@@ -324,6 +329,25 @@ function handle(c, msg) {
       log('input', msg.contentId, JSON.stringify(text), `hex=${bytes.toString('hex')}`);
       s.proc.write(bytes);
       watchLine(msg.contentId, s, text);
+      break;
+    }
+    case 'tab.new': {
+      const found = repos.flatMap((r) => r.worktrees).find((w) => w.id === msg.worktreeId);
+      if (!found) {
+        send(c, { t: 'error', id: msg.id ?? null, message: `unknown worktree ${msg.worktreeId}` });
+        break;
+      }
+      const sized = Number.isInteger(msg.cols) && Number.isInteger(msg.rows);
+      const cols = sized ? clamp(msg.cols, 20, 500) : COLS;
+      const rows = sized ? clamp(msg.rows, 5, 200) : ROWS;
+      newTabCounter += 1;
+      const contentId = `content-new-${newTabCounter}`;
+      const tabId = `tab-new-${newTabCounter}`;
+      found.tabs.push({ id: tabId, contentId, title: 'zsh', focused: false, working: false, readOnly: false, agents: [] });
+      knownContent.add(contentId);
+      session(contentId, cols, rows);
+      log('tab.new', msg.worktreeId, contentId, `${cols}x${rows}`);
+      send(c, { t: 'tab.new', id: msg.id, worktreeId: msg.worktreeId, tabId, contentId });
       break;
     }
     case 'suggest':

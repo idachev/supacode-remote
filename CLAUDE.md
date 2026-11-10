@@ -158,6 +158,20 @@ Navigation 3. compileSdk и targetSdk са 36 (template-ът иска 37, но p
 - `adb shell input text` не пише кирилица: в emulator-а има добавена българска подредба на
   Gboard (БДС фонетична); кирилицата се проверява с тап по клавишите и с hex-а в лога на mock-а.
 
+## Уеб app (`web/`)
+
+- Локален app за лаптоп: Node сървър на `127.0.0.1` (порт 8790) е клиентът към relay-а и
+  LAN-а, а страницата е само екран. Дизайн: `docs/plans/2026-11-10-web-app-design.md`.
+- Пуска се с `web/run.sh`; тестовете — `cd web && npm test` (искат `tools/node_modules`).
+  Gradle build-ът не го докосва.
+- Ключът е в `~/.config/supacode-remote-web/config.json` (0600) и никога не отива към браузъра.
+  WebSocket-ът `/ws` иска `Host` и `Origin` от `localhost` / `127.0.0.1`.
+- Логиката е пренесена от Android с имената от `docs/CONTEXT.md` (`RelayClient`,
+  `TerminalStreamGate`, LAN пинът). Промяна в протокола минава и през `web/src/protocol.mjs`.
+- Размерът на съществуващ таб е на Mac-а; само `tab.new` носи `cols`/`rows` от прозореца (ОП27).
+- xterm.js не отговаря на въпросите на програмата (parser hooks в `public/terminal.js`): отговаря
+  Ghostty на Mac-а.
+
 ## Задачи
 
 Отворените задачи и идеите за после са в `docs/plans/TODO.md`. Не се прави отделен списък.
