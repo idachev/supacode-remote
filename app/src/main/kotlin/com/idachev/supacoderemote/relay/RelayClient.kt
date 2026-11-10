@@ -5,11 +5,14 @@ import com.idachev.supacoderemote.protocol.ClientMessage
 import com.idachev.supacoderemote.protocol.DetachRequest
 import com.idachev.supacoderemote.protocol.HelloReply
 import com.idachev.supacoderemote.protocol.HelloRequest
+import com.idachev.supacoderemote.protocol.HostInfo
 import com.idachev.supacoderemote.protocol.PING
 import com.idachev.supacoderemote.protocol.ProtocolCodec
 import com.idachev.supacoderemote.protocol.RelayStatus
 import com.idachev.supacoderemote.protocol.RelayUrl
 import com.idachev.supacoderemote.protocol.ServerMessage
+import com.idachev.supacoderemote.settings.HostSelection
+import com.idachev.supacoderemote.settings.MemoryHostSelection
 import com.idachev.supacoderemote.settings.RelaySettings
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -84,11 +87,16 @@ interface HostLink {
  *
  * `hello` и всичко друго към host-а тръгват едва когато relay-ът каже `hostOnline:true`:
  * съобщение към офлайн host relay-ът връща като грешка, а списъкът се пита на 3 s.
+ *
+ * Връзката е вързана към един Mac — избрания в [selection] (`/client?host=<id>`). Смяна на
+ * Mac-а е нова връзка ([selectHost]). [selection] се чете още при първата връзка: иначе тя би
+ * тръгнала без Mac и автоматичният избор би презаписал записания.
  */
 class RelayClient(
   private val http: OkHttpClient,
   private val scope: CoroutineScope,
   private val timing: Timing = Timing(),
+  private val selection: HostSelection = MemoryHostSelection(),
 ) : HostLink {
 
   /** Паузите са тук, за да може тестът да ги свие. */
@@ -112,7 +120,39 @@ class RelayClient(
   val hostOnline: StateFlow<Boolean> = _hostOnline.asStateFlow()
 
   private val _hostName = MutableStateFlow<String?>(null)
+
+  /** Името от `hello` на свързания Mac. При стар relay е единственото име. */
   val hostName: StateFlow<String?> = _hostName.asStateFlow()
+
+  private val _hosts = MutableStateFlow<List<HostInfo>>(emptyList())
+
+  /** Mac-овете, които relay-ят познава, подредени от него. Празно при стар relay. */
+  val hosts: StateFlow<List<HostInfo>> = _hosts.asStateFlow()
+
+  private val _boundHostId = MutableStateFlow(selection.selectedHostId.value)
+
+  /**
+   * Mac-ът, към който е вързана връзката (id-то в `?host=`); `null` — несвързана, само списък.
+   * Не става `null` при reconnect или във фон: смяна е само [selectHost], затова по него
+   * „Сесии“ и известията знаят, че списъкът им е от друг Mac.
+   */
+  val boundHostId: StateFlow<String?> = _boundHostId.asStateFlow()
+
+  private val _multiHost = MutableStateFlow(false)
+
+  /** Последното `relay` е носило `hosts`: нов relay с няколко Mac-а. При стар relay — `false`. */
+  val multiHost: StateFlow<Boolean> = _multiHost.asStateFlow()
+
+  private val _hostPickRequests = MutableStateFlow(0)
+
+  /**
+   * Расте всеки път, когато потребителят трябва да избере Mac (виж [HostChoice]). Брояч, а не
+   * флаг: списъкът идва пак и пак, а „Mac-ове“ се отваря само веднъж на преход.
+   */
+  val hostPickRequests: StateFlow<Int> = _hostPickRequests.asStateFlow()
+
+  /** Вече е поискан избор и нищо не се е променило оттогава. Пази се с [lock]. */
+  private var pickAsked = false
 
   /**
    * Номер на текущата „сесия с host-а“: расте всеки път, когато връзката е горе и
@@ -180,6 +220,11 @@ class RelayClient(
   fun configure(newSettings: RelaySettings?) {
     synchronized(lock) {
       if (newSettings == settings && _state.value != ConnectionState.Unauthorized) return
+      if (newSettings != settings) {
+        // Друг relay: списъкът на стария не важи.
+        _hosts.value = emptyList()
+        _multiHost.value = false
+      }
       settings = newSettings
       restartLocked()
     }
@@ -208,6 +253,20 @@ class RelayClient(
   }
 
   private fun activeLocked(): Boolean = foreground || keepAlive
+
+  /**
+   * Свързва телефона с Mac-а [id]: записва го, затваря LAN и връзката с relay-а и отваря нова с
+   * `?host=<id>`. host-ът забравя attach-овете заедно със старата връзка, затова терминалът и
+   * списъкът почват на чисто с новата [hostSession].
+   */
+  fun selectHost(id: String) {
+    synchronized(lock) {
+      if (id == _boundHostId.value && id == selection.selectedHostId.value) return
+      selection.setSelectedHostId(id)
+      pickAsked = false
+      restartLocked()
+    }
+  }
 
   /** Повторен опит веднага, напр. от бутона в банера. */
   fun reconnectNow() {
@@ -284,12 +343,13 @@ class RelayClient(
     closeLanLocked()
     _hostOnline.value = false
     updateRouteLocked()
+    _boundHostId.value = selection.selectedHostId.value
     val current = settings
     if (current == null || !activeLocked()) {
       _state.value = ConnectionState.Idle
       return
     }
-    val url = RelayUrl.clientUrl(current.baseUrl)
+    val url = RelayUrl.clientUrl(current.baseUrl, _boundHostId.value)
     if (url == null) {
       _state.value = ConnectionState.Waiting(0, "невалиден адрес")
       return
@@ -345,10 +405,10 @@ class RelayClient(
         lastFrameAt = System.currentTimeMillis()
         val message = ProtocolCodec.decode(text) ?: return
         when (message) {
-          is RelayStatus -> onHostOnline(webSocket, message.hostOnline, attempt)
+          is RelayStatus -> if (!onRelayStatus(webSocket, message, attempt)) return
           is HelloReply -> {
             _hostName.value = message.host
-            onRelayHello(message.lan)
+            onRelayHello(message)
           }
           else -> Unit
         }
@@ -398,6 +458,31 @@ class RelayClient(
     }
   }
 
+  /**
+   * Списъкът с Mac-ове и изборът по [HostChoice]. Връща `false`, ако връзката се сменя
+   * (автоматичен избор) и съобщението вече не е за екраните.
+   */
+  private fun onRelayStatus(webSocket: WebSocket, status: RelayStatus, attempt: Int): Boolean {
+    synchronized(lock) {
+      if (attempt != attempts.get()) return false
+      _multiHost.value = status.hosts != null
+      status.hosts?.let { _hosts.value = it }
+      when (val decision = HostChoice.decide(selection.selectedHostId.value, status)) {
+        is HostChoice.Decision.Select -> {
+          selectHost(decision.id)
+          return false
+        }
+        HostChoice.Decision.AskUser -> if (!pickAsked) {
+          pickAsked = true
+          _hostPickRequests.value += 1
+        }
+        HostChoice.Decision.None -> pickAsked = false
+      }
+    }
+    onHostOnline(webSocket, status.hostOnline, attempt)
+    return true
+  }
+
   private fun onHostOnline(webSocket: WebSocket, online: Boolean, attempt: Int) {
     if (online && !_hostOnline.value) {
       webSocket.send(ProtocolCodec.encode(HelloRequest()))
@@ -437,8 +522,13 @@ class RelayClient(
    * бил предложен в тази връзка (напр. Mac-ът го е спрял за малко) — нов `hello` по-късно,
    * с растяща пауза, за да се върнем на LAN, щом пак е там.
    */
-  private fun onRelayHello(info: LanInfo?) {
+  private fun onRelayHello(hello: HelloReply) {
+    val info = hello.lan
     synchronized(lock) {
+      // `hello` от друг Mac (relay-ят е объркал потоците): без LAN към него, както при грешен fpMac.
+      // Само при нов relay: срещу стар записаното id не значи нищо.
+      val bound = _boundHostId.value
+      if (_multiHost.value && hello.hostId != null && bound != null && hello.hostId != bound) return
       val key = settings?.apiKey
       if (info != null && key != null && LanTrust.fpMacValid(key, info.fp, info.fpMac)) {
         lanOffered = true

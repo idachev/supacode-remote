@@ -51,8 +51,21 @@ data class TabNewRequest(val id: Int, val worktreeId: String) : ClientMessage
 /** Съобщение към телефона: от relay-а (`relay`, `error`) или от host-а. */
 sealed interface ServerMessage
 
+/**
+ * Състоянието от relay-а. [hostOnline] е за свързания Mac ([host]). [hosts] е `null` при стар
+ * relay (един Mac, без списък) и празен списък при нов relay, който още не познава Mac — затова
+ * е nullable. [host] липсва за връзка без избран Mac.
+ */
 @Serializable
-data class RelayStatus(val hostOnline: Boolean) : ServerMessage
+data class RelayStatus(
+  val hostOnline: Boolean,
+  val host: String? = null,
+  val hosts: List<HostInfo>? = null,
+) : ServerMessage
+
+/** Mac, който relay-ят познава. Без [name] телефонът показва „Mac без име“. */
+@Serializable
+data class HostInfo(val id: String, val name: String? = null, val online: Boolean = false)
 
 @Serializable
 data class HelloReply(
@@ -60,6 +73,8 @@ data class HelloReply(
   val host: String? = null,
   /** Mac-ът е в същата мрежа и слуша там (раздел „LAN shortcut“). */
   val lan: LanInfo? = null,
+  /** Id-то на Mac-а, който отговаря; липсва при стар Supacode. */
+  val hostId: String? = null,
 ) : ServerMessage
 
 /**

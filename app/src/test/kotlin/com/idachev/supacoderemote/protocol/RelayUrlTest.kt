@@ -65,4 +65,16 @@ class RelayUrlTest {
     assertEquals("http://10.0.2.2:8787/test-key", ConnectionKey.format(local))
     assertEquals(local, ConnectionKey.parse(ConnectionKey.format(local)))
   }
+
+  @Test
+  fun `избраният Mac отива в host, а без избор query няма`() {
+    assertEquals("wss://relay.example.com/client?host=3f9a0c1d2e4b5a69", RelayUrl.clientUrl("https://relay.example.com", "3f9a0c1d2e4b5a69"))
+    assertEquals("ws://10.0.2.2:8787/client?host=default", RelayUrl.clientUrl("http://10.0.2.2:8787/client", "default"))
+    assertEquals("wss://h/client", RelayUrl.clientUrl("https://h", null))
+  }
+
+  @Test
+  fun `id на Mac-а се кодира в query-то`() {
+    assertEquals("wss://h/client?host=a%26b%3Dc%20%D0%B4", RelayUrl.clientUrl("https://h", "a&b=c д"))
+  }
 }

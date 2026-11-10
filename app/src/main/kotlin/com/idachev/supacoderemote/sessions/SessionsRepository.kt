@@ -8,6 +8,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.launch
 
@@ -31,6 +32,14 @@ class SessionsRepository(private val relay: RelayClient, scope: CoroutineScope) 
   val refreshing: StateFlow<Boolean> = _refreshing.asStateFlow()
 
   init {
+    scope.launch {
+      // Друг Mac: repository-тата на стария не бива да се покажат под името на новия.
+      relay.boundHostId.drop(1).collect {
+        _list.value = null
+        _repos.value = null
+        _refreshing.value = false
+      }
+    }
     scope.launch {
       relay.messages.filterIsInstance<ListReply>().collect {
         // Без id, за да не будят екраните отговори, които не носят нищо ново.

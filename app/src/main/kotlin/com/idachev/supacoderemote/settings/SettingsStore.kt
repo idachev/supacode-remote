@@ -17,7 +17,29 @@ import javax.crypto.spec.GCMParameterSpec
 /** Адресът на relay-а и клиентският ключ — двете части на ключа за връзка. */
 data class RelaySettings(val baseUrl: String, val apiKey: String)
 
-interface SettingsStore {
+/**
+ * Избраният Mac (`hostId`), към който се връзва връзката с relay-а. Не е тайна. Отделен
+ * интерфейс, за да го чете [com.idachev.supacoderemote.relay.RelayClient] още при първата
+ * връзка и да се тества без Android.
+ */
+interface HostSelection {
+  /** `null`, докато потребителят (или автоматичният избор) не е избрал Mac. */
+  val selectedHostId: StateFlow<String?>
+
+  fun setSelectedHostId(value: String?)
+}
+
+/** В паметта: за тестовете и докато няма друго. */
+class MemoryHostSelection(initial: String? = null) : HostSelection {
+  private val _selected = MutableStateFlow(initial)
+  override val selectedHostId: StateFlow<String?> = _selected.asStateFlow()
+
+  override fun setSelectedHostId(value: String?) {
+    _selected.value = value
+  }
+}
+
+interface SettingsStore : HostSelection {
   /** `null`, докато не е въведен ключ за връзка. */
   val settings: StateFlow<RelaySettings?>
 
@@ -94,6 +116,14 @@ class KeystoreSettingsStore(context: Context) : SettingsStore {
     _textSize.value = size
   }
 
+  private val _selectedHostId = MutableStateFlow(prefs.getString(KEY_SELECTED_HOST, null))
+  override val selectedHostId: StateFlow<String?> = _selectedHostId.asStateFlow()
+
+  override fun setSelectedHostId(value: String?) {
+    prefs.edit().apply { if (value == null) remove(KEY_SELECTED_HOST) else putString(KEY_SELECTED_HOST, value) }.apply()
+    _selectedHostId.value = value
+  }
+
   override fun save(value: RelaySettings) {
     prefs.edit()
       .putString(KEY_URL, encrypt(value.baseUrl))
@@ -151,6 +181,7 @@ class KeystoreSettingsStore(context: Context) : SettingsStore {
     const val KEY_NOTIFY = "notify_awaiting"
     const val KEY_OVERSCROLL = "overscroll_to_program"
     const val KEY_TEXT_SIZE = "terminal_text_size"
+    const val KEY_SELECTED_HOST = "selected_host_id"
     const val KEYSTORE = "AndroidKeyStore"
     const val ALIAS = "relay_settings_key"
     const val TRANSFORMATION = "AES/GCM/NoPadding"

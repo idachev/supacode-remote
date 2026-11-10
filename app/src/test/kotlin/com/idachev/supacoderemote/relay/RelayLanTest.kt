@@ -4,6 +4,8 @@ import com.idachev.supacoderemote.protocol.AttachRequest
 import com.idachev.supacoderemote.protocol.ListRequest
 import com.idachev.supacoderemote.protocol.Output
 import com.idachev.supacoderemote.protocol.ServerMessage
+import com.idachev.supacoderemote.settings.HostSelection
+import com.idachev.supacoderemote.settings.MemoryHostSelection
 import com.idachev.supacoderemote.settings.RelaySettings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -83,10 +85,13 @@ class RelayLanTest {
   private fun lanJson(port: Int, fingerprint: String = fp, mac: String = fpMac(key, fingerprint)) =
     ""","lan":{"addrs":["127.0.0.1"],"port":$port,"fp":"$fingerprint","fpMac":"$mac"}"""
 
-  private fun relayHost(lan: String?): MockResponse = MockResponse.Builder().webSocketUpgrade(object : WebSocketListener() {
+  private fun relayHost(
+    lan: String?,
+    status: String = """{"t":"relay","hostOnline":true}""",
+  ): MockResponse = MockResponse.Builder().webSocketUpgrade(object : WebSocketListener() {
     override fun onOpen(webSocket: WebSocket, response: Response) {
       openSockets.incrementAndGet()
-      webSocket.send("""{"t":"relay","hostOnline":true}""")
+      webSocket.send(status)
     }
 
     override fun onMessage(webSocket: WebSocket, text: String) {
@@ -132,7 +137,8 @@ class RelayLanTest {
     }
   }).build()
 
-  private fun client(): RelayClient = RelayClient(OkHttpClient(), scope, timing).also {
+  private fun client(selection: HostSelection = MemoryHostSelection()): RelayClient =
+    RelayClient(OkHttpClient(), scope, timing, selection).also {
     clients += it
     it.configure(RelaySettings("http://${relayServer.hostName}:${relayServer.port}", key))
     it.setForeground(true)
@@ -345,5 +351,36 @@ class RelayLanTest {
     val seen = synchronized(outputs) { outputs.toList() }
     assertEquals(listOf("relay-screen", "lan-screen", "lan-live", "relay-screen", "relay-live"), seen)
     collector.cancel()
+  }
+
+  private val officeStatus =
+    """{"t":"relay","hostOnline":true,"host":"office","hosts":[{"id":"office","name":"Office Mac","online":true}]}"""
+
+  @Test
+  fun `hello от друг Mac не води до LAN`() = runBlocking<Unit> {
+    relayServer.enqueue(relayHost(""","hostId":"home"""" + lanJson(lanServer.port), status = officeStatus))
+    lanServer.enqueue(lanHost())
+    val relay = client(MemoryHostSelection("office"))
+    withTimeout(5_000) { relay.path.first { it == LinkPath.RELAY } }
+    assertEquals("""{"t":"hello","v":1}""", next(fromClientOnRelay))
+    Thread.sleep(1_000)
+    assertEquals(0, lanServer.requestCount)
+    assertEquals(LinkPath.RELAY, relay.path.value)
+  }
+
+  @Test
+  fun `hello от свързания Mac води до LAN както досега`() = runBlocking<Unit> {
+    relayServer.enqueue(relayHost(""","hostId":"office"""" + lanJson(lanServer.port), status = officeStatus))
+    lanServer.enqueue(lanHost())
+    val relay = client(MemoryHostSelection("office"))
+    withTimeout(5_000) { relay.path.first { it == LinkPath.LAN } }
+  }
+
+  @Test
+  fun `при стар relay записаното id не спира LAN`() = runBlocking<Unit> {
+    relayServer.enqueue(relayHost(""","hostId":"home"""" + lanJson(lanServer.port)))
+    lanServer.enqueue(lanHost())
+    val relay = client(MemoryHostSelection("office"))
+    withTimeout(5_000) { relay.path.first { it == LinkPath.LAN } }
   }
 }

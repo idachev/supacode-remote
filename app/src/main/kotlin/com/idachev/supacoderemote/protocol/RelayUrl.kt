@@ -1,6 +1,7 @@
 package com.idachev.supacoderemote.protocol
 
 import com.idachev.supacoderemote.settings.RelaySettings
+import java.net.URLEncoder
 
 /** Адресът на WebSocket-а на телефона от базовия адрес на relay-а. */
 object RelayUrl {
@@ -9,9 +10,10 @@ object RelayUrl {
 
   /**
    * `https://…` → `wss://…/client`, `http://…` → `ws://…/client`. Връща `null` за празен
-   * адрес или непозната схема, за да покаже „Настройка“ грешката веднага.
+   * адрес или непозната схема, за да покаже „Настройка“ грешката веднага. С [hostId] връзката
+   * е вързана към този Mac (`?host=`); без него relay-ят дава само списъка с Mac-ове.
    */
-  fun clientUrl(base: String): String? {
+  fun clientUrl(base: String, hostId: String? = null): String? {
     val trimmed = base.trim().trimEnd('/')
     val sep = trimmed.indexOf("://")
     if (sep <= 0) return null
@@ -19,7 +21,8 @@ object RelayUrl {
     val rest = trimmed.substring(sep + 3)
     if (rest.isEmpty() || rest.startsWith("/")) return null
     val withoutClient = rest.removeSuffix("/client")
-    return "$scheme://$withoutClient/client"
+    val query = hostId?.let { "?host=" + URLEncoder.encode(it, Charsets.UTF_8).replace("+", "%20") }.orEmpty()
+    return "$scheme://$withoutClient/client$query"
   }
 }
 

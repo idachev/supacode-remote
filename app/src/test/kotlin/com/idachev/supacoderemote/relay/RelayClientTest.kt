@@ -1,5 +1,8 @@
 package com.idachev.supacoderemote.relay
 
+import com.idachev.supacoderemote.protocol.HostInfo
+import com.idachev.supacoderemote.settings.HostSelection
+import com.idachev.supacoderemote.settings.MemoryHostSelection
 import com.idachev.supacoderemote.settings.RelaySettings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -16,6 +19,8 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Test
@@ -52,15 +57,19 @@ class RelayClientTest {
     server.close()
   }
 
-  private fun client() = RelayClient(OkHttpClient(), scope, timing).also { clients += it }
+  private fun client(selection: HostSelection = MemoryHostSelection()) =
+    RelayClient(OkHttpClient(), scope, timing, selection).also { clients += it }
 
   private fun base() = "http://${server.hostName}:${server.port}"
 
-  private fun hostUpgrade(): MockResponse = MockResponse.Builder().webSocketUpgrade(object : WebSocketListener() {
+  /** Relay, който при отваряне праща [statuses] едно след друго. */
+  private fun hostUpgrade(
+    vararg statuses: String = arrayOf("""{"t":"relay","hostOnline":true}"""),
+  ): MockResponse = MockResponse.Builder().webSocketUpgrade(object : WebSocketListener() {
     override fun onOpen(webSocket: WebSocket, response: Response) {
       openOnServer.incrementAndGet()
       serverSocket = webSocket
-      webSocket.send("""{"t":"relay","hostOnline":true}""")
+      statuses.forEach { webSocket.send(it) }
     }
 
     override fun onMessage(webSocket: WebSocket, text: String) {
@@ -85,7 +94,7 @@ class RelayClientTest {
   private fun next(): String = fromClient.poll(5, TimeUnit.SECONDS) ?: error("нищо от клиента")
 
   @Test
-  fun `401 спира опитите и казва „грешен ключ“`() = runBlocking {
+  fun `401 спира опитите и казва „грешен ключ“`() = runBlocking<Unit> {
     server.enqueue(MockResponse.Builder().code(401).build())
     val relay = client()
     relay.configure(RelaySettings(base(), "bad"))
@@ -95,7 +104,7 @@ class RelayClientTest {
   }
 
   @Test
-  fun `ключът е в Authorization, hello тръгва след hostOnline, после ping`() = runBlocking {
+  fun `ключът е в Authorization, hello тръгва след hostOnline, после ping`() = runBlocking<Unit> {
     server.enqueue(hostUpgrade())
     val relay = client()
     relay.configure(RelaySettings(base(), "abcde-fghij"))
@@ -110,7 +119,7 @@ class RelayClientTest {
   }
 
   @Test
-  fun `host пада и се връща при жив WebSocket — нов hello и нова сесия`() = runBlocking {
+  fun `host пада и се връща при жив WebSocket — нов hello и нова сесия`() = runBlocking<Unit> {
     server.enqueue(hostUpgrade())
     val relay = client()
     relay.configure(RelaySettings(base(), "k"))
@@ -149,7 +158,7 @@ class RelayClientTest {
   }
 
   @Test
-  fun `паднала връзка се отваря пак, а във фон се затваря`() = runBlocking {
+  fun `паднала връзка се отваря пак, а във фон се затваря`() = runBlocking<Unit> {
     server.enqueue(hostUpgrade())
     server.enqueue(hostUpgrade())
     val relay = client()
@@ -164,5 +173,142 @@ class RelayClientTest {
     withTimeout(5_000) { relay.state.first { it == ConnectionState.Idle } }
     withTimeout(5_000) { relay.hostSession.first { it == null } }
     assertNull(relay.hostSession.value)
+  }
+
+  // ---- Няколко Mac-а ----
+
+  private val officeOn = """{"id":"office","name":"Office Mac","online":true}"""
+  private val homeOn = """{"id":"home","name":"Home Mac","online":true}"""
+
+  private fun relay(online: Boolean, host: String?, vararg hosts: String): String {
+    val bound = host?.let { ""","host":"$it"""" }.orEmpty()
+    return """{"t":"relay","hostOnline":$online$bound,"hosts":[${hosts.joinToString(",")}]}"""
+  }
+
+  private fun nextNotPing(): String {
+    var line = next()
+    while (line == "ping") line = next()
+    return line
+  }
+
+  @Test
+  fun `записаният Mac отива в host, а списъкът се вижда в hosts`() = runBlocking<Unit> {
+    server.enqueue(hostUpgrade(relay(true, "office", officeOn, homeOn)))
+    val selection = MemoryHostSelection("office")
+    val relay = client(selection)
+    relay.configure(RelaySettings(base(), "k"))
+    relay.setForeground(true)
+    assertEquals("host=office", server.takeRequest().url.encodedQuery)
+    assertEquals("""{"t":"hello","v":1}""", next())
+    withTimeout(5_000) { relay.hosts.first { it.size == 2 } }
+    assertEquals(HostInfo("office", "Office Mac", true), relay.hosts.value[0])
+    assertEquals("office", relay.boundHostId.value)
+    assertTrue(relay.multiHost.value)
+    assertEquals(0, relay.hostPickRequests.value)
+    assertEquals("office", selection.selectedHostId.value)
+  }
+
+  @Test
+  fun `без записан и с един онлайн Mac — избира го и се връзва към него`() = runBlocking<Unit> {
+    server.enqueue(hostUpgrade(relay(false, null, officeOn, """{"id":"mini","online":false}""")))
+    server.enqueue(hostUpgrade(relay(true, "office", officeOn)))
+    val selection = MemoryHostSelection()
+    val relay = client(selection)
+    relay.configure(RelaySettings(base(), "k"))
+    relay.setForeground(true)
+    assertNull(server.takeRequest().url.encodedQuery)
+    assertEquals("host=office", server.takeRequest(5, TimeUnit.SECONDS)!!.url.encodedQuery)
+    assertEquals("office", selection.selectedHostId.value)
+    assertEquals("office", relay.boundHostId.value)
+    // Несвързаната връзка не праща нищо: hello е първото и идва по новата.
+    assertEquals("""{"t":"hello","v":1}""", next())
+    withTimeout(5_000) { relay.hostSession.first { it != null } }
+  }
+
+  @Test
+  fun `без записан и с два онлайн — пита веднъж и не избира сам`() = runBlocking<Unit> {
+    val status = relay(false, null, officeOn, homeOn)
+    server.enqueue(hostUpgrade(status, status))
+    val selection = MemoryHostSelection()
+    val relay = client(selection)
+    relay.configure(RelaySettings(base(), "k"))
+    relay.setForeground(true)
+    withTimeout(5_000) { relay.hostPickRequests.first { it == 1 } }
+    withTimeout(5_000) { relay.hosts.first { it.size == 2 } }
+    Thread.sleep(300)
+    assertEquals(1, relay.hostPickRequests.value)
+    assertNull(selection.selectedHostId.value)
+    assertEquals(1, server.requestCount)
+    assertNull(relay.hostSession.value)
+    // Без свързан Mac към relay-а не тръгва нищо освен ping.
+    assertEquals("ping", next())
+  }
+
+  @Test
+  fun `записан Mac, който липсва в списъка, остава избран, а Mac-ове се отваря веднъж`() = runBlocking<Unit> {
+    val status = relay(false, "gone", officeOn)
+    server.enqueue(hostUpgrade(status, status))
+    val selection = MemoryHostSelection("gone")
+    val relay = client(selection)
+    relay.configure(RelaySettings(base(), "k"))
+    relay.setForeground(true)
+    withTimeout(5_000) { relay.hostPickRequests.first { it == 1 } }
+    Thread.sleep(300)
+    assertEquals(1, relay.hostPickRequests.value)
+    assertEquals("gone", selection.selectedHostId.value)
+    assertEquals("gone", relay.boundHostId.value)
+    assertFalse(relay.hostOnline.value)
+    assertEquals(1, server.requestCount)
+  }
+
+  @Test
+  fun `relay само със списъка не праща втори hello`() = runBlocking<Unit> {
+    server.enqueue(hostUpgrade(relay(true, "office", officeOn), relay(true, "office", officeOn, homeOn)))
+    val relay = client(MemoryHostSelection("office"))
+    relay.configure(RelaySettings(base(), "k"))
+    relay.setForeground(true)
+    assertEquals("""{"t":"hello","v":1}""", next())
+    withTimeout(5_000) { relay.hosts.first { it.size == 2 } }
+    assertEquals("ping", next())
+    assertEquals(1, relay.hostSession.value)
+  }
+
+  @Test
+  fun `selectHost записва, връзва се наново към новия Mac и почва нова сесия`() = runBlocking<Unit> {
+    server.enqueue(hostUpgrade(relay(true, "office", officeOn, homeOn)))
+    server.enqueue(hostUpgrade(relay(true, "home", officeOn, homeOn)))
+    val selection = MemoryHostSelection("office")
+    val relay = client(selection)
+    relay.configure(RelaySettings(base(), "k"))
+    relay.setForeground(true)
+    assertEquals("host=office", server.takeRequest().url.encodedQuery)
+    withTimeout(5_000) { relay.hostSession.first { it == 1 } }
+
+    relay.selectHost("home")
+    assertEquals("home", selection.selectedHostId.value)
+    assertEquals("home", relay.boundHostId.value)
+    assertEquals("host=home", server.takeRequest(5, TimeUnit.SECONDS)!!.url.encodedQuery)
+    withTimeout(5_000) { relay.hostSession.first { it == 2 } }
+    assertEquals("""{"t":"hello","v":1}""", nextNotPing())
+
+    // Същият Mac пак: нищо ново.
+    relay.selectHost("home")
+    Thread.sleep(200)
+    assertEquals(2, server.requestCount)
+  }
+
+  @Test
+  fun `стар relay без hosts — един Mac, записаният избор остава`() = runBlocking<Unit> {
+    server.enqueue(hostUpgrade())
+    val selection = MemoryHostSelection("office")
+    val relay = client(selection)
+    relay.configure(RelaySettings(base(), "k"))
+    relay.setForeground(true)
+    assertEquals("""{"t":"hello","v":1}""", next())
+    withTimeout(5_000) { relay.hostSession.first { it == 1 } }
+    assertFalse(relay.multiHost.value)
+    assertEquals(emptyList<HostInfo>(), relay.hosts.value)
+    assertEquals(0, relay.hostPickRequests.value)
+    assertEquals("office", selection.selectedHostId.value)
   }
 }

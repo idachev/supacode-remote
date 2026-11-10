@@ -191,4 +191,43 @@ class ProtocolCodecTest {
     // Без contentId отговорът е безполезен — пропуска се, вместо да отвори празен терминал.
     assertNull(ProtocolCodec.decode("""{"t":"tab.new","id":4,"worktreeId":"w1","tabId":"t9"}"""))
   }
+
+  @Test
+  fun `relay от нов relay носи свързания Mac и списъка с Mac-ове`() {
+    val text = """{"t":"relay","hostOnline":true,"host":"3f9a0c1d2e4b5a69",
+      "hosts":[{"id":"3f9a0c1d2e4b5a69","name":"Office Mac","online":true},{"id":"default","online":false}]}"""
+    assertEquals(
+      RelayStatus(
+        hostOnline = true,
+        host = "3f9a0c1d2e4b5a69",
+        hosts = listOf(HostInfo("3f9a0c1d2e4b5a69", "Office Mac", true), HostInfo("default", null, false)),
+      ),
+      ProtocolCodec.decode(text),
+    )
+  }
+
+  @Test
+  fun `relay без hosts е стар relay, а празен списък е нов relay без Mac-ове`() {
+    val old = ProtocolCodec.decode("""{"t":"relay","hostOnline":true}""") as RelayStatus
+    assertNull(old.hosts)
+    assertNull(old.host)
+    val empty = ProtocolCodec.decode("""{"t":"relay","hostOnline":false,"hosts":[]}""") as RelayStatus
+    assertEquals(emptyList<HostInfo>(), empty.hosts)
+    assertNull(empty.host)
+  }
+
+  @Test
+  fun `Mac в списъка без name и без online е без име и извън линия`() {
+    val status = ProtocolCodec.decode("""{"t":"relay","hostOnline":false,"hosts":[{"id":"default"}]}""") as RelayStatus
+    assertEquals(listOf(HostInfo("default", null, false)), status.hosts)
+  }
+
+  @Test
+  fun `hello носи hostId на Mac-а, а без него е null`() {
+    assertEquals(
+      HelloReply(1, "Office Mac", hostId = "3f9a0c1d2e4b5a69"),
+      ProtocolCodec.decode("""{"t":"hello","v":1,"host":"Office Mac","hostId":"3f9a0c1d2e4b5a69"}"""),
+    )
+    assertNull((ProtocolCodec.decode("""{"t":"hello","v":1,"host":"Mac"}""") as HelloReply).hostId)
+  }
 }
