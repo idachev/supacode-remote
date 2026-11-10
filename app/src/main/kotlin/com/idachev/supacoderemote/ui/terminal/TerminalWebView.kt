@@ -74,7 +74,8 @@ fun TerminalWebView(
   val currentOnSelection by rememberUpdatedState(onSelection)
   val currentOnGrid by rememberUpdatedState(onGrid)
   // Цялото място за терминала (dp), не височината на WebView-то: тя е колкото терминала на Mac-а.
-  var areaHeight by remember { mutableStateOf(0) }
+  // Дробно: закръглено надолу до цяло dp, понякога губи ред, който влиза.
+  var areaHeight by remember { mutableStateOf(0f) }
   var ready by remember { mutableStateOf(false) }
   // Височината на терминала в страницата (dp); до първия доклад WebView-то е цялото място.
   var pageHeight by remember { mutableStateOf<Int?>(null) }
@@ -219,7 +220,7 @@ fun TerminalWebView(
   val density = LocalDensity.current
   // Ограничението отвън, преди височината на WebView-то: това е мястото, което терминалът може да вземе.
   val area = Modifier.layout { measurable, constraints ->
-    if (constraints.hasBoundedHeight) areaHeight = with(density) { constraints.maxHeight.toDp().value.toInt() }
+    if (constraints.hasBoundedHeight) areaHeight = with(density) { constraints.maxHeight.toDp().value }
     val placeable = measurable.measure(constraints)
     layout(placeable.width, placeable.height) { placeable.place(0, 0) }
   }
