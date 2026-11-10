@@ -4,6 +4,7 @@
 // Mac-ът държи по един `attach` на връзка, а Node има една връзка. Затова управлява само една
 // страница: нова страница взима управлението, а старата получава `replaced` и чака `takeover`.
 
+import { randomUUID } from 'node:crypto';
 import WebSocket from 'ws';
 import { parseConnectionKey, relayLabel } from './protocol.mjs';
 
@@ -17,6 +18,11 @@ export class BrowserLink {
     this.settings = null;
     this.selectedHostId = null;
     this.active = null;
+    /**
+     * Ново при всяко пускане на сървъра. Страница от предишно пускане носи стария код на
+     * страницата и се презарежда сама, иначе говори стария локален протокол.
+     */
+    this.bootId = randomUUID();
     relay.on('state', () => this.#sendState());
     host.on('message', (message) => this.#send(this.active, message));
   }
@@ -52,6 +58,7 @@ export class BrowserLink {
   state() {
     return {
       t: 'state',
+      bootId: this.bootId,
       configured: this.settings != null,
       relayLabel: this.settings ? relayLabel(this.settings.baseUrl) : null,
       ...this.relay.state,

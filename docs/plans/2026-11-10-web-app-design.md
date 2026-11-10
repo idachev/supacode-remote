@@ -96,17 +96,23 @@ Multi-host шевове (без UI сега): `clientUrl(base, hostId)` доба
 Браузър → Node:
 - `{"t":"open","contentId":"…"}` — покажи този таб (Node прави `detach` на стария и `attach`).
 - `{"t":"close"}` — няма отворен терминал.
-- `{"t":"input","b64":"…"}` — байтове към отворения терминал.
-- `{"t":"suggest"}` — „Предложи“ за отворения терминал.
-- `{"t":"tab.new","worktreeId":"…","cols":N,"rows":M}` — нов таб с началния размер (ОП27).
+- `{"t":"input","b64":"…","contentId":"…"}` — байтове към отворения терминал. Вход с друг
+  `contentId` (закъснял Enter след смяна на таба) Node изхвърля.
+- `{"t":"suggest","ref":"…"}` — „Предложи“ за отворения терминал.
+- `{"t":"tab.new","worktreeId":"…","cols":N,"rows":M,"ref":"…"}` — нов таб с началния размер
+  (ОП27). `ref` е на страницата: Node го връща в отговора или в `error`, защото `id` към host-а
+  дава самият Node.
 - `{"t":"refresh"}` — `list` веднага.
 - `{"t":"setup","connectionKey":"…"}` — запази и свържи.
 - `{"t":"reconnect"}`, `{"t":"takeover"}`.
 
 Node → браузър:
-- `{"t":"state", configured, relayLabel, connection, retryInMs, reason, hostOnline, hostName, path, hostSession, hosts, boundHost, openContentId}` при всяка промяна. Ключът никога не идва.
+- `{"t":"state", bootId, configured, relayLabel, connection, retryInMs, reason, hostOnline, hostName, hostId, path, hostSession, hosts, boundHost, openContentId}` при всяка промяна. Ключът никога не идва. `bootId` е ново при всяко пускане на сървъра: страница с друг `bootId` се презарежда сама (иначе стар код на страницата говори стария локален протокол).
+- `{"t":"reset"}` — нов ключ за връзка: отвореният таб и списъкът са на стария relay и се чистят.
+  Същият ключ не чисти нищо.
 - `list`, `attached`, `out`, `size`, `detached`, `suggest`, `tab.new`, `error` — както от host-а
-  (за терминала само за отворения `contentId`, след `TerminalStreamGate`).
+  (за терминала само за отворения `contentId`, след `TerminalStreamGate`; `suggest`, `tab.new` и
+  техният `error` носят `ref` на заявката).
 - `{"t":"setup.result","ok":true|false,"message":"…"}`, `{"t":"replaced"}`.
 
 **Наше решение: втора страница взима управлението.** Mac-ът държи по един `attach` на
@@ -181,7 +187,7 @@ Node → браузър:
 Всички са Ctrl+⌘, защото Ctrl сам е на програмата, а ⌘ сам и ⌘+⌥ са на браузъра:
 Ctrl+⌘+↑/↓ — предишен / следващ таб в worktree-то; Ctrl+⌘+←/→ — предишен / следващ worktree
 от списъка; Ctrl+⌘+N — нов таб; Ctrl+⌘+S — „Предложи“; Ctrl+⌘+L — поле за ред;
-Ctrl+⌘+B — колоната „Сесии“; Ctrl+⌘+F — търсене. Подсказка с `?` в горната лента.
+Ctrl+⌘+B — колоната „Сесии“; Ctrl+⌘+K — търсене (Ctrl+⌘+F е цял екран в macOS). Подсказка с `?` в горната лента.
 
 ## Пускане
 

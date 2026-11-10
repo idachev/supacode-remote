@@ -78,6 +78,11 @@ const terminal = new TerminalView($('term'), $('term-area'), {
 function onMessage(m) {
   switch (m.t) {
     case 'state':
+      // Сървърът е пуснат наново (може и с нов код): страницата се зарежда наново, табът — от адреса.
+      if (ui.state?.bootId && m.bootId !== ui.state.bootId) {
+        location.reload();
+        return;
+      }
       ui.state = m;
       // Връзката с Mac-а падна: Node ще закачи таба наново, щом се върне.
       if (m.hostSession == null && ui.phase === 'live') ui.phase = 'opening';
@@ -89,6 +94,11 @@ function onMessage(m) {
       const text = JSON.stringify(m);
       if (text === ui.listText) return;
       ui.listText = text;
+      // Първият списък след презареждане: worktree-то на отворения таб се разгъва.
+      if (!ui.list && ui.openContentId) {
+        const found = findTab(m, ui.openContentId);
+        if (found) ui.expanded.add(found.worktree.id);
+      }
       ui.list = m;
       renderSessions();
       renderTerminalBar();
@@ -276,7 +286,9 @@ function showSuggestions(items) {
   }
 }
 
+/** Затваря кутията и отменя чакащото „Предложи“: закъснял отговор не я отваря пак. */
 function closeSuggestions() {
+  ui.suggestRef = null;
   $('suggestions').hidden = true;
 }
 
@@ -561,7 +573,8 @@ function handleShortcut(e) {
     s: requestSuggestions,
     l: () => toggleLine(),
     b: () => toggleSidebar(),
-    f: () => {
+    // K, а не F: Ctrl+⌘+F е цял екран в macOS.
+    k: () => {
       toggleSidebar(false);
       $('search').focus();
       $('search').select();
