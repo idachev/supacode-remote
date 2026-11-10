@@ -18,6 +18,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.launch
 
 /**
@@ -25,10 +27,15 @@ import kotlinx.coroutines.launch
  * е включен. Известие се пуска само когато приложението не се вижда — пред очите на потребителя
  * значката в списъка стига; но и тогава преходът се запомня, за да не дойде известие
  * по-късно за нещо, което той вече е видял.
+ *
+ * Известия има само от свързания Mac ([boundHostId], решение ОП9): връзката носи само него.
+ * При смяна известията на стария се махат. Id-то на известието съдържа и Mac-а, защото
+ * `contentId` е уникален само в един Mac.
  */
 class AgentAlerts(
   private val context: Context,
   private val repos: StateFlow<List<Repository>?>,
+  private val boundHostId: StateFlow<String?>,
   private val appInForeground: StateFlow<Boolean>,
   private val scope: CoroutineScope,
 ) {
@@ -43,15 +50,38 @@ class AgentAlerts(
     // Нов tracker при всяко включване: чакащите в този момент дават известие, ако сме във фон.
     val tracker = AwaitingTracker()
     job = scope.launch {
-      repos.filterNotNull().collect { list ->
-        val changes = tracker.update(list)
-        changes.ended.forEach { cancel(it) }
-        if (!appInForeground.value) changes.started.forEach { post(it) }
+      var hostId = boundHostId.value
+      // Един събирач за двете, за да не се засичат списък и смяна на Mac-а в tracker-а. Смяната
+      // се познава по текущия Mac при всяко събитие: списъкът на новия Mac може да дойде преди
+      // самото събитие за смяната.
+      merge(
+        repos.filterNotNull().map { AlertEvent.List(it) },
+        boundHostId.map { AlertEvent.HostChanged },
+      ).collect { event ->
+        val current = boundHostId.value
+        if (current != hostId) {
+          tracker.reset().forEach { cancel(hostId, it) }
+          hostId = current
+        }
+        when (event) {
+          AlertEvent.HostChanged -> Unit
+          is AlertEvent.List -> {
+            val changes = tracker.update(event.repos)
+            changes.ended.forEach { cancel(hostId, it) }
+            if (!appInForeground.value) changes.started.forEach { post(hostId, it) }
+          }
+        }
       }
     }
   }
 
-  private fun post(tab: AwaitingTab) {
+  private sealed interface AlertEvent {
+    data class List(val repos: kotlin.collections.List<Repository>) : AlertEvent
+
+    data object HostChanged : AlertEvent
+  }
+
+  private fun post(hostId: String?, tab: AwaitingTab) {
     if (!canPost(context)) return
     val notification = NotificationCompat.Builder(context, CHANNEL_AWAITING)
       .setSmallIcon(R.drawable.ic_notification)
@@ -60,19 +90,20 @@ class AgentAlerts(
       .setCategory(NotificationCompat.CATEGORY_MESSAGE)
       .setPriority(NotificationCompat.PRIORITY_HIGH)
       .setAutoCancel(true)
-      .setContentIntent(openTerminalIntent(tab))
+      .setContentIntent(openTerminalIntent(hostId, tab))
       .build()
-    NotificationManagerCompat.from(context).notify(TAG, tab.contentId.hashCode(), notification)
+    NotificationManagerCompat.from(context).notify(TAG, notificationId(hostId, tab.contentId), notification)
   }
 
-  private fun cancel(contentId: String) {
-    NotificationManagerCompat.from(context).cancel(TAG, contentId.hashCode())
+  private fun cancel(hostId: String?, contentId: String) {
+    NotificationManagerCompat.from(context).cancel(TAG, notificationId(hostId, contentId))
   }
 
-  private fun openTerminalIntent(tab: AwaitingTab): PendingIntent {
+  private fun openTerminalIntent(hostId: String?, tab: AwaitingTab): PendingIntent {
     val intent = Intent(context, MainActivity::class.java)
       .setAction(ACTION_OPEN_TERMINAL)
       .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+      .putExtra(EXTRA_HOST_ID, hostId.orEmpty())
       .putExtra(EXTRA_CONTENT_ID, tab.contentId)
       .putExtra(EXTRA_TAB_TITLE, tab.tabTitle)
       .putExtra(EXTRA_REPOSITORY_ID, tab.repositoryId)
@@ -80,7 +111,7 @@ class AgentAlerts(
       .putExtra(EXTRA_WORKTREE_NAME, tab.worktreeName)
     return PendingIntent.getActivity(
       context,
-      tab.contentId.hashCode(),
+      notificationId(hostId, tab.contentId),
       intent,
       PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
@@ -92,11 +123,15 @@ class AgentAlerts(
     private const val TAG = "awaiting"
 
     const val ACTION_OPEN_TERMINAL = "com.idachev.supacoderemote.OPEN_TERMINAL"
+    const val EXTRA_HOST_ID = "hostId"
     const val EXTRA_CONTENT_ID = "contentId"
     const val EXTRA_TAB_TITLE = "tabTitle"
     const val EXTRA_REPOSITORY_ID = "repositoryId"
     const val EXTRA_WORKTREE_ID = "worktreeId"
     const val EXTRA_WORKTREE_NAME = "worktreeName"
+
+    /** Id на известието и request code на intent-а му: едно и също, за да се махат заедно. */
+    fun notificationId(hostId: String?, contentId: String): Int = (hostId.orEmpty() + contentId).hashCode()
 
     fun canPost(context: Context): Boolean =
       Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||

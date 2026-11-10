@@ -221,9 +221,10 @@ class RelayClient(
     synchronized(lock) {
       if (newSettings == settings && _state.value != ConnectionState.Unauthorized) return
       if (newSettings != settings) {
-        // Друг relay: списъкът на стария не важи.
+        // Друг relay: списъкът на стария не важи, а изборът на Mac се пита наново.
         _hosts.value = emptyList()
         _multiHost.value = false
+        pickAsked = false
       }
       settings = newSettings
       restartLocked()
@@ -264,6 +265,8 @@ class RelayClient(
       if (id == _boundHostId.value && id == selection.selectedHostId.value) return
       selection.setSelectedHostId(id)
       pickAsked = false
+      // Името от `hello` е на стария Mac; новият ще прати свое.
+      _hostName.value = null
       restartLocked()
     }
   }
@@ -407,7 +410,7 @@ class RelayClient(
         when (message) {
           is RelayStatus -> if (!onRelayStatus(webSocket, message, attempt)) return
           is HelloReply -> {
-            _hostName.value = message.host
+            if (!isForeignHello(message)) _hostName.value = message.host
             onRelayHello(message)
           }
           else -> Unit
@@ -526,9 +529,7 @@ class RelayClient(
     val info = hello.lan
     synchronized(lock) {
       // `hello` от друг Mac (relay-ят е объркал потоците): без LAN към него, както при грешен fpMac.
-      // Само при нов relay: срещу стар записаното id не значи нищо.
-      val bound = _boundHostId.value
-      if (_multiHost.value && hello.hostId != null && bound != null && hello.hostId != bound) return
+      if (isForeignHello(hello)) return
       val key = settings?.apiKey
       if (info != null && key != null && LanTrust.fpMacValid(key, info.fp, info.fpMac)) {
         lanOffered = true
@@ -540,6 +541,15 @@ class RelayClient(
         scheduleLanRetryLocked()
       }
     }
+  }
+
+  /**
+   * `hello` от Mac, различен от свързания. Само при нов relay: срещу стар записаното id не
+   * значи нищо, а стар Supacode не праща `hostId`.
+   */
+  private fun isForeignHello(hello: HelloReply): Boolean {
+    val bound = _boundHostId.value
+    return _multiHost.value && hello.hostId != null && bound != null && hello.hostId != bound
   }
 
   /** `hello` по relay-а донесе `lan`: опит за пряка връзка, ако вече няма такава. */

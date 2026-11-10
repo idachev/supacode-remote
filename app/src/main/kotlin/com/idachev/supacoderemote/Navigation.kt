@@ -22,6 +22,7 @@ import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.ui.NavDisplay
 import com.idachev.supacoderemote.relay.ConnectionState
 import com.idachev.supacoderemote.ui.LocalAppContainer
+import com.idachev.supacoderemote.ui.hosts.HostsScreen
 import com.idachev.supacoderemote.ui.sessions.SessionsScreen
 import com.idachev.supacoderemote.ui.setup.SetupScreen
 import com.idachev.supacoderemote.ui.terminal.TerminalScreen
@@ -47,6 +48,16 @@ fun MainNavigation() {
     if (backStack.size > 1 && backStack.lastOrNull() == key) backStack.removeLastOrNull()
   }
 
+  // Relay-ят казва, че потребителят трябва да избере Mac (АН2): „Mac-ове“ веднъж на всяко
+  // поискване. Не над „Настройка“ — там се чака, докато тя се затвори.
+  val pickRequests by container.relay.hostPickRequests.collectAsStateWithLifecycle()
+  val top = backStack.lastOrNull()
+  LaunchedEffect(pickRequests, top) {
+    if (pickRequests <= container.handledHostPicks || top is SetupKey) return@LaunchedEffect
+    container.handledHostPicks = pickRequests
+    if (top !is HostsKey) backStack.add(HostsKey)
+  }
+
   // 401 от relay-а: ключът е грешен, връщаме към „Настройка“ с обяснение.
   LaunchedEffect(connection) {
     if (connection == ConnectionState.Unauthorized && backStack.lastOrNull() !is SetupKey) {
@@ -65,6 +76,10 @@ fun MainNavigation() {
     val request = openRequest ?: return@LaunchedEffect
     container.openTerminalRequests.value = null
     if (container.settingsStore.settings.value == null) return@LaunchedEffect
+    // Известие от друг Mac (АН6): първо към него, после терминалът — той прави attach с новата сесия.
+    if (request.hostId.isNotEmpty() && request.hostId != container.relay.boundHostId.value) {
+      container.relay.selectHost(request.hostId)
+    }
     backStack.clear()
     backStack.add(SessionsKey)
     if (request.worktreeId.isNotEmpty()) {
@@ -96,6 +111,23 @@ fun MainNavigation() {
           SessionsScreen(
             onOpenWorktree = { repoId, wt -> backStack.add(WorktreeKey(repoId, wt.id, wt.displayName)) },
             onOpenSettings = { backStack.add(SetupKey()) },
+            onOpenHosts = { backStack.add(HostsKey) },
+          )
+        }
+        entry<HostsKey> { key ->
+          HostsScreen(
+            canGoBack = backStack.size > 1,
+            onBack = { closeScreen(key) },
+            // Worktree и терминал в стека са от стария Mac — само „Сесии“ остава.
+            onPick = { id ->
+              if (id == container.relay.boundHostId.value && backStack.size > 1) {
+                // Същият Mac: връзката не се сменя, отвореното под „Mac-ове“ остава.
+                closeScreen(key)
+              } else {
+                container.relay.selectHost(id)
+                resetTo(SessionsKey)
+              }
+            },
           )
         }
         entry<WorktreeKey> { key ->

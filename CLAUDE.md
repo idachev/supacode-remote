@@ -52,7 +52,22 @@ Navigation 3. compileSdk и targetSdk са 36 (template-ът иска 37, но p
   стойност. Нова стойност от Mac-а не бива да чупи целия `list`.
 - Към host-а не се праща нищо, докато relay-ът не каже `hostOnline:true` — иначе relay-ът
   отговаря с грешка на всяка заявка. При всеки преход false → true: `hello`, `list` и
-  нов `attach` на отворения терминал.
+  нов `attach` на отворения терминал. Повторно `relay` с `hostOnline:true` (само нов
+  списък `hosts`) не е преход и не праща нищо.
+
+## Няколко Mac-а
+
+- Дизайнът е `docs/plans/2026-11-10-remote-multi-host-design.md` в Supacode (АН1–АН7).
+  Връзката е вързана към един Mac: `/client?host=<id>`; смяна е нова връзка
+  (`RelayClient.selectHost`). Без избран Mac връзката е несвързана и чете само списъка.
+- Кога телефонът избира сам, решава `HostChoice` (тест `HostChoiceTest`): само без записан
+  избор и с точно един Mac на линия. Записаният избор не се сменя сам (решение ОП20).
+  „Mac-ове“ се отваря по `hostPickRequests` — брояч, за да не се отваря при всеки списък.
+- `relay` без `hosts` е стар relay: един Mac, без „Mac-ове“, записаният избор чака.
+- `hello` с `hostId` на друг Mac не води до LAN. Известия има само от свързания Mac; id-то
+  им е `(hostId + contentId).hashCode()`.
+- Mock-ът има „Office Mac“ (с LAN), „Home Mac“ и „Mac mini“ (извън линия); `mock-rename`,
+  `mock-other-off` / `mock-other-on` в таб; `MOCK_OLD_RELAY=1`, `MOCK_LEGACY=1`.
 
 ## LAN пътят
 

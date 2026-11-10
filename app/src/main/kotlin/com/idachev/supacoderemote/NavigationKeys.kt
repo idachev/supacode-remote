@@ -11,3 +11,6 @@ import kotlinx.serialization.Serializable
 @Serializable data class WorktreeKey(val repositoryId: String, val worktreeId: String, val title: String) : NavKey
 
 @Serializable data class TerminalKey(val contentId: String, val title: String) : NavKey
+
+/** „Mac-ове“: Mac-овете на relay-а и изборът на един от тях. */
+@Serializable data object HostsKey : NavKey

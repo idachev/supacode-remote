@@ -30,6 +30,7 @@ import com.idachev.supacoderemote.protocol.AgentActivity
 import com.idachev.supacoderemote.protocol.AgentBadge
 import com.idachev.supacoderemote.relay.ConnectionState
 import com.idachev.supacoderemote.relay.LinkPath
+import com.idachev.supacoderemote.ui.hosts.HostLabels
 import androidx.compose.ui.platform.testTag
 import kotlinx.coroutines.delay
 
@@ -58,6 +59,16 @@ fun PollSessionsWhileVisible() {
   }
 }
 
+/** Името на свързания Mac за заглавието и банера — едно правило ([HostLabels.boundName]) за двете. */
+@Composable
+fun boundHostName(): String? {
+  val relay = LocalAppContainer.current.relay
+  val hosts by relay.hosts.collectAsStateWithLifecycle()
+  val boundHostId by relay.boundHostId.collectAsStateWithLifecycle()
+  val hostName by relay.hostName.collectAsStateWithLifecycle()
+  return HostLabels.boundName(hosts, boundHostId, hostName)
+}
+
 /** Лентата под заглавието: няма връзка, Mac-ът е офлайн, грешен ключ. При добра връзка я няма. */
 @Composable
 fun ConnectionBanner(modifier: Modifier = Modifier) {
@@ -65,12 +76,19 @@ fun ConnectionBanner(modifier: Modifier = Modifier) {
   val state by relay.state.collectAsStateWithLifecycle()
   val hostOnline by relay.hostOnline.collectAsStateWithLifecycle()
   val path by relay.path.collectAsStateWithLifecycle()
+  val boundHostId by relay.boundHostId.collectAsStateWithLifecycle()
+  val multiHost by relay.multiHost.collectAsStateWithLifecycle()
+  val boundName = boundHostName()
   // По LAN Mac-ът е там, каквото и да казва relay-ът.
   if (path == LinkPath.LAN) return
+  val offlineText = when {
+    multiHost && boundHostId == null -> "Няма избран Mac"
+    else -> boundName?.let { HostLabels.offlineBanner(it) } ?: "Mac-ът е офлайн"
+  }
   val text: String = when (val s = state) {
     ConnectionState.Idle -> return
     ConnectionState.Connecting -> "Свързване с relay-а…"
-    ConnectionState.Connected -> if (hostOnline) return else "Mac-ът е офлайн"
+    ConnectionState.Connected -> if (hostOnline) return else offlineText
     is ConnectionState.Waiting -> buildString {
       append("Няма връзка")
       s.reason?.let { append(": ").append(it) }

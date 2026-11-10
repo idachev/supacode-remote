@@ -32,6 +32,12 @@ class AwaitingTracker {
     val ended: List<String>,
   )
 
+  /**
+   * Смяна на Mac-а: чакащите табове са от стария (известията им се махат), а следващият `list`
+   * е от новия и всяко чакане в него е ново.
+   */
+  fun reset(): List<String> = awaiting.keys.toList().also { awaiting = emptyMap() }
+
   fun update(repos: List<Repository>): Changes {
     val now = buildMap {
       repos.forEach { repo ->

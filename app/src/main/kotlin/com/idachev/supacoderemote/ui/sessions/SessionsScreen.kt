@@ -36,6 +36,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -43,7 +45,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.idachev.supacoderemote.protocol.Worktree
 import com.idachev.supacoderemote.protocol.WorktreeStatus
+import com.idachev.supacoderemote.relay.LinkPath
 import com.idachev.supacoderemote.sessions.SessionGroups
+import com.idachev.supacoderemote.ui.hosts.OnlineDot
 import com.idachev.supacoderemote.sessions.SessionRow
 import com.idachev.supacoderemote.ui.AgentBadges
 import com.idachev.supacoderemote.ui.ConnectionBanner
@@ -51,17 +55,25 @@ import com.idachev.supacoderemote.ui.PathChip
 import com.idachev.supacoderemote.ui.LocalAppContainer
 import com.idachev.supacoderemote.ui.PollSessionsWhileVisible
 import com.idachev.supacoderemote.ui.WorkingIndicator
+import com.idachev.supacoderemote.ui.boundHostName
 
 /** „Сесии“: repository-тата и техните worktree-та в групите на sidebar-а на Supacode. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SessionsScreen(onOpenWorktree: (repositoryId: String, Worktree) -> Unit, onOpenSettings: () -> Unit) {
+fun SessionsScreen(
+  onOpenWorktree: (repositoryId: String, Worktree) -> Unit,
+  onOpenSettings: () -> Unit,
+  onOpenHosts: () -> Unit,
+) {
   val container = LocalAppContainer.current
   val listReply by container.sessions.list.collectAsStateWithLifecycle()
   // Сгънатите групи — изборът на телефона; без избор важи `collapsed` от Mac-а.
   var collapsed by rememberSaveable { mutableStateOf(mapOf<String, Boolean>()) }
   val refreshing by container.sessions.refreshing.collectAsStateWithLifecycle()
-  val hostName by container.relay.hostName.collectAsStateWithLifecycle()
+  val boundName = boundHostName()
+  val multiHost by container.relay.multiHost.collectAsStateWithLifecycle()
+  val hostOnline by container.relay.hostOnline.collectAsStateWithLifecycle()
+  val path by container.relay.path.collectAsStateWithLifecycle()
   // Търсенето е тук, а не в хранилището: важи само докато екранът е отворен (и при завъртане).
   var query by rememberSaveable { mutableStateOf("") }
   PollSessionsWhileVisible()
@@ -73,7 +85,13 @@ fun SessionsScreen(onOpenWorktree: (repositoryId: String, Worktree) -> Unit, onO
           title = {
             Column {
               Text("Сесии")
-              hostName?.let { Text(it, style = MaterialTheme.typography.labelMedium) }
+              HostTitle(
+                name = boundName,
+                // По LAN Mac-ът е там, каквото и да казва relay-ът.
+                online = hostOnline || path == LinkPath.LAN,
+                // При стар relay няма списък и няма към какво да се смени.
+                onSwitch = if (multiHost) onOpenHosts else null,
+              )
             }
           },
           actions = {
@@ -120,6 +138,27 @@ fun SessionsScreen(onOpenWorktree: (repositoryId: String, Worktree) -> Unit, onO
         }
       }
     }
+  }
+}
+
+/**
+ * Името на свързания Mac с точка „на линия“. С няколко Mac-а е бутон „Смени Mac-а“ към
+ * „Mac-ове“; без избран Mac пише „Избери Mac“.
+ */
+@Composable
+private fun HostTitle(name: String?, online: Boolean, onSwitch: (() -> Unit)?) {
+  val label = name ?: if (onSwitch != null) "Избери Mac" else return
+  var modifier: Modifier = Modifier.testTag("host-title")
+  if (onSwitch != null) {
+    modifier = modifier
+      .clickable(onClickLabel = "Смени Mac-а", onClick = onSwitch)
+      .semantics { contentDescription = "Смени Mac-а" }
+  }
+  Row(verticalAlignment = Alignment.CenterVertically, modifier = modifier) {
+    OnlineDot(online)
+    Spacer(Modifier.width(6.dp))
+    Text(label, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    if (onSwitch != null) Text(" ▾", style = MaterialTheme.typography.labelMedium)
   }
 }
 

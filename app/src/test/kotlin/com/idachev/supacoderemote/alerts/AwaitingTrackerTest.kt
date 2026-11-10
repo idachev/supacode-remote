@@ -74,4 +74,13 @@ class AwaitingTrackerTest {
     assertEquals(emptyList<String>(), changes.started.map { it.contentId })
     assertEquals(emptyList<String>(), changes.ended)
   }
+
+  @Test
+  fun `смяна на Mac-а връща чакащите и почва на чисто`() {
+    assertEquals(listOf("a"), started("a" to listOf("awaitingInput"), "b" to listOf("busy")))
+    assertEquals(listOf("a"), tracker.reset())
+    // Същият contentId на новия Mac е ново чакане, не продължение на старото.
+    assertEquals(listOf("a"), started("a" to listOf("awaitingInput")))
+    assertEquals(emptyList<String>(), AwaitingTracker().reset())
+  }
 }

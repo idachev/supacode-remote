@@ -48,13 +48,19 @@ class AppContainer(context: Context) {
   val appInForeground: MutableStateFlow<Boolean> = MutableStateFlow(false)
 
   /** Известията „агент чака“; включват се от „Настройка“. */
-  val agentAlerts: AgentAlerts = AgentAlerts(context, sessions.repos, appInForeground, appScope)
+  val agentAlerts: AgentAlerts = AgentAlerts(context, sessions.repos, relay.boundHostId, appInForeground, appScope)
 
   /**
    * Терминал, поискан от докоснато известие. Навигацията го отваря и връща `null`.
    * StateFlow, а не събитие: известието може да дойде преди навигацията да е готова.
    */
   val openTerminalRequests: MutableStateFlow<OpenTerminalRequest?> = MutableStateFlow(null)
+
+  /**
+   * До коя стойност на [RelayClient.hostPickRequests] навигацията вече е отворила „Mac-ове“.
+   * Тук, а не в `rememberSaveable`: броячът живее колкото процеса и започва от 0 с него.
+   */
+  var handledHostPicks: Int = 0
 
   init {
     appScope.launch { settingsStore.notifyAwaiting.collect { agentAlerts.setEnabled(it) } }
@@ -65,8 +71,12 @@ class AppContainer(context: Context) {
   }
 }
 
-/** Кой терминал да се отвори от известие: worktree-то му за стека „Назад“ и самият таб. */
+/**
+ * Кой терминал да се отвори от известие: Mac-ът му ([hostId], празно — който и да е свързан),
+ * worktree-то му за стека „Назад“ и самият таб.
+ */
 data class OpenTerminalRequest(
+  val hostId: String,
   val repositoryId: String,
   val worktreeId: String,
   val worktreeName: String,

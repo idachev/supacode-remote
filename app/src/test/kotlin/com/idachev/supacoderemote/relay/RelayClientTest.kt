@@ -65,6 +65,7 @@ class RelayClientTest {
   /** Relay, който при отваряне праща [statuses] едно след друго. */
   private fun hostUpgrade(
     vararg statuses: String = arrayOf("""{"t":"relay","hostOnline":true}"""),
+    hello: String = """{"t":"hello","v":1,"host":"Test Mac"}""",
   ): MockResponse = MockResponse.Builder().webSocketUpgrade(object : WebSocketListener() {
     override fun onOpen(webSocket: WebSocket, response: Response) {
       openOnServer.incrementAndGet()
@@ -75,7 +76,7 @@ class RelayClientTest {
     override fun onMessage(webSocket: WebSocket, text: String) {
       fromClient.put(text)
       if (text == "ping") webSocket.send("pong")
-      if (text.contains("\"hello\"")) webSocket.send("""{"t":"hello","v":1,"host":"Test Mac"}""")
+      if (text.contains("\"hello\"")) webSocket.send(hello)
     }
 
     override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
@@ -310,5 +311,31 @@ class RelayClientTest {
     assertEquals(emptyList<HostInfo>(), relay.hosts.value)
     assertEquals(0, relay.hostPickRequests.value)
     assertEquals("office", selection.selectedHostId.value)
+  }
+
+  @Test
+  fun `hello от друг Mac не сменя името на свързания`() = runBlocking<Unit> {
+    server.enqueue(
+      hostUpgrade(relay(true, "office", officeOn), hello = """{"t":"hello","v":1,"host":"Home Mac","hostId":"home"}"""),
+    )
+    val relay = client(MemoryHostSelection("office"))
+    relay.configure(RelaySettings(base(), "k"))
+    relay.setForeground(true)
+    assertEquals("""{"t":"hello","v":1}""", next())
+    Thread.sleep(300)
+    assertNull(relay.hostName.value)
+  }
+
+  @Test
+  fun `нов ключ за връзка пита наново за Mac, дори да е питано при стария relay`() = runBlocking<Unit> {
+    val status = relay(false, "gone", officeOn)
+    server.enqueue(hostUpgrade(status))
+    server.enqueue(hostUpgrade(status))
+    val relay = client(MemoryHostSelection("gone"))
+    relay.configure(RelaySettings(base(), "k"))
+    relay.setForeground(true)
+    withTimeout(5_000) { relay.hostPickRequests.first { it == 1 } }
+    relay.configure(RelaySettings(base(), "k2"))
+    withTimeout(5_000) { relay.hostPickRequests.first { it == 2 } }
   }
 }

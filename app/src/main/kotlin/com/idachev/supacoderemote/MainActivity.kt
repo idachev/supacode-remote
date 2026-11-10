@@ -74,6 +74,7 @@ class MainActivity : ComponentActivity() {
     if (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return
     val contentId = intent.getStringExtra(AgentAlerts.EXTRA_CONTENT_ID) ?: return
     (application as SupacodeRemoteApp).container.openTerminalRequests.value = OpenTerminalRequest(
+      hostId = intent.getStringExtra(AgentAlerts.EXTRA_HOST_ID).orEmpty(),
       repositoryId = intent.getStringExtra(AgentAlerts.EXTRA_REPOSITORY_ID).orEmpty(),
       worktreeId = intent.getStringExtra(AgentAlerts.EXTRA_WORKTREE_ID).orEmpty(),
       worktreeName = intent.getStringExtra(AgentAlerts.EXTRA_WORKTREE_NAME).orEmpty(),
