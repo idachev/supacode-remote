@@ -27,6 +27,12 @@ export function clientUrl(base, hostId = null) {
   if (rest === '' || rest.startsWith('/')) return null;
   const withoutClient = rest.endsWith('/client') ? rest.slice(0, -'/client'.length) : rest;
   const url = `${scheme}://${withoutClient}/client`;
+  // Грешен порт или хост (`example.com:bad`) иначе минава тук и пада чак при свързване.
+  try {
+    new URL(url);
+  } catch {
+    return null;
+  }
   return hostId ? `${url}?host=${encodeURIComponent(hostId)}` : url;
 }
 

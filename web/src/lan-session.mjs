@@ -6,6 +6,7 @@
 // нито байт от HTTP заявката.
 
 import https from 'node:https';
+import net from 'node:net';
 import tls from 'node:tls';
 import WebSocket from 'ws';
 import { fpMacValid, pinMatches } from './lan-trust.mjs';
@@ -86,12 +87,19 @@ function connectOne(addr, port, clientKey, agent, timeoutMs, { onText, onClose }
   return new Promise((resolve) => {
     let session = null;
     let settled = false;
-    const ws = new WebSocket(`wss://${addr}:${port}/lan`, {
-      agent,
-      headers: { Authorization: `Bearer ${clientKey}` },
-      handshakeTimeout: timeoutMs * 2,
-      perMessageDeflate: false,
-    });
+    let ws;
+    try {
+      ws = new WebSocket(`wss://${addr}:${port}/lan`, {
+        agent,
+        headers: { Authorization: `Bearer ${clientKey}` },
+        handshakeTimeout: timeoutMs * 2,
+        perMessageDeflate: false,
+      });
+    } catch {
+      // Невалиден адрес хвърля веднага; опитът е просто неуспешен.
+      resolve(null);
+      return;
+    }
     const settle = (value) => {
       if (settled) return;
       settled = true;
@@ -125,8 +133,11 @@ function connectOne(addr, port, clientKey, agent, timeoutMs, { onText, onClose }
  */
 export async function connectLan(info, clientKey, { timeoutMs = LAN_CONNECT_TIMEOUT_MS, onText, onClose } = {}) {
   if (!info?.fp || !fpMacValid(clientKey, info.fp, info.fpMac)) return null;
+  // fpMac пази само отпечатъка, не адресите и порта: relay-ят може да ги смени.
+  if (!Number.isInteger(info.port) || info.port < 1 || info.port > 65535) return null;
   const agent = new PinnedAgent(info.fp, timeoutMs);
   for (const addr of info.addrs ?? []) {
+    if (net.isIPv4(addr) === false && net.isIPv6(addr) === false) continue;
     const session = await connectOne(addr, info.port, clientKey, agent, timeoutMs, { onText, onClose });
     if (session) return session;
   }

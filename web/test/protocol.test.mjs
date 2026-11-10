@@ -17,7 +17,9 @@ test('client в края не се удвоява', () => {
 });
 
 test('празен адрес и непозната схема са грешка', () => {
-  for (const bad of ['', 'relay.example.com', 'ftp://h', 'https://']) assert.equal(clientUrl(bad), null, bad);
+  for (const bad of ['', 'relay.example.com', 'ftp://h', 'https://', 'https://h:bad', 'https://h:99999', 'https://[']) {
+    assert.equal(clientUrl(bad), null, bad);
+  }
 });
 
 test('избраният Mac отива в host параметъра', () => {
@@ -44,7 +46,8 @@ test('ключът е след последната наклонена черт�
 });
 
 test('липсваща част е грешка', () => {
-  for (const bad of ['', 'relay.example.com', 'relay.example.com/', '/abc', 'https:///abc', 'https://abc', 'ftp://h/k', ' / ']) {
+  for (const bad of ['', 'relay.example.com', 'relay.example.com/', '/abc', 'https:///abc', 'https://abc', 'ftp://h/k', ' / ',
+    'https://example.com:bad/key', 'relay.example.com:70000/key']) {
     assert.equal(parseConnectionKey(bad), null, `трябва да е грешка: '${bad}'`);
   }
 });

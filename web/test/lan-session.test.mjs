@@ -92,3 +92,14 @@ test('пробва следващия адрес, ако първият не о�
   assert.ok(Date.now() - started >= 250);
   session.close();
 });
+
+test('невалиден адрес или порт от relay-а — без опит и без грешка, следващият адрес работи', async () => {
+  const { port } = await lanServer(mac);
+  assert.equal(await connectLan({ ...info(mac, port), port: 70000 }, KEY), null);
+  assert.equal(await connectLan({ ...info(mac, port), port: 'x' }, KEY), null);
+  const session = await connectLan({ ...info(mac, port), addrs: ['[', 'not an ip', '127.0.0.1'] }, KEY);
+  assert.ok(session);
+  assert.equal(session.address, '127.0.0.1');
+  session.close();
+});
+

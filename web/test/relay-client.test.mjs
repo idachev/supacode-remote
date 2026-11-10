@@ -119,3 +119,12 @@ test('предложенията идват с ref-а на страницата'
   assert.ok(reply.suggestions.length > 0);
   c.stop();
 });
+
+test('невалиден адрес на relay-а — чакане с причина, процесът живее', async () => {
+  const relay = new RelayClient();
+  relay.configure({ baseUrl: 'https://example.com:bad', apiKey: 'k' });
+  assert.equal(relay.state.connection, 'waiting');
+  assert.equal(relay.state.reason, 'невалиден адрес');
+  relay.stop();
+});
+

@@ -1,7 +1,7 @@
 // Локалният сървър: проверките на Host и Origin, „Настройка“ и втората страница.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -138,3 +138,19 @@ test('нов ключ за връзка чисти таба и списъка н
   await waitFor(() => p.last('state')?.hostSession != null, 'пак сесия');
   p.ws.close();
 });
+
+test('записан счупен ключ — сървърът тръгва и иска нов ключ', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'supacode-web-bad-'));
+  await writeFile(join(dir, 'config.json'), JSON.stringify({ connectionKey: 'https://example.com:bad/key' }));
+  const other = createServer({ port: 0, configDir: dir });
+  const otherPort = await other.listen();
+  const ws = new WebSocket(`ws://127.0.0.1:${otherPort}/ws`, { headers: { Origin: `http://localhost:${otherPort}`, Host: `localhost:${otherPort}` } });
+  const state = await new Promise((resolve, reject) => {
+    ws.on('message', (d) => { const m = JSON.parse(d.toString()); if (m.t === 'state') resolve(m); });
+    ws.on('error', reject);
+  });
+  assert.equal(state.configured, false);
+  ws.close();
+  await other.close();
+});
+

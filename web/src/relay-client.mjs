@@ -200,9 +200,16 @@ export class RelayClient extends EventEmitter {
       let lastFrameAt = Date.now();
       let finished = false;
       // handshakeTimeout: upgrade без отговор (след sleep, мрежа, която гълта заявката) иначе виси.
-      const ws = new WebSocket(url, {
-        headers: { Authorization: `Bearer ${apiKey}` }, perMessageDeflate: false, handshakeTimeout: this.timing.handshakeTimeoutMs,
-      });
+      let ws;
+      try {
+        ws = new WebSocket(url, {
+          headers: { Authorization: `Bearer ${apiKey}` }, perMessageDeflate: false, handshakeTimeout: this.timing.handshakeTimeoutMs,
+        });
+      } catch {
+        // Невалиден адрес хвърля веднага; без това грешката би спряла Node.
+        resolve({ reason: 'невалиден адрес на relay-а', wasOpen: false });
+        return;
+      }
       const current = () => !finished && attempt === this.attempt;
       const finish = (outcome) => {
         if (finished) return;
@@ -301,11 +308,17 @@ export class RelayClient extends EventEmitter {
     const generation = this.lanGeneration;
     clearTimeout(this.lanRetryTimer);
     this.lanConnecting = true;
-    const session = await connectLan(info, key, {
-      timeoutMs: this.timing.lanConnectTimeoutMs,
-      onText: (s, text) => this.#onLanText(s, text),
-      onClose: (s) => this.#onLanClosed(s),
-    });
+    let session = null;
+    try {
+      session = await connectLan(info, key, {
+        timeoutMs: this.timing.lanConnectTimeoutMs,
+        onText: (s, text) => this.#onLanText(s, text),
+        onClose: (s) => this.#onLanClosed(s),
+      });
+    } catch {
+      // Неуспешен LAN опит: остава relay пътят. Без catch грешката би спряла Node.
+      session = null;
+    }
     if (generation !== this.lanGeneration) {
       session?.close();
       return;
