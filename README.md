@@ -140,6 +140,25 @@ The mock logs every input as text and hex. Lines typed in a tab trigger test cas
 The tabs are real shells in the mock's working directory and `$HOME`, so do not share
 screenshots of them without checking what they show.
 
+## Web app for a laptop
+
+`web/` is a local web app that does what the phone app does, for a laptop with a full keyboard
+and trackpad. A small Node server on `127.0.0.1` holds the connection key and talks to the relay
+and to the Mac's LAN endpoint exactly like the phone (browsers cannot send the `Authorization`
+header on a WebSocket or pin a self-signed certificate). The browser page shows the sessions
+list and one terminal tab and talks only to that local server.
+
+```sh
+web/run.sh               # npm install when needed, then http://localhost:8790 opens
+PORT=8791 web/run.sh     # another port; --no-open skips the browser
+cd web && npm test       # Node tests, including tests against tools/mock-host.mjs
+```
+
+The connection key is stored in `~/.config/supacode-remote-web/config.json` (mode 0600). The
+tab keeps the Mac's size and the font fits the window; a new tab starts at the size that fits
+the window. Keyboard shortcuts use Ctrl+⌘ (press `?` in the top bar). Design:
+[`docs/plans/2026-11-10-web-app-design.md`](docs/plans/2026-11-10-web-app-design.md).
+
 ## Project layout
 
 ```

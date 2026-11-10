@@ -8,7 +8,9 @@
 // Пускане:  cd tools && npm install && node mock-host.mjs   (PORT=8787, KEY=test-key,
 //           MOCK_NO_SECTIONS=1 за стария `list` без `sections`,
 //           MOCK_OLD_RELAY=1 за стар relay — един Mac, `relay` без `hosts` и `host`,
-//           MOCK_LEGACY=1 за още един онлайн Mac `default` без име — стар Supacode)
+//           MOCK_LEGACY=1 за още един онлайн Mac `default` без име — стар Supacode,
+//           MOCK_SINGLE_HOST=1 за един Mac „Mock Mac“ с repo-тата и LAN-а на Office Mac —
+//           тестовете на web/ тръгват направо към списъка)
 //
 // Няколко Mac-а (раздел „Multiple hosts“ в протокола): „Office Mac“ (repo-тата по-долу и LAN),
 // „Home Mac“ (свои repo-та и contentId-та) и „Mac mini“ (извън линия). `/client?host=<id>`
@@ -17,8 +19,7 @@
 // Ключът за връзка от emulator-а: http://10.0.2.2:8787/test-key
 //
 // Специални редове, написани в кой да е таб (за ръчна проба):
-//   mock-resize   — host-ът сменя размера на 100x30 и праща `size`
-//                   (`resize` от телефона прави същото с поискания размер, 20…500 × 5…200);
+//   mock-resize   — host-ът сменя размера на 100x30 и праща `size`;
 //   mock-await    — агентът на този таб чака вход (`awaitingInput`), за известията;
 //   mock-busy     — агентът пак работи (`busy`);
 //   mock-offline  — host-ът „изчезва“ от relay-а за 5 s (`relay hostOnline:false`, после
@@ -28,6 +29,12 @@
 //   mock-rename   — свързаният Mac сменя името си (и обратно), relay-ят праща новия списък;
 //   mock-other-off / mock-other-on — другият Mac с repo-та („Home Mac“ или „Office Mac“)
 //                   излиза от линия / се връща; вързаните към него виждат ръба.
+//
+// `resize` (ЗД12) сменя размера на таба, към който връзката е закачена (20…500 × 5…200), и праща
+// `size` на всички закачени към него; без промяна `size` няма, а за чужд таб се пренебрегва.
+//
+// `tab.new` отваря нов shell в worktree-то на свързания Mac. С `cols` и `rows` (и двете, цели
+// числа) той тръгва с този размер, ограничен до 20…500 × 5…200; без тях — 120 × 40, както на Mac-а.
 //
 // LAN пътят (раздел „LAN shortcut“ в протокола): wss://127.0.0.1:LAN_PORT/lan (8788), от
 // emulator-а 10.0.2.2. TLS 1.3 със самоподписан сертификат от паметта, `fp` и `fpMac` в
@@ -102,8 +109,10 @@ function makeHost({ id, name, online, repos: hostRepos, lan = false, rowIds: hos
 
 /** hostId → Mac. Id-тата приличат на истинските (16 hex), за да се видят в лога. */
 const hosts = new Map();
-for (const h of [
-  makeHost({ id: '0f1ce0ff1ce0ff1c', name: 'Office Mac', online: true, repos: officeRepos, lan: true, rowIds, sections }),
+const singleHost = process.env.MOCK_SINGLE_HOST === '1';
+const office = { id: '0f1ce0ff1ce0ff1c', online: true, repos: officeRepos, lan: true, rowIds, sections };
+for (const h of singleHost ? [makeHost({ ...office, name: 'Mock Mac' })] : [
+  makeHost({ ...office, name: 'Office Mac' }),
   makeHost({ id: '40be40be40be40be', name: 'Home Mac', online: true, repos: homeRepos }),
   makeHost({ id: '3a1a3a1a3a1a3a1a', name: 'Mac mini', online: false, repos: [] }),
 ]) hosts.set(h.id, h);
@@ -181,10 +190,10 @@ function attachedClients(host, contentId) {
  * Сесиите са по Mac (`host.sessions`): contentId → { host, contentId, proc, cols, rows, screen,
  * screenBytes, line }. Сесията знае своя Mac и таб, за да ги ползват командите на реда.
  */
-function session(host, contentId) {
+function session(host, contentId, cols = COLS, rows = ROWS) {
   let s = host.sessions.get(contentId);
   if (s) return s;
-  s = { host, contentId, proc: spawnShell(COLS, ROWS), cols: COLS, rows: ROWS, screen: [], screenBytes: 0, line: '' };
+  s = { host, contentId, proc: spawnShell(cols, rows), cols, rows, screen: [], screenBytes: 0, line: '' };
   host.sessions.set(contentId, s);
   s.proc.onData((buf) => onShellData(s, buf));
   s.proc.onExit((e) => onShellExit(s, e));
@@ -332,6 +341,28 @@ function resize(c, host, msg) {
   if (cols !== s.cols || rows !== s.rows) resizeSession(s, cols, rows);
 }
 
+let newTabCounter = 0;
+
+/** Нов таб: размерът от заявката (ЗД12), ако е даден и в двете посоки, иначе 120 × 40. */
+function newTab(c, host, msg) {
+  const worktree = host.repos.flatMap((r) => r.worktrees).find((w) => w.id === msg.worktreeId);
+  if (!worktree) {
+    send(c, { t: 'error', id: msg.id ?? null, message: `unknown worktree ${msg.worktreeId}` });
+    return;
+  }
+  const sized = Number.isInteger(msg.cols) && Number.isInteger(msg.rows);
+  const cols = sized ? clamp(msg.cols, 20, 500) : COLS;
+  const rows = sized ? clamp(msg.rows, 5, 200) : ROWS;
+  newTabCounter += 1;
+  const contentId = `content-new-${newTabCounter}`;
+  const tabId = `tab-new-${newTabCounter}`;
+  worktree.tabs.push({ id: tabId, contentId, title: 'zsh', focused: false, working: false, readOnly: false, agents: [] });
+  host.knownContent.add(contentId);
+  session(host, contentId, cols, rows);
+  log('tab opened', { host: host.id, worktree: msg.worktreeId, content: contentId, cols, rows });
+  send(c, { t: 'tab.new', id: msg.id, worktreeId: msg.worktreeId, tabId, contentId });
+}
+
 function suggest(c, msg) {
   const suggestions = ['git status', 'echo здравей 👋', 'ls -la'];
   setTimeout(() => send(c, { t: 'suggest', id: msg.id, contentId: msg.contentId, suggestions }), 2000);
@@ -344,6 +375,7 @@ const messageHandlers = {
   detach: (c, host, msg) => { if (c.attached === msg.contentId) c.attached = null; },
   input,
   resize,
+  'tab.new': newTab,
   suggest: (c, host, msg) => suggest(c, msg),
 };
 

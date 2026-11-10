@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="bg">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Supacode Remote</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%2323759b'/%3E%3Cpath d='M4 5l3 3-3 3M8 11h4' stroke='white' stroke-width='1.6' fill='none'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/vendor/xterm.css">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="banner" class="banner" hidden>
+    <span id="banner-text"></span>
+    <button id="banner-retry" type="button" hidden>Свържи отново</button>
+  </div>
+
+  <header class="topbar">
+    <button id="toggle-sessions" class="icon" type="button" title="Сесии (Ctrl+⌘+B)">☰</button>
+    <button id="host-name" class="host-name" type="button" disabled>Supacode Remote</button>
+    <span id="path-chip" class="chip" hidden></span>
+    <span class="spacer"></span>
+    <button id="help-button" class="icon" type="button" title="Клавишни комбинации">?</button>
+    <button id="setup-button" type="button">Настройка</button>
+  </header>
+
+  <main class="layout">
+    <aside id="sessions" class="sessions">
+      <input id="search" class="search" type="search" placeholder="Търси сесия или repository" autocomplete="off" spellcheck="false">
+      <div id="session-list" class="session-list"></div>
+    </aside>
+
+    <section class="terminal-pane">
+      <div class="terminal-bar">
+        <span id="terminal-title" class="terminal-title"></span>
+        <span class="spacer"></span>
+        <button id="suggest-button" type="button" title="Ctrl+⌘+S" disabled>Предложи</button>
+        <button id="line-button" type="button" title="Ctrl+⌘+L" disabled>Поле за ред</button>
+        <button id="copy-all-button" type="button" disabled>Копирай всичко</button>
+        <button id="fit-button" type="button" disabled title="Прави таба на Mac-а толкова колони и редове, колкото влизат тук при шрифта от „Настройка“. Mac-ът си връща своя размер, щом прозорецът му се смени.">Размер по този екран</button>
+      </div>
+      <div id="term-area" class="term-area">
+        <div id="term" class="term"></div>
+        <div id="term-status" class="term-status">
+          <span id="term-status-text">Избери таб отляво.</span>
+          <button id="term-retry" type="button" hidden>Свържи отново</button>
+        </div>
+        <div id="suggestions" class="suggestions" hidden></div>
+      </div>
+      <form id="line-form" class="line-form" hidden>
+        <input id="line-input" type="text" placeholder="Текст за терминала — Enter праща, Esc скрива" autocomplete="off" spellcheck="false">
+      </form>
+    </section>
+  </main>
+
+  <div id="setup" class="overlay" hidden>
+    <form id="setup-form" class="dialog">
+      <h2>Настройка</h2>
+      <p>Supacode Remote се свързва с Mac-а през relay-а. Ключът за връзка е в
+        <code>~/.config/supacode/remote-client-key.txt</code> на Mac-а — копирай го целия.</p>
+      <label for="setup-key">Ключ за връзка</label>
+      <input id="setup-key" type="password" placeholder="Relay и ключ, разделени с „/“" autocomplete="off" spellcheck="false">
+      <p id="setup-current" class="muted"></p>
+      <p id="setup-error" class="error" hidden></p>
+      <label for="setup-font">Размер на шрифта за нови табове (px)</label>
+      <input id="setup-font" type="number" min="8" max="24" step="1">
+      <p class="muted">Новият таб на Mac-а тръгва с толкова колони и редове, колкото влизат в прозореца при този шрифт.</p>
+      <div class="dialog-buttons">
+        <button id="setup-cancel" type="button">Затвори</button>
+        <button id="setup-save" type="submit">Запази и свържи</button>
+      </div>
+    </form>
+  </div>
+
+  <div id="help" class="overlay" hidden>
+    <div class="dialog">
+      <h2>Клавишни комбинации</h2>
+      <table class="keys">
+        <tr><td>Ctrl+⌘+↑ / ↓</td><td>Предишен / следващ таб в worktree-то</td></tr>
+        <tr><td>Ctrl+⌘+← / →</td><td>Предишен / следващ worktree</td></tr>
+        <tr><td>Ctrl+⌘+N</td><td>Нов таб в worktree-то</td></tr>
+        <tr><td>Ctrl+⌘+S</td><td>Предложи</td></tr>
+        <tr><td>Ctrl+⌘+L</td><td>Поле за ред</td></tr>
+        <tr><td>Ctrl+⌘+B</td><td>Покажи / скрий „Сесии“</td></tr>
+        <tr><td>Ctrl+⌘+K</td><td>Търси сесия</td></tr>
+        <tr><td>⌘C / ⌘V</td><td>Копирай маркираното / постави</td></tr>
+        <tr><td>⌥ + влачене</td><td>Маркиране, когато програмата следи мишката</td></tr>
+      </table>
+      <p class="muted">Ctrl+буква отива към програмата по мястото на клавиша (и на кирилица). ⌥ пише специалните знаци, както в Supacode; ⇧+Enter и ⌥+Enter пращат нов ред (ESC+CR). Размерът на таба е този на Mac-а; шрифтът се вписва в прозореца.</p>
+      <div class="dialog-buttons"><button id="help-close" type="button">Затвори</button></div>
+    </div>
+  </div>
+
+  <div id="hosts" class="overlay" hidden>
+    <div class="dialog">
+      <h2>Mac-ове</h2>
+      <div id="host-list" class="host-list"></div>
+      <div class="dialog-buttons"><button id="hosts-close" type="button">Затвори</button></div>
+    </div>
+  </div>
+
+  <div id="replaced" class="overlay" hidden>
+    <div class="dialog">
+      <h2>Отворено в друг прозорец</h2>
+      <p>Supacode Remote се управлява от друг прозорец или таб на браузъра.</p>
+      <div class="dialog-buttons"><button id="takeover" type="button">Ползвай тук</button></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="/vendor/xterm.js"></script>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
