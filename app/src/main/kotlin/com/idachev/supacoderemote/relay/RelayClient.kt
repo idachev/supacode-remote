@@ -313,6 +313,9 @@ class RelayClient(
     // Под streamLock-а (той е reentrant): нов attach не може да влезе между проверката и detach-а.
     synchronized(streamLock) {
       if (gate.isStaleDetach(contentId, lastAttachId)) return true
+      // Без сесия с host-а или с attach по път, който вече е затворен (смяна на Mac-а, reconnect):
+      // host-ът е забравил attach-а, а нова връзка не бива да праща нищо преди hostOnline:true.
+      if (_hostSession.value == null || !gate.isAttached(contentId)) return true
       return send(DetachRequest(contentId))
     }
   }

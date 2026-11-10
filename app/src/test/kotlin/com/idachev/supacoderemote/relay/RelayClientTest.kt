@@ -1,5 +1,6 @@
 package com.idachev.supacoderemote.relay
 
+import com.idachev.supacoderemote.protocol.AttachRequest
 import com.idachev.supacoderemote.protocol.HostInfo
 import com.idachev.supacoderemote.settings.HostSelection
 import com.idachev.supacoderemote.settings.MemoryHostSelection
@@ -354,5 +355,27 @@ class RelayClientTest {
     withTimeout(5_000) { relay.hostSession.first { it != null } }
     assertEquals("office", selection.selectedHostId.value)
     assertFalse(relay.hostPickPending.value)
+  }
+
+  @Test
+  fun `detach на терминал от стария Mac не тръгва по новата връзка`() = runBlocking<Unit> {
+    server.enqueue(hostUpgrade(relay(true, "office", officeOn, homeOn)))
+    // Новата връзка е отворена, но relay-ят още не е казал hostOnline:true.
+    server.enqueue(hostUpgrade(relay(false, "home", officeOn, """{"id":"home","name":"Home Mac","online":false}""")))
+    val relay = client(MemoryHostSelection("office"))
+    relay.configure(RelaySettings(base(), "k"))
+    relay.setForeground(true)
+    assertEquals("""{"t":"hello","v":1}""", next())
+    withTimeout(5_000) { relay.hostSession.first { it == 1 } }
+    assertTrue(relay.send(AttachRequest(7, "c-office")))
+    assertEquals("""{"t":"attach","id":7,"contentId":"c-office","scrollback":500}""", nextNotPing())
+
+    relay.selectHost("home")
+    withTimeout(5_000) { relay.hosts.first { list -> list.any { it.id == "home" && !it.online } } }
+    assertEquals(ConnectionState.Connected, relay.state.value)
+    fromClient.clear()
+    assertTrue(relay.detach("c-office", 7))
+    Thread.sleep(400)
+    assertTrue(fromClient.none { it.contains("detach") })
   }
 }

@@ -67,6 +67,10 @@ internal class TerminalStreamGate {
     return latest != attachId
   }
 
+  /** Mac-ът държи (или ще държи) наш attach за [contentId] по някой от живите пътища. */
+  fun isAttached(contentId: String): Boolean =
+    attachedOn.containsValue(contentId) || pending?.contentId == contentId
+
   /** Пътят е паднал: Mac-ът е забравил attach-а по него, кадрите му вече не се приемат. */
   fun closed(source: Any) {
     attachedOn.remove(source)
