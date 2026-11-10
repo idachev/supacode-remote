@@ -16,7 +16,7 @@
 
   <header class="topbar">
     <button id="toggle-sessions" class="icon" type="button" title="Сесии (Ctrl+⌘+B)">☰</button>
-    <span id="host-name" class="host-name">Supacode Remote</span>
+    <button id="host-name" class="host-name" type="button" disabled>Supacode Remote</button>
     <span id="path-chip" class="chip" hidden></span>
     <span class="spacer"></span>
     <button id="help-button" class="icon" type="button" title="Клавишни комбинации">?</button>
@@ -86,6 +86,14 @@
       </table>
       <p class="muted">Ctrl+буква отива към програмата по мястото на клавиша (и на кирилица). ⌥ пише специалните знаци, както в Supacode; ⇧+Enter и ⌥+Enter пращат нов ред (ESC+CR). Размерът на таба е този на Mac-а; шрифтът се вписва в прозореца.</p>
       <div class="dialog-buttons"><button id="help-close" type="button">Затвори</button></div>
+    </div>
+  </div>
+
+  <div id="hosts" class="overlay" hidden>
+    <div class="dialog">
+      <h2>Mac-ове</h2>
+      <div id="host-list" class="host-list"></div>
+      <div class="dialog-buttons"><button id="hosts-close" type="button">Затвори</button></div>
     </div>
   </div>
 

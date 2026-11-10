@@ -3,6 +3,11 @@
 //
 // Mac-ът държи по един `attach` на връзка, а Node има една връзка. Затова управлява само една
 // страница: нова страница взима управлението, а старата получава `replaced` и чака `takeover`.
+//
+// Избор на Mac (multi-host, АН2 / ОП20 от дизайна на Supacode): нов relay праща `hosts`. Без
+// записан избор и с точно един Mac на линия той се избира сам; иначе страницата показва
+// „Mac-ове“. Записаният избор никога не се сменя сам, дори ако го няма в списъка. Стар relay
+// (без `hosts`) е един Mac, както преди.
 
 import { randomUUID } from 'node:crypto';
 import WebSocket from 'ws';
@@ -16,14 +21,19 @@ export class BrowserLink {
     this.host = host;
     this.config = config;
     this.settings = null;
+    this.connectionKey = null;
     this.selectedHostId = null;
+    this.selecting = false;
     this.active = null;
     /**
      * Ново при всяко пускане на сървъра. Страница от предишно пускане носи стария код на
      * страницата и се презарежда сама, иначе говори стария локален протокол.
      */
     this.bootId = randomUUID();
-    relay.on('state', () => this.#sendState());
+    relay.on('state', (state) => {
+      this.#sendState();
+      this.#autoSelect(state);
+    });
     host.on('message', (message) => this.#send(this.active, message));
   }
 
@@ -32,6 +42,7 @@ export class BrowserLink {
     const saved = await this.config.load();
     this.selectedHostId = saved.selectedHostId;
     this.settings = saved.connectionKey ? parseConnectionKey(saved.connectionKey) : null;
+    this.connectionKey = this.settings ? saved.connectionKey.trim() : null;
     this.relay.configure(this.settings, this.selectedHostId);
   }
 
@@ -63,7 +74,41 @@ export class BrowserLink {
       relayLabel: this.settings ? relayLabel(this.settings.baseUrl) : null,
       ...this.relay.state,
       openContentId: this.host.openContentId,
+      selectedHostId: this.selectedHostId,
+      hostPick: this.#needsPick(this.relay.state.hosts),
     };
+  }
+
+  /** Страницата трябва да покаже „Mac-ове“: няма какво да се избере само. */
+  #needsPick(hosts) {
+    if (!Array.isArray(hosts)) return false;
+    if (this.selectedHostId) return !hosts.some((h) => h.id === this.selectedHostId);
+    return hosts.filter((h) => h.online).length !== 1;
+  }
+
+  /** Без записан избор и с точно един Mac на линия — той (АН2). */
+  #autoSelect(state) {
+    if (this.selecting || this.selectedHostId || !this.settings || !Array.isArray(state.hosts)) return;
+    const online = state.hosts.filter((h) => h.online);
+    if (online.length !== 1) return;
+    // След текущото събитие: изборът рестартира връзката, а тук сме в нейното събитие.
+    this.selecting = true;
+    setImmediate(() => {
+      this.#selectHost(online[0].id)
+        .catch((err) => this.#send(this.active, { t: 'error', message: String(err?.message ?? err) }))
+        .finally(() => { this.selecting = false; });
+    });
+  }
+
+  /** Записва избора и се свързва наново с `?host=<id>`; старият списък и таб не важат. */
+  async #selectHost(id) {
+    if (!this.settings || typeof id !== 'string' || !id) return;
+    this.selectedHostId = id;
+    await this.config.save({ connectionKey: this.connectionKey, selectedHostId: id });
+    this.host.reset();
+    this.#send(this.active, { t: 'reset' });
+    this.relay.configure(this.settings, id);
+    this.#sendState();
   }
 
   #activate(ws) {
@@ -95,6 +140,9 @@ export class BrowserLink {
       case 'input':
         if (typeof m.b64 === 'string') this.host.input(m.b64, m.contentId);
         break;
+      case 'line':
+        if (typeof m.text === 'string') this.host.line(m.text, m.contentId);
+        break;
       case 'suggest':
         this.host.suggest(m.ref ?? null);
         break;
@@ -103,6 +151,9 @@ export class BrowserLink {
         break;
       case 'refresh':
         this.host.refresh();
+        break;
+      case 'host.select':
+        await this.#selectHost(m.id);
         break;
       case 'reconnect':
         this.relay.reconnectNow();
@@ -121,7 +172,8 @@ export class BrowserLink {
       this.#send(ws, { t: 'setup.result', ok: false, message: BAD_KEY });
       return;
     }
-    await this.config.save({ connectionKey: String(text).trim(), selectedHostId: this.selectedHostId });
+    this.connectionKey = String(text).trim();
+    await this.config.save({ connectionKey: this.connectionKey, selectedHostId: this.selectedHostId });
     const same = this.settings && this.settings.baseUrl === settings.baseUrl && this.settings.apiKey === settings.apiKey;
     this.settings = settings;
     if (!same) {

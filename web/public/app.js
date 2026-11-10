@@ -2,11 +2,10 @@
 // тук са само показването и клавиатурата.
 
 import { LocalLink } from './link.js';
-import { encodeText, TerminalView } from './terminal.js';
+import { TerminalView } from './terminal.js';
 import { activityLabel, displayName, findTab, sessionRows, worktreeOrder } from './session-groups.js';
 
 const $ = (id) => document.getElementById(id);
-const LINE_ENTER_DELAY_MS = 150;
 const FONT_KEY = 'supacode-web.newTabFont';
 const COLLAPSED_KEY = 'supacode-web.collapsed';
 const SIDEBAR_KEY = 'supacode-web.sidebarHidden';
@@ -79,18 +78,23 @@ const terminal = new TerminalView($('term'), $('term-area'), {
 
 function onMessage(m) {
   switch (m.t) {
-    case 'state':
+    case 'state': {
       // Сървърът е пуснат наново (може и с нов код): страницата се зарежда наново, табът — от адреса.
       if (ui.state?.bootId && m.bootId !== ui.state.bootId) {
         location.reload();
         return;
       }
+      const pickBefore = ui.state?.hostPick === true;
       ui.state = m;
+      // Няма какво да се избере само (няколко Mac-а или записаният го няма): „Mac-ове“ се отваря.
+      if (m.hostPick && !pickBefore) showHosts();
+      else if (!$('hosts').hidden) renderHosts();
       // Връзката с Mac-а падна: Node ще закачи таба наново, щом се върне.
       if (m.hostSession == null && ui.phase === 'live') ui.phase = 'opening';
       if (m.connection === 'unauthorized' || !m.configured) showSetup();
       render();
       break;
+    }
     case 'list': {
       // Списъкът идва на 3 s; без промяна не се прерисува (иначе губи hover и фокуса на бутоните).
       const text = JSON.stringify(m);
@@ -245,20 +249,13 @@ function toggleLine(show = $('line-form').hidden) {
   else terminal.focus();
 }
 
-/** Текстът и Enter като два `input`: бързо дошло парче Claude Code взима за paste. */
+/**
+ * Редът от полето. Текстът и Enter (150 ms по-късно) праща Node: само той знае дали връзката
+ * с Mac-а е същата, когато е ред на Enter (ОП33).
+ */
 function sendLine(text) {
   if (ui.phase !== 'live') return;
-  // Табът се хваща сега: Enter след смяна на таба не бива да отиде в новия (Node го отказва).
-  const contentId = ui.openContentId;
-  // И връзката се хваща: текстът по паднала връзка може да е изгубен, а Enter по новата би
-  // изпълнил стария ред в shell-а.
-  const session = ui.state?.hostSession;
-  if (text) link.send({ t: 'input', b64: encodeText(text), contentId });
-  setTimeout(() => {
-    if (ui.openContentId === contentId && ui.state?.hostSession === session) {
-      link.send({ t: 'input', b64: encodeText('\r'), contentId });
-    }
-  }, text ? LINE_ENTER_DELAY_MS : 0);
+  link.send({ t: 'line', text, contentId: ui.openContentId });
 }
 
 function requestSuggestions() {
@@ -336,7 +333,10 @@ function renderBanner() {
     text = `Няма връзка${s.reason ? `: ${s.reason}` : ''}. Нов опит след ${secs} s`;
     retry = true;
   } else if (s.connection === 'connected' && s.path === 'none') {
-    text = 'Mac-ът е офлайн';
+    const bound = boundHostInfo();
+    if (Array.isArray(s.hosts) && !s.selectedHostId) text = 'Избери Mac';
+    else if (Array.isArray(s.hosts)) text = `${bound ? hostLabel(bound) : 'Избраният Mac'} е извън линия`;
+    else text = 'Mac-ът е офлайн';
   }
   $('banner').hidden = text == null;
   $('banner').classList.toggle('error', error);
@@ -344,9 +344,47 @@ function renderBanner() {
   $('banner-retry').hidden = !retry;
 }
 
+function hostLabel(h) {
+  return h?.name || 'Mac без име';
+}
+
+function boundHostInfo() {
+  const s = ui.state;
+  return Array.isArray(s?.hosts) ? s.hosts.find((h) => h.id === s.selectedHostId) ?? null : null;
+}
+
+function showHosts() {
+  renderHosts();
+  $('hosts').hidden = false;
+}
+
+/** „Mac-ове“: всеки Mac, който relay-ят познава; изборът се записва и връзката тръгва наново. */
+function renderHosts() {
+  const box = $('host-list');
+  box.replaceChildren();
+  const hosts = ui.state?.hosts ?? [];
+  if (!hosts.length) box.append(el('div', 'empty', 'Relay-ят още не познава друг Mac.'));
+  for (const h of hosts) {
+    const row = el('button', 'host-row');
+    row.type = 'button';
+    row.append(el('span', 'name', hostLabel(h)));
+    row.append(el('span', h.online ? 'online' : 'offline', h.online ? 'на линия' : 'извън линия'));
+    if (h.id === ui.state?.selectedHostId) row.append(el('span', 'badge', 'избран'));
+    row.addEventListener('click', () => {
+      $('hosts').hidden = true;
+      if (h.id !== ui.state?.selectedHostId) link.send({ t: 'host.select', id: h.id });
+    });
+    box.append(row);
+  }
+}
+
 function renderTopbar() {
   const s = ui.state;
-  $('host-name').textContent = s?.hostName || 'Supacode Remote';
+  const multi = Array.isArray(s?.hosts);
+  $('host-name').textContent = s?.hostName || (multi ? hostLabel(boundHostInfo()) : 'Supacode Remote');
+  // С нов relay (списък с Mac-ове) името отваря „Mac-ове“; със стар е само заглавие.
+  $('host-name').disabled = !multi;
+  $('host-name').title = multi ? 'Смени Mac-а' : '';
   const chip = $('path-chip');
   chip.hidden = !s || s.path === 'none';
   chip.textContent = s?.path === 'lan' ? 'LAN' : 'Relay';
@@ -495,7 +533,9 @@ function showSetup() {
   $('setup-error').hidden = true;
   $('setup-font').value = String(newTabFont());
   const label = ui.state?.relayLabel;
-  $('setup-current').textContent = label ? `Сега: ${label}/…` : '';
+  // Ключът не идва в страницата: показва се само relay-ят, а ключът — със звездички.
+  $('setup-current').textContent = label ? `Записан: ${label}/••••••••` : '';
+  $('setup-key').placeholder = label ? `${label}/••••••••` : 'Relay и ключ, разделени с „/“';
   $('setup-cancel').hidden = !ui.state?.configured;
   $('setup').hidden = false;
   $('setup-key').focus();
@@ -527,6 +567,8 @@ $('takeover').addEventListener('click', () => {
   link.send({ t: 'takeover' });
   if (ui.openContentId) openTab(ui.openContentId);
 });
+$('host-name').addEventListener('click', showHosts);
+$('hosts-close').addEventListener('click', () => { $('hosts').hidden = true; terminal.focus(); });
 $('help-button').addEventListener('click', () => { $('help').hidden = false; });
 $('help-close').addEventListener('click', () => { $('help').hidden = true; terminal.focus(); });
 $('suggest-button').addEventListener('click', requestSuggestions);

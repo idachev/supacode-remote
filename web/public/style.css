@@ -37,7 +37,13 @@ code { background: var(--panel-2); padding: 1px 4px; border-radius: 4px; }
 
 .topbar { display: flex; align-items: center; gap: 10px; padding: 6px 10px; background: var(--panel);
   border-bottom: 1px solid var(--line); }
-.host-name { font-weight: 600; }
+.host-name { font-weight: 600; background: none; border-color: transparent; padding: 3px 6px; }
+.host-name:disabled { opacity: 1; cursor: default; }
+.host-list { display: flex; flex-direction: column; gap: 4px; }
+.host-row { display: flex; align-items: center; gap: 10px; text-align: left; padding: 8px 10px; }
+.host-row .name { flex: 1; font-weight: 600; }
+.host-row .online { color: var(--accent); }
+.host-row .offline { color: var(--muted); }
 .chip { font-size: 11px; padding: 1px 8px; border-radius: 10px; border: 1px solid var(--accent); color: var(--accent); }
 .chip.relay { border-color: var(--muted); color: var(--muted); }
 

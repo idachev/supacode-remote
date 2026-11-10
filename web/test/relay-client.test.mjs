@@ -128,3 +128,29 @@ test('невалиден адрес на relay-а — чакане с причи
   relay.stop();
 });
 
+test('ред от полето: Enter след 150 ms, а след смяна на пътя — без Enter', async () => {
+  const c = connect();
+  try {
+  c.host.setActive(true);
+  await waitFor(() => c.relay.state.path === 'lan', 'LAN път');
+  c.host.open('content-compact');
+  await waitFor(() => c.messages.some((m) => m.t === 'attached'), 'attached');
+  assert.equal(c.host.line('echo line-$((1+2))', 'content-compact'), true);
+  await waitFor(() => c.text('content-compact').includes('line-3'), 'изпълненият ред');
+  // Другият таб не получава нищо.
+  assert.equal(c.host.line('echo x', 'content-idle'), false);
+
+  const before = mock.log().length;
+  assert.equal(c.host.line('echo never-$((2+3))', 'content-compact'), true);
+  // LAN пада веднага след текста (сокетът изчезва отдолу): нова сесия по relay-а преди Enter.
+  c.relay.lan.ws.terminate();
+  await waitFor(() => c.relay.state.path === 'relay', 'relay път');
+  await new Promise((r) => setTimeout(r, 400));
+  const after = mock.log().slice(before).split('\n').filter((l) => l.includes('input content-compact'));
+  assert.ok(!after.some((l) => l.includes('hex=0d')), `Enter тръгна след смяната:\n${after.join('\n')}`);
+  assert.ok(!c.text('content-compact').includes('never-5'));
+  } finally {
+    c.stop();
+  }
+});
+

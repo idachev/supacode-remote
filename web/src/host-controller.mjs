@@ -11,10 +11,13 @@ import { EventEmitter } from 'node:events';
 import { ATTACH_SCROLLBACK, isTerminalStream } from './protocol.mjs';
 
 export const TAB_NEW_TIMEOUT_MS = 12_000;
+/** Текстът от полето и неговият Enter тръгват на толкова един от друг (ОП33). */
+export const LINE_ENTER_DELAY_MS = 150;
 
 export class HostController extends EventEmitter {
-  constructor(relay, { listIntervalMs = 3_000, tabNewTimeoutMs = TAB_NEW_TIMEOUT_MS } = {}) {
+  constructor(relay, { listIntervalMs = 3_000, tabNewTimeoutMs = TAB_NEW_TIMEOUT_MS, lineEnterDelayMs = LINE_ENTER_DELAY_MS } = {}) {
     super();
+    this.lineEnterDelayMs = lineEnterDelayMs;
     this.relay = relay;
     this.listIntervalMs = listIntervalMs;
     this.tabNewTimeoutMs = tabNewTimeoutMs;
@@ -66,6 +69,26 @@ export class HostController extends EventEmitter {
     if (!this.openContentId || contentId !== this.openContentId) return false;
     if (this.relay.state.hostSession == null) return false;
     return this.relay.send({ t: 'input', contentId: this.openContentId, b64 });
+  }
+
+  /**
+   * Ред от полето: текстът, после `\r` след 150 ms (Claude Code и Codex вземат бързо дошло
+   * парче за paste и `\r` в него става нов ред). Enter тръгва само ако сесията с host-а и
+   * отвореният таб са същите: след смяна на пътя текстът може да е изгубен с падналата връзка,
+   * а Enter би изпълнил стария ред в shell-а. Проверката е тук, защото тук се сменя сесията.
+   */
+  line(text, contentId) {
+    if (!this.openContentId || contentId !== this.openContentId) return false;
+    const session = this.relay.state.hostSession;
+    if (session == null) return false;
+    if (text && !this.relay.send({ t: 'input', contentId, b64: Buffer.from(text, 'utf8').toString('base64') })) return false;
+    const enter = () => {
+      if (this.openContentId !== contentId || this.relay.state.hostSession !== session) return;
+      this.relay.send({ t: 'input', contentId, b64: Buffer.from('\r').toString('base64') });
+    };
+    if (text) setTimeout(enter, this.lineEnterDelayMs);
+    else enter();
+    return true;
   }
 
   suggest(ref) {
