@@ -17,6 +17,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -32,6 +34,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -47,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.idachev.supacoderemote.protocol.LoadFailure
 import com.idachev.supacoderemote.protocol.Repository
 import com.idachev.supacoderemote.protocol.Worktree
 import com.idachev.supacoderemote.protocol.WorktreeNewReply
@@ -87,6 +91,10 @@ fun SessionsScreen(
   val worktreeDialog by newWorktree.dialog.collectAsStateWithLifecycle()
   val createdWorktree by newWorktree.created.collectAsStateWithLifecycle()
   val hostSession by container.relay.hostSession.collectAsStateWithLifecycle()
+  val deleting by container.worktreeActions.deleting.collectAsStateWithLifecycle()
+  val refreshingWorktrees by container.worktreeActions.refreshing.collectAsStateWithLifecycle()
+  // Worktree-то, за което се пита „Изтрий …?“, с името на repository-то му.
+  var confirmDelete by remember { mutableStateOf<Pair<Worktree, String>?>(null) }
   LifecycleStartEffect(newWorktree) {
     newWorktree.setVisible(true)
     onStopOrDispose { newWorktree.setVisible(false) }
@@ -102,6 +110,7 @@ fun SessionsScreen(
   val refreshing by container.sessions.refreshing.collectAsStateWithLifecycle()
   // Търсенето е тук, а не в хранилището: важи само докато екранът е отворен (и при завъртане).
   var query by rememberSaveable { mutableStateOf("") }
+  val canRefresh = listReply?.canRefreshWorktrees == true
   PollSessionsWhileVisible()
 
   Scaffold(
@@ -111,6 +120,7 @@ fun SessionsScreen(
           title = { SessionsTitle(onOpenHosts) },
           actions = {
             PathChip()
+            if (canRefresh) RefreshButton(refreshingWorktrees, enabled = hostSession != null) { container.worktreeActions.refresh() }
             TextButton(onClick = onOpenSettings) { Text("Настройка") }
           },
         )
@@ -120,8 +130,11 @@ fun SessionsScreen(
     },
   ) { padding ->
     PullToRefreshBox(
-      isRefreshing = refreshing,
-      onRefresh = { container.sessions.refresh(userAction = true) },
+      isRefreshing = refreshing || refreshingWorktrees,
+      // ЗД13: нов Mac чете worktree-тата от git наново; стар само дава последния списък.
+      onRefresh = {
+        if (!canRefresh || !container.worktreeActions.refresh()) container.sessions.refresh(userAction = true)
+      },
       modifier = Modifier.fillMaxSize().padding(padding),
     ) {
       val list = listReply
@@ -149,14 +162,37 @@ fun SessionsScreen(
                 enabled = hostSession != null && worktreeDialog?.pending != true,
               )
               is SessionRow.GroupHeader -> GroupHeader(row.group)
-              is SessionRow.WorktreeRow -> WorktreeItem(row.worktree, row.repositoryName) {
+              is SessionRow.WorktreeRow -> WorktreeItem(
+                row.worktree,
+                row.repositoryName,
+                deleting = row.worktree.id in deleting,
+                onDelete = {
+                  val repoName = list.repos.firstOrNull { it.id == row.repositoryId }?.name ?: ""
+                  confirmDelete = row.worktree to repoName
+                }.takeIf { row.worktree.canDeleteWorktree && hostSession != null },
+              ) {
                 onOpenWorktree(row.repositoryId, row.worktree)
               }
             }
           }
+          items(list.loadFailures, key = { "load-failure:${it.repositoryId}" }) { LoadFailureRow(it) }
         }
       }
     }
+  }
+  confirmDelete?.let { (worktree, repoName) ->
+    AlertDialog(
+      onDismissRequest = { confirmDelete = null },
+      title = { Text("Изтрий worktree") },
+      text = { Text("Изтрий worktree ${worktree.name} в $repoName? Папката и терминалите му се затварят; branch-ът остава.") },
+      confirmButton = {
+        TextButton(onClick = {
+          confirmDelete = null
+          container.worktreeActions.delete(worktree.id, worktree.name)
+        }) { Text("Изтрий", color = MaterialTheme.colorScheme.error) }
+      },
+      dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text("Отказ") } },
+    )
   }
   worktreeDialog?.let { dialog ->
     NewWorktreeDialogView(
@@ -169,6 +205,30 @@ fun SessionsScreen(
       onDismiss = newWorktree::dismiss,
     )
   }
+}
+
+/** „Опресни“ (ЗД13): Mac-ът чете worktree-тата от git наново, напр. след изтриване от терминала. */
+@Composable
+private fun RefreshButton(running: Boolean, enabled: Boolean, onClick: () -> Unit) {
+  IconButton(onClick = onClick, enabled = enabled && !running) {
+    if (running) {
+      CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+    } else {
+      Icon(SessionIcons.Refresh, contentDescription = "Опресни worktree-тата на Mac-а")
+    }
+  }
+}
+
+/** Repository, което Mac-ът не прочете: да не изглежда, че worktree-тата му са изтрити. */
+@Composable
+private fun LoadFailureRow(failure: LoadFailure) {
+  val name = failure.repositoryId.trimEnd('/').substringAfterLast('/').ifBlank { failure.repositoryId }
+  Text(
+    "$name не се чете на Mac-а: ${failure.message}",
+    style = MaterialTheme.typography.bodyMedium,
+    color = MaterialTheme.colorScheme.error,
+    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+  )
 }
 
 /** „Сесии“ и под него свързаният Mac. */
@@ -335,7 +395,13 @@ private fun GroupHeader(group: WorktreeStatus) {
  * Worktree: карта с branch икона и › вдясно — ясно е, че се натиска и отваря табовете.
  */
 @Composable
-private fun WorktreeItem(worktree: Worktree, repositoryName: String?, onClick: () -> Unit) {
+private fun WorktreeItem(
+  worktree: Worktree,
+  repositoryName: String?,
+  deleting: Boolean = false,
+  onDelete: (() -> Unit)? = null,
+  onClick: () -> Unit,
+) {
   Surface(
     onClick = onClick,
     shape = RoundedCornerShape(12.dp),
@@ -354,6 +420,16 @@ private fun WorktreeItem(worktree: Worktree, repositoryName: String?, onClick: (
       )
       Spacer(Modifier.width(12.dp))
       WorktreeText(worktree, repositoryName, Modifier.weight(1f))
+      if (deleting) {
+        Text("Изтривам…", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.width(8.dp))
+        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+        Spacer(Modifier.width(8.dp))
+      } else if (onDelete != null) {
+        IconButton(onClick = onDelete) {
+          Icon(SessionIcons.Delete, contentDescription = "Изтрий worktree", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+      }
       Icon(
         SessionIcons.Open,
         contentDescription = "Отвори",

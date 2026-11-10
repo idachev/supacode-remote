@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
@@ -66,7 +67,18 @@ fun MainNavigation() {
   }
 
   LaunchedEffect(Unit) {
-    container.notices.messages.collect { snackbar.showSnackbar(it) }
+    // Дълъг текст (напр. `worktree_dirty` с файловете) стои по-дълго, за да се прочете.
+    container.notices.messages.collect {
+      snackbar.showSnackbar(it, duration = if (it.length > 80) SnackbarDuration.Long else SnackbarDuration.Short)
+    }
+  }
+
+  // Изтрит worktree (ЗД13): екранът му и терминалите над него се затварят — към списъка.
+  LaunchedEffect(Unit) {
+    container.worktreeActions.deleted.collect { worktreeId ->
+      val at = backStack.indexOfFirst { it is WorktreeKey && it.worktreeId == worktreeId }
+      if (at > 0) while (backStack.size > at) backStack.removeAt(backStack.lastIndex)
+    }
   }
 
   // Докоснато известие: Сесии → Worktree → Терминал, за да води „Назад“ натам, откъдето

@@ -5,6 +5,7 @@ import com.idachev.supacoderemote.alerts.AgentAlerts
 import com.idachev.supacoderemote.protocol.ErrorReply
 import com.idachev.supacoderemote.relay.RelayClient
 import com.idachev.supacoderemote.sessions.SessionsRepository
+import com.idachev.supacoderemote.sessions.WorktreeActions
 import com.idachev.supacoderemote.settings.KeystoreSettingsStore
 import com.idachev.supacoderemote.settings.SettingsStore
 import com.idachev.supacoderemote.terminal.TerminalGridMemory
@@ -47,6 +48,9 @@ class AppContainer(context: Context) {
 
   val notices: Notices = Notices()
 
+  /** Изтриване на worktree и „Опресни“ на Mac-а (ЗД13). */
+  val worktreeActions: WorktreeActions = WorktreeActions(relay, notices, refreshList = { sessions.refresh() }, scope = appScope)
+
   /** Последният размер, премерен от терминала; с него тръгва нов таб (АН1). */
   val terminalGrid: TerminalGridMemory = TerminalGridMemory()
 
@@ -72,9 +76,10 @@ class AppContainer(context: Context) {
     appScope.launch { settingsStore.notifyAwaiting.collect { agentAlerts.setEnabled(it) } }
     appScope.launch { settingsStore.settings.collect { relay.configure(it) } }
     appScope.launch {
-      // Отказите на `worktree.new` са в диалога „Нов worktree“ (или в snackbar-а от него, ако е затворен).
+      // Отказите на `worktree.new` са в диалога „Нов worktree“ (или в snackbar-а от него, ако е
+      // затворен); тези на изтриването и на „Опресни“ показва [WorktreeActions] на български.
       relay.messages.filterIsInstance<ErrorReply>()
-        .filter { it.code?.startsWith(ErrorReply.WORKTREE_PREFIX) != true }
+        .filter { it.code?.startsWith(ErrorReply.WORKTREE_PREFIX) != true && it.code != ErrorReply.REFRESH_TIMEOUT }
         .collect { notices.show(HostLabels.error(it, relay.hostApp.value)) }
     }
   }

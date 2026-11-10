@@ -229,6 +229,32 @@ class ProtocolCodecTest {
   }
 
   @Test
+  fun `worktree delete и worktrees refresh са точно като в протокола`() {
+    assertSameJson("""{"t":"worktree.delete","id":8,"worktreeId":"/w/x"}""", ProtocolCodec.encode(WorktreeDeleteRequest(8, "/w/x")))
+    assertSameJson("""{"t":"worktrees.refresh","id":9}""", ProtocolCodec.encode(WorktreesRefreshRequest(9)))
+    assertEquals(
+      WorktreeDeleteReply(8, "/w/x", "r1"),
+      ProtocolCodec.decode("""{"t":"worktree.delete","id":8,"worktreeId":"/w/x","repositoryId":"r1"}"""),
+    )
+    assertNull(ProtocolCodec.decode("""{"t":"worktree.delete","id":8}"""))
+  }
+
+  @Test
+  fun `list носи canDeleteWorktree, canRefreshWorktrees и loadFailures и стар host ги изпуска`() {
+    val list = ProtocolCodec.decode(
+      """{"t":"list","id":9,"canRefreshWorktrees":true,
+        "loadFailures":[{"repositoryId":"/r/b","message":"not a git repository"}],
+        "repos":[{"id":"a","name":"a","worktrees":[{"id":"w1","name":"main"},{"id":"w2","name":"x","canDeleteWorktree":true}]}]}""",
+    ) as ListReply
+    assertTrue(list.canRefreshWorktrees)
+    assertEquals(listOf(LoadFailure("/r/b", "not a git repository")), list.loadFailures)
+    assertEquals(listOf(false, true), list.repos.single().worktrees.map { it.canDeleteWorktree })
+    val old = ProtocolCodec.decode("""{"t":"list","id":1,"repos":[]}""") as ListReply
+    assertEquals(false, old.canRefreshWorktrees)
+    assertEquals(emptyList<LoadFailure>(), old.loadFailures)
+  }
+
+  @Test
   fun `canCreateWorktree липсва при стар host и значи не`() {
     val list = ProtocolCodec.decode(
       """{"t":"list","id":1,"repos":[{"id":"a","name":"a","canCreateWorktree":true},{"id":"b","name":"b"}]}""",

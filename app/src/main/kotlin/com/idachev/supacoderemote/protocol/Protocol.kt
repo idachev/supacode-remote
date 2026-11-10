@@ -77,6 +77,22 @@ data class WorktreeNewRequest(
   val rows: Int? = null,
 ) : ClientMessage
 
+/**
+ * Изтрива worktree [worktreeId] на Mac-а (ЗД13). Branch-ът остава винаги, а worktree с незаписани
+ * промени Mac-ът отказва с `worktree_dirty`. Отговорът е [WorktreeDeleteReply] или `error`.
+ */
+@Serializable
+@SerialName("worktree.delete")
+data class WorktreeDeleteRequest(val id: Int, val worktreeId: String) : ClientMessage
+
+/**
+ * Mac-ът да прочете worktree-тата от git наново (ЗД13): след изтриване от терминала списъкът му
+ * иначе остава стар. Отговорът е `list` със същото [id] или `error` `refresh_timeout`.
+ */
+@Serializable
+@SerialName("worktrees.refresh")
+data class WorktreesRefreshRequest(val id: Int) : ClientMessage
+
 /** Съобщение към телефона: от relay-а (`relay`, `error`) или от host-а. */
 sealed interface ServerMessage
 
@@ -117,6 +133,10 @@ data class ListReply(
   val id: Int? = null,
   val repos: List<Repository> = emptyList(),
   val sections: List<SidebarSection> = emptyList(),
+  /** Mac-ът може да прочете worktree-тата наново (`worktrees.refresh`); стар host го изпуска. */
+  val canRefreshWorktrees: Boolean = false,
+  /** Repository-тата, които Mac-ът не прочете; изпуска се, когато няма. */
+  val loadFailures: List<LoadFailure> = emptyList(),
 ) : ServerMessage
 
 /**
@@ -177,6 +197,17 @@ data class WorktreeNewReply(
   val contentId: String? = null,
 ) : ServerMessage
 
+/** Worktree-то е изтрито; в следващия `list` го няма. Branch-ът му остава. */
+@Serializable
+data class WorktreeDeleteReply(val id: Int? = null, val worktreeId: String, val repositoryId: String = "") : ServerMessage
+
+/**
+ * Repository, което Mac-ът не успя да прочете (ЗД13): то липсва в `repos`, а [message] казва защо —
+ * за да не изглежда като изтрито.
+ */
+@Serializable
+data class LoadFailure(val repositoryId: String, val message: String = "")
+
 /**
  * Грешка от host-а или relay-а. [code] е машинната причина ([RESIZE_FAILED], `worktree_*`) — низ, а
  * не enum: непознат код не бива да чупи четенето, екранът показва [message]. [contentId] е
@@ -197,6 +228,12 @@ data class ErrorReply(
 
     /** Mac-ът не е разбрал до 300 s; worktree-то може пак да се появи в списъка. */
     const val WORKTREE_TIMEOUT = "worktree_timeout"
+
+    /** Worktree-то има незаписани промени; [message] изброява файловете. */
+    const val WORKTREE_DIRTY = "worktree_dirty"
+
+    /** `worktrees.refresh` не е свършил до 60 s. */
+    const val REFRESH_TIMEOUT = "refresh_timeout"
   }
 }
 
@@ -230,6 +267,8 @@ data class Worktree(
   val title: String? = null,
   val working: Boolean = false,
   val tabs: List<Tab> = emptyList(),
+  /** Може ли да се изтрие от телефона (ЗД13): не основният, не зает; стар host го изпуска. */
+  val canDeleteWorktree: Boolean = false,
 ) {
   /** Собственото заглавие, ако е дадено в Supacode, иначе името на worktree-то. */
   val displayName: String get() = title?.takeIf { it.isNotBlank() } ?: name
@@ -314,6 +353,7 @@ object ProtocolCodec {
         "suggest" -> Suggestions.serializer()
         "tab.new" -> TabNewReply.serializer()
         "worktree.new" -> WorktreeNewReply.serializer()
+        "worktree.delete" -> WorktreeDeleteReply.serializer()
         "error" -> ErrorReply.serializer()
         else -> return null
       }
