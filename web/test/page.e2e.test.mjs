@@ -149,6 +149,20 @@ test('„Размер по този екран“ сменя таба на Mac-�
   await waitFor(async () => (await rowCount()) === 30, 'размерът на Mac-а');
 });
 
+test('OSC 52 от програмата копира в clipboard-а на браузъра (УА4)', async (t) => {
+  if (!browser) return t.skip('няма Google Chrome');
+  await page.evaluate(() => navigator.clipboard.writeText('старо'));
+  const b64 = Buffer.from('копирано от Mac-а', 'utf8').toString('base64');
+  await typeInTerminal(`printf '\\033]52;c;%s\\007' ${b64}`);
+  await waitFor(async () => (await page.evaluate(() => navigator.clipboard.readText())) === 'копирано от Mac-а', 'clipboard');
+  // Въпрос за clipboard-а не получава отговор и не сменя нищо.
+  const from = mock.log().length;
+  await typeInTerminal(`printf '\\033]52;c;?\\007'`);
+  await new Promise((r) => setTimeout(r, 500));
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), 'копирано от Mac-а');
+  assert.ok(!/1b5d3532/.test(mock.log().slice(from)), 'отговор с OSC 52 към PTY-то');
+});
+
 test('презареждане отваря същия таб наново', async (t) => {
   if (!browser) return t.skip('няма Google Chrome');
   const url = page.url();

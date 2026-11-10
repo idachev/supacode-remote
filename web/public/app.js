@@ -28,6 +28,8 @@ const terminal = new TerminalView($('term'), $('term-area'), {
   onInput: (b64) => {
     if (ui.phase === 'live') link.send({ t: 'input', b64, contentId: ui.openContentId });
   },
+  // УА4: маркираното в Claude Code (OSC 52) идва тук, не само в clipboard-а на Mac-а.
+  onClipboard: (text) => copyText(text),
 });
 
 function linkUp() {
@@ -257,9 +259,13 @@ function onKeyCapture(e) {
 
 // ---- бутони и полета ----
 
-async function copyAll() {
+function copyAll() {
+  return copyText(terminal.allText());
+}
+
+async function copyText(text) {
   try {
-    await navigator.clipboard.writeText(terminal.allText());
+    await navigator.clipboard.writeText(text);
     toast('Копирано');
   } catch {
     toast('Не мога да пиша в clipboard-а');
