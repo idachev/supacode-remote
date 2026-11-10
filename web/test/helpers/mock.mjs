@@ -17,13 +17,15 @@ export async function freePort() {
   return port;
 }
 
-export async function startMock({ lan = true, key = 'test-key' } = {}) {
+/** `env` е за тестове на няколко Mac-а: напр. `MOCK_SINGLE_HOST: '0', MOCK_OLD_RELAY: '0'`. */
+export async function startMock({ lan = true, key = 'test-key', env = {} } = {}) {
   const port = await freePort();
   const lanPort = await freePort();
   const proc = spawn(process.execPath, [MOCK], {
     env: {
       ...process.env, PORT: String(port), LAN_PORT: String(lanPort), LAN_ADDRS: '127.0.0.1', LAN: lan ? '1' : '0', KEY: key,
       MOCK_SINGLE_HOST: '1', MOCK_OLD_RELAY: '1',
+      ...env,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });

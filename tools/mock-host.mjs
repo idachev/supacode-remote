@@ -117,8 +117,9 @@ for (const h of singleHost ? [makeHost({ ...office, name: 'Mock Mac' })] : [
   makeHost({ id: '3a1a3a1a3a1a3a1a', name: 'Mac mini', online: false, repos: [] }),
 ]) hosts.set(h.id, h);
 if (process.env.MOCK_LEGACY === '1') {
-  // Стар Supacode: без име и без hostId, relay-ят го води `default`.
-  const legacyRepos = homeRepos.map((r) => ({ ...r, id: 'legacy-' + r.id }));
+  // Стар Supacode: без име и без hostId, relay-ят го води `default`. Дълбоко копие: `tab.new`
+  // добавя в масива с табове, а общ масив би показал новия таб и в „Home Mac“.
+  const legacyRepos = structuredClone(homeRepos).map((r) => ({ ...r, id: 'legacy-' + r.id }));
   hosts.set('default', makeHost({ id: 'default', online: true, repos: legacyRepos }));
 }
 const officeHost = hosts.get('0f1ce0ff1ce0ff1c');
