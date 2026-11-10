@@ -1,6 +1,7 @@
 // Колоната „Сесии“: редовете от `sessionRows`, разгънатите worktree-та с табовете им и „Нов таб“.
 
 import { $, el, writeStorage } from './dom.js';
+import { icon } from './icons.js';
 import { activityLabel, displayName, isAwaiting, sessionRows } from './session-groups.js';
 import { COLLAPSED_KEY, currentTab, ui } from './ui-state.js';
 
@@ -27,7 +28,8 @@ export function renderSessions() {
 }
 
 function groupRow(row) {
-  const node = el('div', `row row-group${row.collapsed ? ' collapsed' : ''}`, row.title);
+  // Като в Android: линия отгоре, ▸ / ▾ и името с главни букви.
+  const node = el('div', `row row-group${row.collapsed ? ' collapsed' : ''}`, row.title.toLocaleUpperCase('bg'));
   node.addEventListener('click', () => {
     ui.collapsed[row.id] = !row.collapsed;
     writeStorage(COLLAPSED_KEY, ui.collapsed);
@@ -39,10 +41,16 @@ function groupRow(row) {
 const ROW_VIEWS = {
   section: (row) => [el('div', 'row row-section', row.title)],
   group: groupRow,
-  repository: (row) => [el('div', 'row row-repo', row.repository.name)],
+  repository: (row) => [repositoryRow(row.repository)],
   status: (row) => [el('div', 'row row-status', row.status === 'pinned' ? 'Закачени' : 'Активни')],
   worktree: (row, open) => worktreeRows(row, open),
 };
+
+function repositoryRow(repository) {
+  const node = el('div', 'row row-repo');
+  node.append(icon('repository'), el('span', 'name', repository.name));
+  return node;
+}
 
 function worktreeRows(row, open) {
   const header = worktreeHeader(row, open);
@@ -58,7 +66,7 @@ function dotClass(wt) {
 function worktreeHeader(row, open) {
   const wt = row.worktree;
   const node = el('div', `row row-wt${open?.worktree.id === wt.id ? ' current' : ''}`);
-  node.append(el('span', dotClass(wt)));
+  node.append(icon('open', ui.expanded.has(wt.id) ? 'expanded' : ''), icon('worktree'), el('span', dotClass(wt)));
   const label = row.repositoryName ? `${row.repositoryName} · ${displayName(wt)}` : displayName(wt);
   node.append(el('span', 'name', label));
   if (wt.status === 'main' && !row.repositoryName) node.append(el('span', 'badge', 'Основен'));

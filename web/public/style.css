@@ -9,6 +9,7 @@
   --warn: #ffb74d;
   --error: #ff8a80;
   --await: #ffd54f;
+  --group: #b0cadc;
   --term-bg: #1e1e1e;
   color-scheme: dark;
 }
@@ -58,19 +59,25 @@ code { background: var(--panel-2); padding: 1px 4px; border-radius: 4px; }
 .row { display: flex; align-items: center; gap: 6px; padding: 3px 10px; white-space: nowrap; overflow: hidden; }
 .row .name { overflow: hidden; text-overflow: ellipsis; }
 .row-section { margin-top: 10px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
-.row-group { margin-top: 10px; color: var(--muted); font-weight: 600; cursor: pointer; }
+.row-group { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); color: var(--group); font-weight: 700;
+  font-size: 12px; letter-spacing: .03em; cursor: pointer; }
 .row-group::before { content: "▾"; width: 10px; }
 .row-group.collapsed::before { content: "▸"; }
 .row-repo { margin-top: 6px; font-weight: 600; }
+.icon { width: 16px; height: 16px; flex: none; fill: currentColor; }
+.row-repo .icon { color: var(--muted); }
+.row-wt .icon-worktree { color: var(--accent); }
+.row-wt .icon-open { width: 14px; height: 14px; color: var(--muted); transition: transform .12s; }
+.row-wt .icon-open.expanded { transform: rotate(90deg); }
 .row-status { color: var(--muted); font-size: 11px; padding-left: 18px; }
-.row-wt { padding-left: 18px; cursor: pointer; border-radius: 4px; }
+.row-wt { padding-left: 12px; cursor: pointer; border-radius: 4px; }
 .row-wt:hover { background: var(--panel-2); }
 .row-wt .branch { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
 .row-wt .dot { width: 7px; height: 7px; border-radius: 50%; background: transparent; flex: none; }
 .row-wt .dot.working { background: var(--accent); }
 .row-wt .dot.awaiting { background: var(--await); }
 .row-wt.current { background: var(--panel-2); }
-.tabs { padding: 2px 0 4px 32px; }
+.tabs { padding: 2px 0 4px 44px; }
 .tab { display: flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 4px; cursor: pointer; }
 .tab:hover { background: var(--panel-2); }
 .tab.open { background: #23405a; }
