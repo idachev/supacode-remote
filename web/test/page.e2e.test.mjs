@@ -264,3 +264,21 @@ test('„+“ на repository-то: подсказки, грешка от Mac-а
   await page.locator('.row-wt', { hasText: 'wt-e2e' }).waitFor({ timeout: 6_000 });
   assert.equal(await page.locator('.tab.open').count(), 1);
 });
+
+test('🗑 на worktree-то: потвърждение с текста на собственика, после го няма; ⟳ опреснява (ЗД13)', async (t) => {
+  if (!browser) return t.skip('няма Google Chrome');
+  assert.ok(await page.locator('#refresh-button').isVisible());
+  // Основният worktree не се трие: бутон няма.
+  assert.equal(await page.locator('.row-wt', { hasText: 'main' }).first().locator('.wt-delete').count(), 0);
+  const row = page.locator('.row-wt', { hasText: 'wt-e2e' });
+  await row.locator('.wt-delete').click();
+  assert.equal(await page.locator('#confirm-delete-text').textContent(),
+    'Изтрий worktree wt-e2e в supacode? Папката и терминалите му се затварят; branch-ът остава.');
+  await page.locator('#confirm-delete-ok').click();
+  await row.locator('.deleting').waitFor({ timeout: 3_000 });
+  await row.waitFor({ state: 'detached', timeout: 6_000 });
+  // Отвореният таб беше в него: терминалът е затворен.
+  assert.ok(!page.url().includes('#c='));
+  await page.locator('#refresh-button').click();
+  await waitFor(async () => !(await page.locator('#refresh-button').isDisabled()), 'опреснено', 3_000);
+});

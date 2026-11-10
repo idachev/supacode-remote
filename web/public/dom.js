@@ -26,11 +26,11 @@ export function writeStorage(key, value) {
 
 let toastTimer = null;
 
-/** Кратко съобщение долу; изчезва след 4 s. */
-export function toast(text) {
+/** Кратко съобщение долу; изчезва след 4 s (или след `ms`). */
+export function toast(text, ms = 4_000) {
   const box = $('toast');
   box.textContent = text;
   box.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { box.hidden = true; }, 4_000);
+  toastTimer = setTimeout(() => { box.hidden = true; }, ms);
 }

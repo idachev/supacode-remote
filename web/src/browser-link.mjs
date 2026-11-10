@@ -156,6 +156,8 @@ export class BrowserLink {
       'worktree.new': (_ws, m) => str(m.repositoryId) && this.host.newWorktree({
         repositoryId: m.repositoryId, name: m.name, cols: m.cols, rows: m.rows, ref: m.ref ?? null,
       }),
+      'worktree.delete': (_ws, m) => str(m.worktreeId) && this.host.deleteWorktree({ worktreeId: m.worktreeId, ref: m.ref ?? null }),
+      'worktrees.refresh': (_ws, m) => this.host.refreshWorktrees({ ref: m.ref ?? null }),
       refresh: () => this.host.refresh(),
       'host.select': (_ws, m) => this.#selectHost(m.id),
       reconnect: () => this.relay.reconnectNow(),

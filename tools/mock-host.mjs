@@ -45,6 +45,11 @@
 // `mock-timeout…` — `worktree_timeout` след 3 s, `mock-notab…` — успех без таб. Старият host
 // (MOCK_LEGACY) не праща `canCreateWorktree` и отговаря на `worktree.new` с „unknown type“.
 //
+// `worktree.delete` и `worktrees.refresh` (ЗД13): изтриване без branch-а след 1 s; име с `dirty` —
+// `worktree_dirty`, `mock-slow…` — 6 s, `mock-fail…` — `worktree_failed`; основният не се трие.
+// „Опресни“ връща `list` със същото id след 0,5 s. В таб: `mock-loadfail` пуска/спира едно
+// repository в `loadFailures`, `mock-refresh-timeout` — `refresh_timeout` на „Опресни“.
+//
 // LAN пътят (раздел „LAN shortcut“ в протокола): wss://127.0.0.1:LAN_PORT/lan (8788), от
 // emulator-а 10.0.2.2. TLS 1.3 със самоподписан сертификат от паметта, `fp` и `fpMac` в
 // `hello`. LAN=0 го изключва.
@@ -133,9 +138,24 @@ if (process.env.MOCK_LEGACY === '1') {
 }
 const officeHost = hosts.get('0f1ce0ff1ce0ff1c');
 
+/**
+ * ЗД13: какво може новият host — изтриване на всеки worktree освен основния и такива, които се
+ * трият сега, „Опресни“ и repository-тата, които „не се четат“. Старият host (`default`) не праща нищо.
+ */
+function withDeleteFlags(host, repo) {
+  if (host.id === 'default') return repo;
+  const deletable = (w) => repo.canCreateWorktree === true && w.status !== 'main' && !host.deletingWorktrees?.has(w.id);
+  return { ...repo, worktrees: repo.worktrees.map((w) => ({ ...w, canDeleteWorktree: deletable(w) })) };
+}
+
 function listMessage(host, id) {
-  if (!withSections || !host.sections) return { t: 'list', id, repos: host.repos };
-  return { t: 'list', id, repos: host.repos.map((r) => ({ ...r, rowIds: host.rowIds[r.id] })), sections: host.sections };
+  const extra = host.id === 'default' ? {} : {
+    canRefreshWorktrees: true,
+    ...(host.loadFailure ? { loadFailures: [host.loadFailure] } : {}),
+  };
+  const repos = host.repos.map((r) => withDeleteFlags(host, r));
+  if (!withSections || !host.sections) return { t: 'list', id, repos, ...extra };
+  return { t: 'list', id, repos: repos.map((r) => ({ ...r, rowIds: host.rowIds[r.id] })), sections: host.sections, ...extra };
 }
 
 /** Списъкът, както го подрежда relay-ят: по име без значение на главни букви, без име накрая, после по id. */
@@ -237,6 +257,14 @@ const lineCommands = {
   'mock-rename': (s) => toggleHostName(s.host),
   'mock-other-off': (s) => setOtherHostOnline(s.host, false),
   'mock-other-on': (s) => setOtherHostOnline(s.host, true),
+  'mock-loadfail': (s) => {
+    s.host.loadFailure = s.host.loadFailure ? null : { repositoryId: '/mock/broken-repo', message: 'fatal: not a git repository' };
+    log('mock load failure', { host: s.host.id, on: s.host.loadFailure != null });
+  },
+  'mock-refresh-timeout': (s) => {
+    s.host.refreshTimeout = !s.host.refreshTimeout;
+    log('mock refresh timeout', { host: s.host.id, on: s.host.refreshTimeout });
+  },
   'mock-lan-off': () => setLan(false),
   'mock-lan-on': () => setLan(true),
   'mock-offline': (s) => {
@@ -450,6 +478,65 @@ function finishWorktree(c, host, repo, name, msg) {
   send(c, reply);
 }
 
+const UNKNOWN_TYPE = (c, msg) => send(c, { t: 'error', id: msg.id ?? null, message: `unknown message type: ${msg.t}` });
+
+/** Проверките преди изтриване (ЗД13): `[code, message]` или `null`. */
+function deleteRequestError(host, msg) {
+  if (typeof msg.worktreeId !== 'string' || !msg.worktreeId) return ['worktree_invalid', 'worktree.delete needs a worktreeId'];
+  const repo = host.repos.find((r) => r.worktrees.some((w) => w.id === msg.worktreeId));
+  if (!repo) return ['worktree_invalid', 'no such worktree'];
+  const worktree = repo.worktrees.find((w) => w.id === msg.worktreeId);
+  if (worktree.status === 'main') return ['worktree_unsupported', 'the main worktree cannot be deleted'];
+  if (repo.canCreateWorktree !== true) return ['worktree_unsupported', 'folders cannot be deleted from the remote'];
+  if (host.deletingWorktrees?.has(worktree.id)) return ['worktree_busy', 'the worktree is busy (being created, archived or deleted)'];
+  if (worktree.name.includes('dirty')) {
+    return ['worktree_dirty', 'the worktree has uncommitted changes or untracked files (2): notes.txt, src/app.js; commit, stash or remove them on the Mac first'];
+  }
+  return null;
+}
+
+/**
+ * Изтрива worktree като Mac-а, без branch-а: след 1 s (`mock-slow…` — 6 s) го маха от списъка,
+ * от `rowIds` и от секциите, а shell-овете на табовете му свършват (`detached` към закачените).
+ * Име с `dirty` дава `worktree_dirty`; `mock-fail…` — `worktree_failed`.
+ */
+function deleteWorktree(c, host, msg) {
+  if (host.id === 'default') return UNKNOWN_TYPE(c, msg);
+  const problem = deleteRequestError(host, msg);
+  if (problem) return worktreeError(c, msg, ...problem);
+  const repo = host.repos.find((r) => r.worktrees.some((w) => w.id === msg.worktreeId));
+  const worktree = repo.worktrees.find((w) => w.id === msg.worktreeId);
+  host.deletingWorktrees ??= new Set();
+  host.deletingWorktrees.add(worktree.id);
+  log('worktree.delete started', { host: host.id, worktree: worktree.id, client: c.id });
+  setTimeout(() => {
+    host.deletingWorktrees.delete(worktree.id);
+    if (worktree.name.startsWith('mock-fail')) {
+      return worktreeError(c, msg, 'worktree_failed', 'Unable to delete worktree: fatal: mock git failure');
+    }
+    repo.worktrees.splice(repo.worktrees.indexOf(worktree), 1);
+    for (const ids of Object.values(host.rowIds ?? {})) if (ids.includes(worktree.id)) ids.splice(ids.indexOf(worktree.id), 1);
+    for (const section of host.sections ?? []) {
+      if (section.worktreeIds?.includes(worktree.id)) section.worktreeIds.splice(section.worktreeIds.indexOf(worktree.id), 1);
+    }
+    for (const tab of worktree.tabs) host.sessions.get(tab.contentId)?.proc.kill();
+    log('worktree.delete done', { host: host.id, worktree: worktree.id, client: c.id });
+    send(c, { t: 'worktree.delete', id: msg.id ?? null, worktreeId: worktree.id, repositoryId: repo.id });
+  }, worktree.name.startsWith('mock-slow') ? 6_000 : 1_000);
+}
+
+/** Mac-ът чете worktree-тата наново: след 0,5 s пълен `list` със същото id (`mock-refresh-timeout` — грешка). */
+function refreshWorktrees(c, host, msg) {
+  if (host.id === 'default') return UNKNOWN_TYPE(c, msg);
+  setTimeout(() => {
+    if (host.refreshTimeout) {
+      return worktreeError(c, msg, 'refresh_timeout', 'the refresh is still running on the Mac; send list again later');
+    }
+    log('worktrees.refresh done', { host: host.id, client: c.id });
+    send(c, listMessage(host, msg.id ?? null));
+  }, 500);
+}
+
 function suggest(c, msg) {
   const suggestions = ['git status', 'echo здравей 👋', 'ls -la'];
   setTimeout(() => send(c, { t: 'suggest', id: msg.id, contentId: msg.contentId, suggestions }), 2000);
@@ -464,6 +551,8 @@ const messageHandlers = {
   resize,
   'tab.new': newTab,
   'worktree.new': newWorktree,
+  'worktree.delete': deleteWorktree,
+  'worktrees.refresh': refreshWorktrees,
   suggest: (c, host, msg) => suggest(c, msg),
 };
 

@@ -16,20 +16,30 @@ export const TAB_NEW_TIMEOUT_MS = 12_000;
  * клиентът чака малко повече, за да дойде първо неговият отговор.
  */
 export const WORKTREE_NEW_TIMEOUT_MS = 320_000;
-/** Кодът на грешката, когато отговорът на `worktree.new` не може да дойде (таймаут, паднала връзка). */
+/** ЗД13 (К8): Mac-ът изтрива до 300 s и опреснява до 60 s; клиентът чака малко повече. */
+export const WORKTREE_DELETE_TIMEOUT_MS = 310_000;
+export const WORKTREES_REFRESH_TIMEOUT_MS = 70_000;
+/** Кодът на грешката, когато отговорът на `worktree.*` не може да дойде (таймаут, паднала връзка). */
 export const WORKTREE_LOST = 'worktree_lost';
+/** Заявките, чийто отговор идва само по връзката, по която са тръгнали (К2, К7), и чакат дълго. */
+const SESSION_BOUND = ['worktree.new', 'worktree.delete', 'worktrees.refresh'];
 /** Отговори на заявки със `id`, които се връщат към страницата с нейния `ref`. */
-const REPLIES = ['suggest', 'tab.new', 'worktree.new', 'error'];
+const REPLIES = ['suggest', 'tab.new', 'worktree.new', 'worktree.delete', 'error'];
 /** Текстът от полето и неговият Enter тръгват на толкова един от друг (ОП33). */
 export const LINE_ENTER_DELAY_MS = 150;
 
 export class HostController extends EventEmitter {
   constructor(relay, {
     listIntervalMs = 3_000, tabNewTimeoutMs = TAB_NEW_TIMEOUT_MS, worktreeNewTimeoutMs = WORKTREE_NEW_TIMEOUT_MS,
+    worktreeDeleteTimeoutMs = WORKTREE_DELETE_TIMEOUT_MS, worktreesRefreshTimeoutMs = WORKTREES_REFRESH_TIMEOUT_MS,
     lineEnterDelayMs = LINE_ENTER_DELAY_MS,
   } = {}) {
     super();
-    this.worktreeNewTimeoutMs = worktreeNewTimeoutMs;
+    this.timeouts = {
+      'worktree.new': worktreeNewTimeoutMs,
+      'worktree.delete': worktreeDeleteTimeoutMs,
+      'worktrees.refresh': worktreesRefreshTimeoutMs,
+    };
     this.lineEnterDelayMs = lineEnterDelayMs;
     this.relay = relay;
     this.listIntervalMs = listIntervalMs;
@@ -149,6 +159,16 @@ export class HostController extends EventEmitter {
     return this.#request(message, { kind: 'worktree.new', ref });
   }
 
+  /** Изтрива worktree на Mac-а (ЗД13); branch-ът остава. */
+  deleteWorktree({ worktreeId, ref }) {
+    return this.#request({ t: 'worktree.delete', worktreeId }, { kind: 'worktree.delete', ref });
+  }
+
+  /** Mac-ът да прочете worktree-тата наново (ЗД13); отговорът е `list` със същото `id`. */
+  refreshWorktrees({ ref }) {
+    return this.#request({ t: 'worktrees.refresh' }, { kind: 'worktrees.refresh', ref });
+  }
+
   /** Нов ключ за връзка: старият таб и списъкът са на стария relay. */
   reset() {
     this.close();
@@ -173,24 +193,24 @@ export class HostController extends EventEmitter {
     if (session == null) return fail('Няма връзка с Mac-а');
     const id = this.relay.nextId();
     if (!this.relay.send({ ...message, id })) return fail('Няма връзка — не е изпратено');
-    const worktree = request.kind === 'worktree.new';
+    const bound = SESSION_BOUND.includes(request.kind);
     const timer = setTimeout(() => {
       if (!this.pending.delete(id)) return;
-      if (worktree) fail('Mac-ът не отговори навреме', WORKTREE_LOST);
+      if (bound) fail('Mac-ът не отговори навреме', WORKTREE_LOST);
       else fail(request.kind === 'tab.new' ? 'Mac-ът не отвори таб навреме' : 'Mac-ът не отговори навреме');
-    }, worktree ? this.worktreeNewTimeoutMs : this.tabNewTimeoutMs);
+    }, this.timeouts[request.kind] ?? this.tabNewTimeoutMs);
     this.pending.set(id, { ...request, timer, session });
     return true;
   }
 
   /**
-   * К2: отговорът на `worktree.new` идва само по връзката, по която е тръгнала заявката. Нова
+   * К2, К7: отговорът на `worktree.*` идва само по връзката, по която е тръгнала заявката. Нова
    * сесия с host-а (reconnect, LAN ↔ Relay) значи, че той няма да дойде, а Mac-ът продължава
    * да създава. Страницата казва това веднага, вместо да чака 320 s.
    */
   #dropWorktreeWaits(session) {
     for (const [id, request] of this.pending) {
-      if (request.kind !== 'worktree.new' || request.session === session) continue;
+      if (!SESSION_BOUND.includes(request.kind) || request.session === session) continue;
       clearTimeout(request.timer);
       this.pending.delete(id);
       this.emit('message', { t: 'error', kind: request.kind, ref: request.ref, message: 'Връзката с Mac-а падна', code: WORKTREE_LOST });
@@ -230,6 +250,12 @@ export class HostController extends EventEmitter {
   #onList(message) {
     this.lastList = { ...message, id: null };
     this.emit('message', this.lastList);
+    // Отговорът на „Опресни“ е `list` със същото id (ЗД13): страницата спира да чака.
+    const request = message.id != null ? this.pending.get(message.id) : null;
+    if (request?.kind !== 'worktrees.refresh') return;
+    clearTimeout(request.timer);
+    this.pending.delete(message.id);
+    this.emit('message', { t: 'worktrees.refresh', ref: request.ref, kind: request.kind });
   }
 
   /** Закъснели кадри от предишния таб или от стар attach не стигат до екрана. */
@@ -250,7 +276,7 @@ export class HostController extends EventEmitter {
     }
     clearTimeout(request.timer);
     this.pending.delete(message.id);
-    if (message.t === 'tab.new' || message.t === 'worktree.new') this.refresh();
+    if (['tab.new', 'worktree.new', 'worktree.delete'].includes(message.t)) this.refresh();
     this.emit('message', { ...message, ref: request.ref, kind: request.kind });
   }
 }

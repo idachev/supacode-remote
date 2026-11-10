@@ -122,6 +122,10 @@ const DECODERS = {
       tabId: isStr(o.tabId) ? o.tabId : null, contentId: isStr(o.contentId) ? o.contentId : null,
     }
     : null),
+  // ЗД13: worktree-то е изтрито; branch-ът остава.
+  'worktree.delete': (o) => (isStr(o.worktreeId)
+    ? { t: 'worktree.delete', id: optId(o.id), worktreeId: o.worktreeId, repositoryId: isStr(o.repositoryId) ? o.repositoryId : '' }
+    : null),
   // `code` (напр. `resize_failed`) и `contentId` са незадължителни: стар host ги изпуска, а
   // непознат `code` страницата показва като обикновена грешка с `message`.
   error: (o) => ({

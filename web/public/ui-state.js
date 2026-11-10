@@ -27,6 +27,12 @@ export const ui = {
    * заявката, която чака отговор от Mac-а. `null` — диалогът е затворен.
    */
   newWorktree: null,
+  /** ЗД13: worktreeId → `{ref, name}` на изтриванията, които чакат Mac-а. */
+  deleting: new Map(),
+  /** Worktree-то, за което се пита „Изтрий …?“: `{worktreeId, name, repositoryName}`. */
+  confirmDelete: null,
+  /** `ref` на „Опресни“, докато чака отговор. */
+  refreshRef: null,
   /** „Размер по този екран“, докато чака `size`: таб, поискан размер и таймер. */
   resizeAsk: null,
   refs: 0,

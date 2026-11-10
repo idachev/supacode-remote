@@ -165,6 +165,54 @@ test('нов worktree: смяна на пътя — отговорът няма 
   c.stop();
 });
 
+test('изтриване на worktree: основният не може, dirty отказва, иначе изчезва от list (ЗД13)', async () => {
+  const c = connect();
+  c.host.setActive(true);
+  await waitFor(() => c.relay.state.hostSession != null, 'сесия');
+  const list = await waitFor(() => c.messages.find((m) => m.t === 'list'), 'list');
+  assert.equal(list.canRefreshWorktrees, true);
+  const supacode = list.repos.find((r) => r.id === 'repo-supacode');
+  assert.equal(supacode.worktrees.find((w) => w.id === 'wt-main').canDeleteWorktree, false);
+  assert.equal(supacode.worktrees.find((w) => w.id === 'wt-picker').canDeleteWorktree, true);
+  const errorFor = (ref) => waitFor(() => c.messages.find((m) => m.t === 'error' && m.ref === ref), `грешка ${ref}`, 4_000);
+  c.host.deleteWorktree({ worktreeId: 'wt-main', ref: 'd1' });
+  assert.equal((await errorFor('d1')).code, 'worktree_unsupported');
+  c.host.deleteWorktree({ worktreeId: 'wt-missing', ref: 'd2' });
+  assert.equal((await errorFor('d2')).code, 'worktree_invalid');
+  // Нов worktree с „dirty“ в името: mock-ът казва, че има незаписани промени.
+  c.host.newWorktree({ repositoryId: 'repo-supacode', name: 'dirty-del', ref: 'n1' });
+  const dirty = await waitFor(() => c.messages.find((m) => m.t === 'worktree.new' && m.ref === 'n1'), 'dirty-del', 5_000);
+  c.host.deleteWorktree({ worktreeId: dirty.worktreeId, ref: 'd3' });
+  const dirtyErr = await errorFor('d3');
+  assert.equal(dirtyErr.code, 'worktree_dirty');
+  assert.match(dirtyErr.message, /notes\.txt/);
+  c.host.newWorktree({ repositoryId: 'repo-supacode', name: 'to-delete', ref: 'n2' });
+  const created = await waitFor(() => c.messages.find((m) => m.t === 'worktree.new' && m.ref === 'n2'), 'to-delete', 5_000);
+  c.host.open(created.contentId);
+  await waitFor(() => c.messages.some((m) => m.t === 'attached' && m.contentId === created.contentId), 'attached');
+  c.host.deleteWorktree({ worktreeId: created.worktreeId, ref: 'd4' });
+  const done = await waitFor(() => c.messages.find((m) => m.t === 'worktree.delete' && m.ref === 'd4'), 'изтрито', 5_000);
+  assert.equal(done.repositoryId, 'repo-supacode');
+  await waitFor(() => c.messages.some((m) => m.t === 'detached' && m.contentId === created.contentId), 'detached', 5_000);
+  await waitFor(() => c.messages.some((m) => m.t === 'list' &&
+    !m.repos.some((r) => r.worktrees.some((w) => w.id === created.worktreeId)) &&
+    !m.repos.some((r) => r.rowIds?.includes(created.worktreeId))), 'вече го няма в list');
+  c.stop();
+});
+
+test('„Опресни“: list със същото id приключва чакането (ЗД13)', async () => {
+  const c = connect();
+  c.host.setActive(true);
+  await waitFor(() => c.relay.state.hostSession != null, 'сесия');
+  const before = c.messages.filter((m) => m.t === 'list').length;
+  c.host.refreshWorktrees({ ref: 'r9' });
+  const done = await waitFor(() => c.messages.find((m) => m.t === 'worktrees.refresh' && m.ref === 'r9'), 'опреснено', 3_000);
+  assert.equal(done.kind, 'worktrees.refresh');
+  assert.ok(c.messages.filter((m) => m.t === 'list').length > before);
+  assert.equal(c.host.pending.size, 0);
+  c.stop();
+});
+
 test('предложенията идват с ref-а на страницата', async () => {
   const c = connect();
   c.host.setActive(true);

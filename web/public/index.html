@@ -18,6 +18,7 @@
     <button id="toggle-sessions" class="icon" type="button" title="Сесии (Ctrl+⌘+B)">☰</button>
     <button id="host-name" class="host-name" type="button" disabled>Supacode Remote</button>
     <span id="path-chip" class="chip" hidden></span>
+    <button id="refresh-button" class="icon" type="button" title="Опресни worktree-тата на Mac-а" hidden>⟳</button>
     <span class="spacer"></span>
     <button id="help-button" class="icon" type="button" title="Клавишни комбинации">?</button>
     <button id="setup-button" type="button">Настройка</button>
@@ -87,6 +88,17 @@
         <button id="worktree-create" type="submit">Създай</button>
       </div>
     </form>
+  </div>
+
+  <div id="confirm-delete" class="overlay" hidden>
+    <div class="dialog">
+      <h2>Изтрий worktree</h2>
+      <p id="confirm-delete-text"></p>
+      <div class="dialog-buttons">
+        <button id="confirm-delete-cancel" type="button">Отказ</button>
+        <button id="confirm-delete-ok" class="danger" type="button">Изтрий</button>
+      </div>
+    </div>
   </div>
 
   <div id="help" class="overlay" hidden>

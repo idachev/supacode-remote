@@ -22,6 +22,9 @@ import { closeWorktreeDialog, initWorktreeDialog, openWorktreeDialog, renderWork
 
 /** Отговорът на `worktree.new` не дойде: таймаут или паднала връзка (К2, К3). */
 const WORKTREE_UNKNOWN = 'Mac-ът още създава worktree-то или връзката падна, затова не знам как е свършило. Worktree-то може да се появи в списъка по-късно. Можеш да опиташ пак със същото име.';
+/** К7, К8: изтриването може още да тече, а отговорът не дойде. */
+const DELETE_UNKNOWN = 'Mac-ът още изтрива worktree-то или връзката падна. Worktree-то може да изчезне от списъка по-късно.';
+const REFRESH_LATER = 'Mac-ът още чете worktree-тата; опитай пак по-късно.';
 /** Тези кодове значат „отговорът няма да дойде“, а не „Mac-ът отказа“. */
 const WORKTREE_UNKNOWN_CODES = ['worktree_timeout', 'worktree_lost'];
 
@@ -30,6 +33,7 @@ function render() {
   renderTopbar();
   renderSessions();
   renderTerminalStatus();
+  renderRefresh();
 }
 
 const link = new LocalLink({ onUp: linkUp, onDown: linkDown, onMessage: (m) => MESSAGES[m.t]?.(m) });
@@ -88,6 +92,7 @@ function onList(m) {
   renderSessions();
   // Подсказката „вече има“ е по пълния списък, а той може да се е сменил.
   renderWorktreeDialog();
+  renderRefresh();
   renderTopbar();
   renderTerminalBar();
 }
@@ -152,6 +157,92 @@ function onWorktreeError(m) {
   renderSessions();
 }
 
+// ---- изтриване и „Опресни“ (ЗД13) ----
+
+function askDeleteWorktree(worktree, repositoryName) {
+  ui.confirmDelete = { worktreeId: worktree.id, name: worktree.name, repositoryName };
+  $('confirm-delete-text').textContent =
+    `Изтрий worktree ${worktree.name} в ${repositoryName}? Папката и терминалите му се затварят; branch-ът остава.`;
+  $('confirm-delete').hidden = false;
+  $('confirm-delete-ok').focus();
+}
+
+function closeConfirmDelete() {
+  ui.confirmDelete = null;
+  $('confirm-delete').hidden = true;
+}
+
+function confirmDeleteWorktree() {
+  const ask = ui.confirmDelete;
+  closeConfirmDelete();
+  if (!ask || ui.deleting.has(ask.worktreeId)) return;
+  const ref = nextRef();
+  if (!link.send({ t: 'worktree.delete', worktreeId: ask.worktreeId, ref })) {
+    toast('Няма връзка — не е изпратено');
+    return;
+  }
+  // Отвореният таб се помни сега: списъкът може да изгуби worktree-то преди отговора.
+  const openInside = currentTab()?.worktree.id === ask.worktreeId ? ui.openContentId : null;
+  ui.deleting.set(ask.worktreeId, { ref, name: ask.name, openInside });
+  renderSessions();
+}
+
+/** Изтриването, на което е този `ref`, или `null`. */
+function deletingFor(ref) {
+  for (const [worktreeId, d] of ui.deleting) if (ref && d.ref === ref) return { worktreeId, ...d };
+  return null;
+}
+
+function onWorktreeDelete(m) {
+  const d = deletingFor(m.ref);
+  if (!d) return;
+  ui.deleting.delete(d.worktreeId);
+  toast(`Изтрих „${d.name}“`);
+  // Отвореният таб беше в изтрития worktree: терминалът му е затворен, екранът се чисти.
+  if (d.openInside && d.openInside === ui.openContentId) closeOpenTab();
+  renderSessions();
+}
+
+function onDeleteError(d, m) {
+  ui.deleting.delete(d.worktreeId);
+  const lost = WORKTREE_UNKNOWN_CODES.includes(m.code);
+  // `worktree_dirty` изброява файловете: стои по-дълго, за да се прочете.
+  toastWithApp(lost ? DELETE_UNKNOWN : `Не изтрих „${d.name}“: ${m.message || 'грешка от Mac-а'}`, m.code === 'worktree_dirty' ? 12_000 : undefined);
+  renderSessions();
+}
+
+function refreshWorktrees() {
+  if (ui.refreshRef || !ui.list?.canRefreshWorktrees) return;
+  const ref = nextRef();
+  if (!link.send({ t: 'worktrees.refresh', ref })) {
+    toast('Няма връзка — не е изпратено');
+    return;
+  }
+  ui.refreshRef = ref;
+  renderRefresh();
+}
+
+function onRefreshDone(m) {
+  if (!m.ref || m.ref !== ui.refreshRef) return;
+  ui.refreshRef = null;
+  renderRefresh();
+}
+
+function renderRefresh() {
+  const button = $('refresh-button');
+  button.hidden = ui.list?.canRefreshWorktrees !== true;
+  button.disabled = ui.refreshRef != null || ui.state?.hostSession == null;
+}
+
+function closeOpenTab() {
+  ui.openContentId = null;
+  ui.phase = 'none';
+  terminal.clear();
+  history.replaceState(null, '', location.pathname);
+  link.send({ t: 'close' });
+  render();
+}
+
 function onSuggest(m) {
   if (m.ref !== ui.suggestRef) return;
   ui.suggestRef = null;
@@ -165,6 +256,17 @@ function onError(m) {
   }
   if (m.ref && m.ref === ui.newWorktree?.ref) {
     onWorktreeError(m);
+    return;
+  }
+  const deleting = deletingFor(m.ref);
+  if (deleting) {
+    onDeleteError(deleting, m);
+    return;
+  }
+  if (m.ref && m.ref === ui.refreshRef) {
+    onRefreshDone(m);
+    toastWithApp(WORKTREE_UNKNOWN_CODES.includes(m.code) || m.code === 'refresh_timeout'
+      ? REFRESH_LATER : `Не опресних: ${m.message || 'грешка от Mac-а'}`);
     return;
   }
   if (m.ref && m.ref === ui.newTabRef) finishNewTab();
@@ -218,6 +320,8 @@ const MESSAGES = {
   detached: forOpenTab(onDetached),
   'tab.new': onTabNew,
   'worktree.new': onWorktreeNew,
+  'worktree.delete': onWorktreeDelete,
+  'worktrees.refresh': onRefreshDone,
   suggest: onSuggest,
   error: onError,
   'setup.result': setupResult,
@@ -278,6 +382,11 @@ function dropRequests() {
   closeSuggestions();
   if (ui.newTabRef) finishNewTab();
   if (ui.newWorktree?.ref) onWorktreeError({ code: 'worktree_lost' });
+  if (ui.deleting.size) toast(DELETE_UNKNOWN);
+  ui.deleting.clear();
+  ui.refreshRef = null;
+  closeConfirmDelete();
+  renderRefresh();
 }
 
 function moveTab(step) {
@@ -311,8 +420,8 @@ function resizeToScreen() {
 }
 
 /** Грешка или отговор от Mac-а: с версията на Supacode там, ако Mac-ът я е казал (УА6). */
-function toastWithApp(text) {
-  toast(withHostApp(text, ui.state?.hostApp));
+function toastWithApp(text, ms) {
+  toast(withHostApp(text, ui.state?.hostApp), ms);
 }
 
 function cancelResizeAsk() {
@@ -412,13 +521,17 @@ function wireControls() {
   on('line-button', 'click', () => toggleLine());
   on('copy-all-button', 'click', copyAll);
   on('fit-button', 'click', resizeToScreen);
+  on('refresh-button', 'click', refreshWorktrees);
+  on('confirm-delete-cancel', 'click', () => { closeConfirmDelete(); terminal.focus(); });
+  on('confirm-delete-ok', 'click', confirmDeleteWorktree);
+  on('confirm-delete', 'keydown', (e) => { if (e.key === 'Escape') closeConfirmDelete(); });
   on('toggle-sessions', 'click', () => toggleSidebar());
   on('search', 'input', (e) => { ui.query = e.target.value; renderSessions(); });
   on('search', 'keydown', onSearchKey);
   window.addEventListener('keydown', onKeyCapture, true);
 }
 
-initSessionsView({ openTab, newTab, newWorktree: openWorktreeDialog });
+initSessionsView({ openTab, newTab, newWorktree: openWorktreeDialog, deleteWorktree: askDeleteWorktree });
 initWorktreeDialog(newWorktree);
 initNotifyView({ onOpen: openTab });
 initHostsView((id) => link.send({ t: 'host.select', id }));

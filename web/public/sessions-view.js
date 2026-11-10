@@ -5,8 +5,8 @@ import { icon } from './icons.js';
 import { activityLabel, displayName, isAwaiting, sessionRows } from './session-groups.js';
 import { COLLAPSED_KEY, currentTab, ui } from './ui-state.js';
 
-/** `openTab(contentId)`, `newTab(worktreeId)` и `newWorktree(repository)` идват от app.js. */
-let actions = { openTab() {}, newTab() {}, newWorktree() {} };
+/** `openTab`, `newTab`, `newWorktree(repository)` и `deleteWorktree(worktree, repositoryName)` идват от app.js. */
+let actions = { openTab() {}, newTab() {}, newWorktree() {}, deleteWorktree() {} };
 
 export function initSessionsView(given) {
   actions = given;
@@ -25,6 +25,16 @@ export function renderSessions() {
   if (!rows.length) box.append(el('div', 'empty', emptyText()));
   const open = currentTab();
   for (const row of rows) box.append(...(ROW_VIEWS[row.kind]?.(row, open) ?? []));
+  for (const failure of ui.list?.loadFailures ?? []) box.append(loadFailureRow(failure));
+}
+
+/** Repository, което Mac-ът не прочете (ЗД13): да не изглежда, че worktree-тата му са изтрити. */
+function loadFailureRow(failure) {
+  const id = String(failure?.repositoryId ?? '');
+  const name = id.replace(/\/+$/, '').split('/').pop() || id;
+  const node = el('div', 'row row-load-failure', `${name} не се чете на Mac-а: ${failure?.message ?? ''}`);
+  node.title = id;
+  return node;
 }
 
 function groupRow(row) {
@@ -85,7 +95,24 @@ function worktreeHeader(row, open) {
   if (wt.branch && wt.branch !== wt.name) node.append(el('span', 'branch', wt.branch));
   node.title = wt.branch ? `${label} — ${wt.branch}` : label;
   node.addEventListener('click', () => toggleExpanded(wt.id));
+  if (ui.deleting.has(wt.id)) node.append(el('span', 'deleting', 'Изтривам…'));
+  else if (wt.canDeleteWorktree === true) node.append(deleteButton(row));
   return node;
+}
+
+/** ЗД13: само щом Mac-ът каже `canDeleteWorktree`; стар host не го праща. */
+function deleteButton(row) {
+  const button = el('button', 'wt-delete', '🗑');
+  button.type = 'button';
+  button.title = 'Изтрий worktree';
+  button.setAttribute('aria-label', button.title);
+  button.disabled = ui.state?.hostSession == null;
+  button.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const repo = (ui.list?.repos ?? []).find((r) => r.id === row.repositoryId);
+    actions.deleteWorktree(row.worktree, repo?.name ?? row.repositoryName ?? '');
+  });
+  return button;
 }
 
 function toggleExpanded(worktreeId) {

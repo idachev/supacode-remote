@@ -109,6 +109,11 @@ test('worktree.new: успех с таб, успех без таб и без wor
   assert.equal(decode('{"t":"worktree.new","id":7,"repositoryId":"r"}'), null);
 });
 
+test('worktree.delete: отговорът иска worktreeId', () => {
+  assert.deepEqual(decode('{"t":"worktree.delete","id":8,"worktreeId":"/w/x","repositoryId":"r"}'), { t: 'worktree.delete', id: 8, worktreeId: '/w/x', repositoryId: 'r' });
+  assert.equal(decode('{"t":"worktree.delete","id":8}'), null);
+});
+
 test('терминалните съобщения без задължително поле се изхвърлят', () => {
   assert.equal(decode('{"t":"out","b64":"aGk="}'), null);
   assert.equal(decode('{"t":"attached","contentId":"c","cols":"x","rows":2}'), null);
