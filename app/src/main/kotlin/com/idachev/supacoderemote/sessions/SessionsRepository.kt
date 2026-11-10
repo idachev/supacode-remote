@@ -42,6 +42,9 @@ class SessionsRepository(private val relay: RelayClient, scope: CoroutineScope) 
     }
     scope.launch {
       relay.messages.filterIsInstance<ListReply>().collect {
+        // Без сесия с host-а (току-що сменен Mac) отговорът е закъснял от стария: изчистването
+        // при смяната и този събирач вървят отделно и редът им не е гарантиран.
+        if (relay.hostSession.value == null) return@collect
         // Без id, за да не будят екраните отговори, които не носят нищо ново.
         _list.value = it.copy(id = null)
         _repos.value = it.repos

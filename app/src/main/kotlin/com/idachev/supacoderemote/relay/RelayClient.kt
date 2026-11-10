@@ -581,6 +581,8 @@ class RelayClient(
 
   private val lanListener = object : LanSession.Listener {
     override fun onText(session: LanSession, text: String) {
+      // Затворена сесия (смяна на Mac-а, restart) може да донесе още кадри: те са от стария Mac.
+      if (lan !== session) return
       lanLastFrameAt = System.currentTimeMillis()
       val message = ProtocolCodec.decode(text) ?: return
       // `lan` в hello по самия LAN не значи нищо ново.
