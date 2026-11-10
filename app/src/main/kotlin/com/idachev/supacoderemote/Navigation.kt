@@ -112,6 +112,16 @@ fun MainNavigation() {
             onOpenWorktree = { repoId, wt -> backStack.add(WorktreeKey(repoId, wt.id, wt.displayName)) },
             onOpenSettings = { backStack.add(SetupKey()) },
             onOpenHosts = { backStack.add(HostsKey) },
+            onWorktreeCreated = { reply ->
+              // Като от известие: Worktree, после терминалът, за да води „Назад“ към табовете му.
+              backStack.add(WorktreeKey(reply.repositoryId, reply.worktreeId, reply.name, created = true))
+              val contentId = reply.contentId
+              if (contentId != null) {
+                backStack.add(TerminalKey(contentId, reply.name))
+              } else {
+                container.notices.show("Worktree-то „${reply.name}“ е създадено, но първият му таб не се отвори. Отвори „Нов таб“.")
+              }
+            },
           )
         }
         entry<HostsKey> { key ->

@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -28,6 +29,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -42,11 +44,17 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.idachev.supacoderemote.protocol.Repository
 import com.idachev.supacoderemote.protocol.Worktree
+import com.idachev.supacoderemote.protocol.WorktreeNewReply
 import com.idachev.supacoderemote.protocol.WorktreeStatus
 import com.idachev.supacoderemote.relay.LinkPath
+import com.idachev.supacoderemote.sessions.NewWorktreeViewModel
 import com.idachev.supacoderemote.sessions.SessionGroups
+import com.idachev.supacoderemote.sessions.WorktreeName
 import com.idachev.supacoderemote.ui.hosts.OnlineDot
 import com.idachev.supacoderemote.sessions.SessionRow
 import com.idachev.supacoderemote.ui.AgentBadges
@@ -64,8 +72,30 @@ fun SessionsScreen(
   onOpenWorktree: (repositoryId: String, Worktree) -> Unit,
   onOpenSettings: () -> Unit,
   onOpenHosts: () -> Unit,
+  /** Mac-ът е създал worktree-то (ЗД11): навигацията го отваря, с първия таб, ако го има. */
+  onWorktreeCreated: (WorktreeNewReply) -> Unit,
 ) {
   val container = LocalAppContainer.current
+  val newWorktree: NewWorktreeViewModel = viewModel {
+    NewWorktreeViewModel(
+      link = container.relay,
+      notices = container.notices,
+      refresh = { container.sessions.refresh() },
+      startGrid = { container.terminalGrid.gridFor(container.settingsStore.textSize.value) },
+    )
+  }
+  val worktreeDialog by newWorktree.dialog.collectAsStateWithLifecycle()
+  val createdWorktree by newWorktree.created.collectAsStateWithLifecycle()
+  val hostSession by container.relay.hostSession.collectAsStateWithLifecycle()
+  LifecycleStartEffect(newWorktree) {
+    newWorktree.setVisible(true)
+    onStopOrDispose { newWorktree.setVisible(false) }
+  }
+  LaunchedEffect(createdWorktree) {
+    val reply = createdWorktree ?: return@LaunchedEffect
+    newWorktree.consumeCreated()
+    onWorktreeCreated(reply)
+  }
   val listReply by container.sessions.list.collectAsStateWithLifecycle()
   // Сгънатите групи — изборът на телефона; без избор важи `collapsed` от Mac-а.
   var collapsed by rememberSaveable { mutableStateOf(mapOf<String, Boolean>()) }
@@ -113,7 +143,11 @@ fun SessionsScreen(
               is SessionRow.SidebarGroupHeader -> SidebarGroupHeader(row.name, row.collapsed) {
                 collapsed = collapsed + (row.id to !row.collapsed)
               }
-              is SessionRow.RepositoryHeader -> RepositoryHeader(row.repository.name)
+              is SessionRow.RepositoryHeader -> RepositoryHeader(
+                row.repository,
+                onNewWorktree = { newWorktree.open(row.repository) }.takeIf { row.repository.canCreateWorktree },
+                enabled = hostSession != null && worktreeDialog?.pending != true,
+              )
               is SessionRow.GroupHeader -> GroupHeader(row.group)
               is SessionRow.WorktreeRow -> WorktreeItem(row.worktree, row.repositoryName) {
                 onOpenWorktree(row.repositoryId, row.worktree)
@@ -123,6 +157,17 @@ fun SessionsScreen(
         }
       }
     }
+  }
+  worktreeDialog?.let { dialog ->
+    NewWorktreeDialogView(
+      dialog = dialog,
+      // От пълния списък: при търсене repository-то в редовете носи само намерените worktree-та.
+      existing = WorktreeName.existing(listReply?.repos, dialog.repositoryId),
+      connected = hostSession != null,
+      onName = newWorktree::setName,
+      onCreate = { newWorktree.create(WorktreeName.existing(listReply?.repos, dialog.repositoryId)) },
+      onDismiss = newWorktree::dismiss,
+    )
   }
 }
 
@@ -224,15 +269,24 @@ private fun SidebarGroupHeader(name: String, collapsed: Boolean, onToggle: () ->
 
 /**
  * Repository: тих етикет с папка, без фон и без докосване — за разлика от картите на
- * worktree-тата под него, които се отварят.
+ * worktree-тата под него, които се отварят. „+“ вдясно е нов worktree (ЗД11), само щом Mac-ът
+ * каже, че може ([onNewWorktree] не е `null`).
  */
 @Composable
-private fun RepositoryHeader(name: String) {
+private fun RepositoryHeader(repository: Repository, onNewWorktree: (() -> Unit)?, enabled: Boolean) {
+  val name = repository.name
   Column(Modifier.fillMaxWidth().padding(top = 12.dp)) {
     HorizontalDivider()
+    // С бутона редът е колкото него (48 dp), затова отстъпите горе и долу са по-малки.
+    val button = onNewWorktree != null
     Row(
       verticalAlignment = Alignment.CenterVertically,
-      modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 4.dp),
+      modifier = Modifier.fillMaxWidth().padding(
+        start = 16.dp,
+        end = if (button) 4.dp else 16.dp,
+        top = if (button) 0.dp else 10.dp,
+        bottom = if (button) 0.dp else 4.dp,
+      ),
     ) {
       Icon(
         SessionIcons.Repository,
@@ -248,7 +302,17 @@ private fun RepositoryHeader(name: String) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.weight(1f),
       )
+      if (onNewWorktree != null) {
+        IconButton(
+          onClick = onNewWorktree,
+          enabled = enabled,
+          modifier = Modifier.semantics { contentDescription = "Нов worktree в $name" },
+        ) {
+          Text("+", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
+        }
+      }
     }
   }
 }

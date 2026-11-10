@@ -8,7 +8,14 @@ import kotlinx.serialization.Serializable
 
 @Serializable data object SessionsKey : NavKey
 
-@Serializable data class WorktreeKey(val repositoryId: String, val worktreeId: String, val title: String) : NavKey
+/** [created] — току-що създаден от телефона (ЗД11): може още да го няма в последния `list`. */
+@Serializable
+data class WorktreeKey(
+  val repositoryId: String,
+  val worktreeId: String,
+  val title: String,
+  val created: Boolean = false,
+) : NavKey
 
 @Serializable data class TerminalKey(val contentId: String, val title: String) : NavKey
 

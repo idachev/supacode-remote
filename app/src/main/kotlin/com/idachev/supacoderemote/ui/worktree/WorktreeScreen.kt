@@ -103,6 +103,8 @@ fun WorktreeScreen(key: WorktreeKey, onBack: () -> Unit, onOpenTab: (Tab) -> Uni
     ) {
       when {
         repos == null -> Centered("Чакам списъка от Mac-а…")
+        // Току-що създаден worktree (ЗД11) идва със заявката `list`, която още тече.
+        worktree == null && key.created -> Centered("Чакам списъка от Mac-а…")
         worktree == null -> Centered("Този worktree вече го няма в Supacode")
         // Без табове списъкът показва само „Нов таб“: празен worktree е точно мястото за него.
         else -> LazyColumn(Modifier.fillMaxSize()) {

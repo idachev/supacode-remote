@@ -61,6 +61,22 @@ data class ResizeRequest(val contentId: String, val cols: Int, val rows: Int) : 
 data class TabNewRequest(val id: Int, val worktreeId: String, val cols: Int? = null, val rows: Int? = null) :
   ClientMessage
 
+/**
+ * Нов worktree в repository [repositoryId] с branch [name] (ЗД11), като бутона „+“ на repository-то в
+ * Supacode. Името е задължително — host-ът отказва празно. [cols] и [rows] са размерът на първия
+ * таб, по правилата на [TabNewRequest]; Mac-ът показва новия worktree и табът после взима неговия
+ * размер. Отговорът е [WorktreeNewReply] или `error` със същото [id].
+ */
+@Serializable
+@SerialName("worktree.new")
+data class WorktreeNewRequest(
+  val id: Int,
+  val repositoryId: String,
+  val name: String,
+  val cols: Int? = null,
+  val rows: Int? = null,
+) : ClientMessage
+
 /** Съобщение към телефона: от relay-а (`relay`, `error`) или от host-а. */
 sealed interface ServerMessage
 
@@ -148,7 +164,21 @@ data class TabNewReply(val id: Int? = null, val worktreeId: String = "", val tab
   ServerMessage
 
 /**
- * Грешка от host-а или relay-а. [code] е машинната причина (засега само [RESIZE_FAILED]) — низ, а
+ * Worktree-то е създадено. [tabId] и [contentId] са първият му таб, към който телефонът сам прави
+ * `attach`; липсват заедно, когато табът не се е отворил — пак е успех, а таб се отваря с „Нов таб“.
+ */
+@Serializable
+data class WorktreeNewReply(
+  val id: Int? = null,
+  val repositoryId: String = "",
+  val worktreeId: String,
+  val name: String = "",
+  val tabId: String? = null,
+  val contentId: String? = null,
+) : ServerMessage
+
+/**
+ * Грешка от host-а или relay-а. [code] е машинната причина ([RESIZE_FAILED], `worktree_*`) — низ, а
  * не enum: непознат код не бива да чупи четенето, екранът показва [message]. [contentId] е
  * терминалът, за който е грешката, при заявки без `id` (`resize`).
  */
@@ -161,6 +191,12 @@ data class ErrorReply(
 ) : ServerMessage {
   companion object {
     const val RESIZE_FAILED = "resize_failed"
+
+    /** Отказите на `worktree.new` (ЗД11): всички започват така и се показват в диалога. */
+    const val WORKTREE_PREFIX = "worktree_"
+
+    /** Mac-ът не е разбрал до 300 s; worktree-то може пак да се появи в списъка. */
+    const val WORKTREE_TIMEOUT = "worktree_timeout"
   }
 }
 
@@ -176,6 +212,8 @@ data class Repository(
   val group: String? = null,
   val rowIds: List<String>? = null,
   val worktrees: List<Worktree> = emptyList(),
+  /** Може ли Mac-ът да създаде worktree тук (ЗД11); стар host го изпуска — значи не. */
+  val canCreateWorktree: Boolean = false,
 )
 
 /**
@@ -275,6 +313,7 @@ object ProtocolCodec {
         "detached" -> Detached.serializer()
         "suggest" -> Suggestions.serializer()
         "tab.new" -> TabNewReply.serializer()
+        "worktree.new" -> WorktreeNewReply.serializer()
         "error" -> ErrorReply.serializer()
         else -> return null
       }

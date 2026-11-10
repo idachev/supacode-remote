@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
@@ -71,7 +72,10 @@ class AppContainer(context: Context) {
     appScope.launch { settingsStore.notifyAwaiting.collect { agentAlerts.setEnabled(it) } }
     appScope.launch { settingsStore.settings.collect { relay.configure(it) } }
     appScope.launch {
-      relay.messages.filterIsInstance<ErrorReply>().collect { notices.show(HostLabels.error(it, relay.hostApp.value)) }
+      // Отказите на `worktree.new` са в диалога „Нов worktree“ (или в snackbar-а от него, ако е затворен).
+      relay.messages.filterIsInstance<ErrorReply>()
+        .filter { it.code?.startsWith(ErrorReply.WORKTREE_PREFIX) != true }
+        .collect { notices.show(HostLabels.error(it, relay.hostApp.value)) }
     }
   }
 }

@@ -198,6 +198,45 @@ class ProtocolCodecTest {
   }
 
   @Test
+  fun `worktree new заявката е точно като в протокола`() {
+    assertSameJson(
+      """{"t":"worktree.new","id":7,"repositoryId":"r1","name":"feature-x","cols":90,"rows":30}""",
+      ProtocolCodec.encode(WorktreeNewRequest(7, "r1", "feature-x", cols = 90, rows = 30)),
+    )
+    assertSameJson(
+      """{"t":"worktree.new","id":7,"repositoryId":"r1","name":"feature-x"}""",
+      ProtocolCodec.encode(WorktreeNewRequest(7, "r1", "feature-x")),
+    )
+  }
+
+  @Test
+  fun `worktree new отговорът е успех и без първия таб`() {
+    assertEquals(
+      WorktreeNewReply(7, "r1", "/w/x", "x", tabId = "t1", contentId = "c1"),
+      ProtocolCodec.decode(
+        """{"t":"worktree.new","id":7,"repositoryId":"r1","worktreeId":"/w/x","name":"x","tabId":"t1","contentId":"c1"}""",
+      ),
+    )
+    assertEquals(
+      WorktreeNewReply(7, "r1", "/w/x", "x"),
+      ProtocolCodec.decode("""{"t":"worktree.new","id":7,"repositoryId":"r1","worktreeId":"/w/x","name":"x"}"""),
+    )
+    assertNull(ProtocolCodec.decode("""{"t":"worktree.new","id":7,"repositoryId":"r1"}"""))
+    assertEquals(
+      ErrorReply(7, "Branch name already exists: Choose another", code = "worktree_failed"),
+      ProtocolCodec.decode("""{"t":"error","id":7,"message":"Branch name already exists: Choose another","code":"worktree_failed"}"""),
+    )
+  }
+
+  @Test
+  fun `canCreateWorktree липсва при стар host и значи не`() {
+    val list = ProtocolCodec.decode(
+      """{"t":"list","id":1,"repos":[{"id":"a","name":"a","canCreateWorktree":true},{"id":"b","name":"b"}]}""",
+    ) as ListReply
+    assertEquals(listOf(true, false), list.repos.map { it.canCreateWorktree })
+  }
+
+  @Test
   fun `relay от нов relay носи свързания Mac и списъка с Mac-ове`() {
     val text = """{"t":"relay","hostOnline":true,"host":"3f9a0c1d2e4b5a69",
       "hosts":[{"id":"3f9a0c1d2e4b5a69","name":"Office Mac","online":true},{"id":"default","online":false}]}"""
