@@ -31,6 +31,20 @@ function toB64(bytes) {
 
 export const encodeText = (text) => toB64(new TextEncoder().encode(text));
 
+/**
+ * Клавишите, които Ghostty на Mac-а на собственика праща по свой начин (`~/.config/ghostty/config`):
+ * - Ctrl+буква по мястото на клавиша (US позиция), за да работи и на кирилица (БДС фонетична:
+ *   Ctrl+Ц е ^C). I/J/M/O са изпуснати: техните C0 кодове са Tab/LF/CR/SI.
+ * - Shift+Enter и Option+Enter пращат ESC+CR (нов ред в Claude Code и Grok).
+ */
+export function ghosttyKey(e) {
+  if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey && (e.shiftKey || e.altKey)) return '\x1b\r';
+  if (!e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return null;
+  const m = /^Key([A-Z])$/.exec(e.code ?? '');
+  if (!m || 'IJMO'.includes(m[1])) return null;
+  return String.fromCharCode(m[1].charCodeAt(0) - 64);
+}
+
 export class TerminalView {
   constructor(container, area, { onInput }) {
     this.container = container;
@@ -47,8 +61,9 @@ export class TerminalView {
       lineHeight: 1.0,
       cursorBlink: false,
       convertEol: false,
-      // Option е Meta, както в Ghostty; маркиране при програма с мишка — с Option.
-      macOptionIsMeta: true,
+      // Option пише специалните знаци, както в Supacode (Ghostty без `macos-option-as-alt`);
+      // маркиране при програма с мишка — с Option.
+      macOptionIsMeta: false,
       macOptionClickForcesSelection: true,
       minimumContrastRatio: 1,
       theme: { background: '#1e1e1e', foreground: '#d4d4d4', cursor: '#d4d4d4', selectionBackground: '#264f78' },
@@ -69,7 +84,12 @@ export class TerminalView {
       // Ctrl+⌘ е за app-а; ⌘ сам — за браузъра (⌘C, ⌘V, ⌘R …). Нищо от тях не отива в PTY-то.
       // Ctrl+⌘ ги хваща app.js по-рано (capture фазата).
       if (e.metaKey) return false;
-      return true;
+      if (e.type !== 'keydown') return true;
+      const bytes = ghosttyKey(e);
+      if (bytes == null) return true;
+      e.preventDefault();
+      this.onInput(encodeText(bytes));
+      return false;
     });
     new ResizeObserver(() => this.fit()).observe(area);
   }

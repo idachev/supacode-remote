@@ -161,8 +161,10 @@ Node → браузър:
 
 ### Вход
 
-- Клавиатурата отива в xterm.js и `onData` се праща като `input` (наше решение: Option е Meta,
-  `macOptionIsMeta`, както Ghostty; ⌘ комбинациите остават на браузъра и на app-а).
+- Клавиатурата отива в xterm.js и `onData` се праща като `input`. ⌘ комбинациите остават на
+  браузъра и на app-а. Като Ghostty на Mac-а на собственика (решение ВП7: „както в Supacode“):
+  Option пише специалните знаци (`macOptionIsMeta: false`); Ctrl+буква е по мястото на клавиша
+  и на кирилица (без I/J/M/O); Shift+Enter и Option+Enter пращат ESC+CR (`ghosttyKey`).
 - **xterm.js не отговаря на програмата.** Отговорите на въпроси (DA1/DA2 `CSI c`, DSR/CPR
   `CSI n`, DECRQM `CSI $ p`, XTVERSION `CSI > q`, OSC 4/10/11/12 с `?`, DCS `$ q`) се спират с
   `term.parser.register*Handler`, който връща `true` — тогава xterm.js не пише нищо в `onData`.
