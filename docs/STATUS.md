@@ -17,6 +17,8 @@
   (собственикът, 2026-11-10): няколко Mac-а (ЗД5, ЗД6), „Размер по този екран“ (ЗД12).
 - **УА7. Уеб app: пускане при login.** Готово: `web/login-agent.sh install` / `uninstall` записва
   LaunchAgent, който пуска `run.sh --no-open` във фон и го пуска наново, ако падне (2026-11-17; commit 5745561).
+- **УА10. Уеб app в Safari като отделно app.** Работи (собственикът, 2026-11-17): „File → Add to
+  Dock“ в Safari дава прозорец и икона в Dock без Chrome. e2e тестовете остават само в Chrome.
 - **УА8. Уеб app: защо LAN не мина.** Готово: `lan.failed` носи `reasons` — кода на грешката за
   всеки адрес (`ECONNREFUSED`, `EHOSTUNREACH`, `LAN_TIMEOUT`, `LAN_PIN_MISMATCH`, `HTTP_401` …), без
   адреса и ключа (2026-11-17).
