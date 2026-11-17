@@ -68,7 +68,8 @@ export class LanPath {
     const generation = this.generation;
     clearTimeout(this.retryTimer);
     this.connecting = true;
-    const session = await this.#connect(info, apiKey);
+    const reasons = [];
+    const session = await this.#connect(info, apiKey, reasons);
     if (generation !== this.generation) {
       session?.close();
       return;
@@ -76,22 +77,26 @@ export class LanPath {
     this.connecting = false;
     if (!session || session.closed) {
       session?.close();
-      this.log.info('lan.failed', { addresses: info.addrs.length, port: info.port });
+      // Кодът на грешката за всеки адрес (ECONNREFUSED, LAN_TIMEOUT …) — иначе от лога не личи
+      // дали Mac-ът не слуша, мрежата не стига или macOS е спрял достъпа до локалната мрежа.
+      this.log.info('lan.failed', { addresses: info.addrs.length, port: info.port, reasons: reasons.join(', ') || (session ? 'LAN_CLOSED_AT_OPEN' : 'unknown') });
       this.#scheduleRetry();
       return;
     }
     this.#adopt(session);
   }
 
-  async #connect(info, apiKey) {
+  async #connect(info, apiKey, reasons) {
     try {
       return await connectLan(info, apiKey, {
         timeoutMs: this.timing.lanConnectTimeoutMs,
+        onFailed: (reason) => reasons.push(reason),
         onText: (s, text) => this.#onText(s, text),
         onClose: (s, reason) => this.#onClosed(s, reason),
       });
-    } catch {
+    } catch (err) {
       // Неуспешен опит: остава relay пътят. Без catch грешката би спряла Node.
+      reasons.push(err?.code ?? 'LAN_ERROR');
       return null;
     }
   }

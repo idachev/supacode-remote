@@ -22,7 +22,7 @@ const stranger = identity('stranger');
 const servers = [];
 
 /** LAN endpoint като този на Mac-а. Пази всеки HTTP байт, който стигне до него след TLS. */
-async function lanServer(id, { tlsVersion = 'TLSv1.3' } = {}) {
+async function lanServer(id, { tlsVersion = 'TLSv1.3', rejectStatus = 0 } = {}) {
   const seen = { bytes: 0, auth: null, upgrades: 0 };
   const server = https.createServer({ key: id.private, cert: id.cert, minVersion: tlsVersion, maxVersion: tlsVersion });
   server.on('secureConnection', (socket) => socket.on('data', (d) => { seen.bytes += d.length; }));
@@ -30,6 +30,10 @@ async function lanServer(id, { tlsVersion = 'TLSv1.3' } = {}) {
   server.on('upgrade', (req, socket, head) => {
     seen.upgrades += 1;
     seen.auth = req.headers.authorization ?? null;
+    if (rejectStatus) {
+      socket.end(`HTTP/1.1 ${rejectStatus} Rejected\r\nContent-Length: 0\r\n\r\n`);
+      return;
+    }
     wss.handleUpgrade(req, socket, head, (ws) => {
       ws.on('message', (d) => ws.send(`echo:${d}`));
     });
@@ -93,9 +97,50 @@ test('пробва следващия адрес, ако първият не о�
   session.close();
 });
 
+test('неуспешният опит казва кода на грешката, без адреса', async () => {
+  const failed = [];
+  const onFailed = (reason) => failed.push(reason);
+
+  const { port: strangerPort } = await lanServer(stranger);
+  assert.equal(await connectLan(info(mac, strangerPort), KEY, { onFailed }), null);
+  assert.deepEqual(failed.splice(0), ['LAN_PIN_MISMATCH']);
+
+  const { port: rejectPort } = await lanServer(mac, { rejectStatus: 401 });
+  assert.equal(await connectLan(info(mac, rejectPort), KEY, { onFailed }), null);
+  assert.deepEqual(failed.splice(0), ['HTTP_401']);
+
+  const closed = net.createServer();
+  await new Promise((r) => closed.listen(0, '127.0.0.1', r));
+  const closedPort = closed.address().port;
+  await new Promise((r) => closed.close(r));
+  assert.equal(await connectLan(info(mac, closedPort), KEY, { onFailed }), null);
+  assert.deepEqual(failed.splice(0), ['ECONNREFUSED']);
+
+  const { port: oldTlsPort } = await lanServer(mac, { tlsVersion: 'TLSv1.2' });
+  assert.equal(await connectLan(info(mac, oldTlsPort), KEY, { onFailed }), null);
+  assert.equal(failed.length, 1);
+  assert.match(failed.splice(0)[0], /^ERR_SSL_/);
+});
+
+test('успешният опит не вика onFailed, а пропуснатият адрес — да', async () => {
+  const { port } = await lanServer(mac);
+  const failed = [];
+  const ok = await connectLan(info(mac, port), KEY, { onFailed: (r) => failed.push(r) });
+  ok.close();
+  assert.deepEqual(failed, []);
+  const second = await connectLan({ ...info(mac, port), addrs: ['192.0.2.1', '127.0.0.1'] }, KEY,
+    { timeoutMs: 300, onFailed: (r) => failed.push(r) });
+  second.close();
+  // TEST-NET-1: таймаутът ни или отказ от мрежата, според машината — но точно един код.
+  assert.equal(failed.length, 1);
+  assert.match(failed[0], /^[A-Z0-9_]+$/);
+});
+
 test('невалиден адрес или порт от relay-а — без опит и без грешка, следващият адрес работи', async () => {
   const { port } = await lanServer(mac);
-  assert.equal(await connectLan({ ...info(mac, port), port: 70000 }, KEY), null);
+  const failed = [];
+  assert.equal(await connectLan({ ...info(mac, port), port: 70000 }, KEY, { onFailed: (r) => failed.push(r) }), null);
+  assert.deepEqual(failed, ['LAN_NO_VALID_TARGET']);
   assert.equal(await connectLan({ ...info(mac, port), port: 'x' }, KEY), null);
   const session = await connectLan({ ...info(mac, port), addrs: ['[', 'not an ip', '127.0.0.1'] }, KEY);
   assert.ok(session);

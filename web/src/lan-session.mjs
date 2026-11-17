@@ -13,6 +13,11 @@ import { fpMacValid, pinMatches } from './lan-trust.mjs';
 
 export const LAN_CONNECT_TIMEOUT_MS = 2_500;
 
+/** Грешка с код, който стига до лога на `lan.failed`; текстът ѝ не се логва. */
+function lanError(code, message) {
+  return Object.assign(new Error(message), { code });
+}
+
 /**
  * TLS 1.3 сокет към Mac-а, даден чак след `secureConnect` и съвпадащ отпечатък. Сертификатът е
  * самоподписан и името е IP: доверието е само в отпечатъка.
@@ -25,11 +30,11 @@ function pinnedTlsSocket({ host, port }, fp, timeoutMs) {
       socket.destroy();
       reject(err);
     };
-    const timer = setTimeout(() => fail(new Error('LAN: няма отговор')), timeoutMs);
+    const timer = setTimeout(() => fail(lanError('LAN_TIMEOUT', 'LAN: няма отговор')), timeoutMs);
     socket.once('error', fail);
     socket.once('secureConnect', () => {
       const cert = socket.getPeerCertificate(false);
-      if (!cert?.raw || !pinMatches(cert.raw, fp)) return fail(new Error('LAN: сертификатът не е този на Mac-а'));
+      if (!cert?.raw || !pinMatches(cert.raw, fp)) return fail(lanError('LAN_PIN_MISMATCH', 'LAN: сертификатът не е този на Mac-а'));
       clearTimeout(timer);
       socket.off('error', fail);
       resolve(socket);
@@ -92,10 +97,14 @@ function openLanSocket({ addr, port, clientKey, agent, timeoutMs }) {
   }
 }
 
-/** Отворената сесия или `null`; след отварянето подава текста и затварянето нататък. */
-function sessionFrom(ws, addr, { onText, onClose }) {
+/**
+ * Отворената сесия или `null`; след отварянето подава текста и затварянето нататък. Неуспешен
+ * опит казва на `onFailed` само кода на грешката: съобщенията на Node носят адреса.
+ */
+function sessionFrom(ws, addr, { onText, onClose, onFailed }) {
   return new Promise((resolve) => {
     let session = null;
+    let reason = null;
     ws.on('open', () => {
       session = new LanSession(ws, addr);
       resolve(session);
@@ -103,8 +112,9 @@ function sessionFrom(ws, addr, { onText, onClose }) {
     ws.on('message', (data, isBinary) => {
       if (session && !isBinary) onText?.(session, data.toString('utf8'));
     });
-    endOnFailure(ws);
+    endOnFailure(ws, (why) => { reason ??= why; });
     ws.on('close', (code) => {
+      if (!session) onFailed?.(reason ?? `CLOSED_${code}`);
       resolve(null);
       ended(session, code, onClose);
     });
@@ -112,12 +122,13 @@ function sessionFrom(ws, addr, { onText, onClose }) {
 }
 
 /** Отказ при upgrade (напр. 401) и грешка завършват с `close`, където се решава всичко. */
-function endOnFailure(ws) {
+function endOnFailure(ws, failedWith) {
   ws.on('unexpected-response', (_req, res) => {
+    failedWith(`HTTP_${res.statusCode}`);
     res.resume();
     ws.terminate();
   });
-  ws.on('error', () => {});
+  ws.on('error', (err) => failedWith(err?.code ?? 'LAN_ERROR'));
 }
 
 /** Отворена сесия, която падне, казва го веднъж. */
@@ -142,11 +153,13 @@ function validTargets(info) {
  * Пробва адресите един по един. `null`, ако `fpMac` не е от някой, който знае ключа (тогава
  * не се пробва нищо), или ако никой адрес не мине TLS и upgrade-а.
  */
-export async function connectLan(info, clientKey, { timeoutMs = LAN_CONNECT_TIMEOUT_MS, onText, onClose } = {}) {
+export async function connectLan(info, clientKey, { timeoutMs = LAN_CONNECT_TIMEOUT_MS, onText, onClose, onFailed } = {}) {
   if (!info?.fp || !fpMacValid(clientKey, info.fp, info.fpMac)) return null;
+  const targets = validTargets(info);
+  if (targets.length === 0) onFailed?.('LAN_NO_VALID_TARGET');
   const agent = new PinnedAgent(info.fp, timeoutMs);
-  for (const addr of validTargets(info)) {
-    const session = await connectOne({ addr, port: info.port, clientKey, agent, timeoutMs }, { onText, onClose });
+  for (const addr of targets) {
+    const session = await connectOne({ addr, port: info.port, clientKey, agent, timeoutMs }, { onText, onClose, onFailed });
     if (session) return session;
   }
   return null;
