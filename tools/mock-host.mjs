@@ -56,6 +56,8 @@
 // има `layout` (минимален модел: `mock-layout.mjs`). `watch` праща `list` с `id:null` при промяна,
 // най-много веднъж на 250 ms (заглавията в mock-а не се менят, затова правилото за 2 s не е нужно).
 // `tab.close`, `pane.split`, `pane.close` и `tab.new` с `paneId`; грешки `tab_invalid`, `pane_invalid`.
+// `exit` в shell-а затваря таба, както на Mac-а. Строго поле от грешен тип (`keep`, `on`, `hold`,
+// `tabId`, `paneId`) спира кадъра без отговор.
 // Старият host (MOCK_LEGACY) не знае нищо от това.
 //
 // LAN пътят (раздел „LAN shortcut“ в протокола): wss://127.0.0.1:LAN_PORT/lan (8788), от
@@ -276,6 +278,12 @@ function onShellData(s, buf) {
 function onShellExit(s, e) {
   log('shell ended', { host: s.host.id, content: s.contentId, exit_code: e?.exitCode ?? null });
   s.host.sessions.delete(s.contentId);
+  // Mac-ът затваря таба, щом shell-ът му свърши (`exit`); `tab.close` вече го е махнал.
+  for (const worktree of s.host.repos.flatMap((r) => r.worktrees)) {
+    const tab = worktree.tabs.find((t) => t.contentId === s.contentId);
+    if (tab) worktree.tabs.splice(worktree.tabs.indexOf(tab), 1);
+  }
+  s.host.knownContent.delete(s.contentId);
   for (const c of attachedClients(s.host, s.contentId)) {
     c.attachments.delete(s.contentId);
     send(c, { t: 'detached', contentId: s.contentId, reason: 'session ended' });
@@ -357,7 +365,14 @@ function setHostOnline(host, online) {
   host.online = online;
   log('host online changed', { host: host.id, online });
   // Host-ът си е отишъл — потоците му са спрели. LAN не минава през relay-а.
-  if (!online) [...clients].filter((c) => !c.lan && c.hostId === host.id).forEach((c) => { c.attachments.clear(); });
+  // Върнатият Mac вижда нова връзка: и `watch` трябва да се прати наново.
+  if (!online) {
+    [...clients].filter((c) => !c.lan && c.hostId === host.id).forEach((c) => {
+      c.attachments.clear();
+      c.watching = false;
+      c.lastListKey = null;
+    });
+  }
   // Вързаните към него виждат ръба, другите — само новия списък.
   broadcastRelay();
 }
@@ -447,14 +462,10 @@ function createTab(host, worktree, { cols = COLS, rows = ROWS, focused = false }
 
 /**
  * Нов таб: размерът от заявката (ЗД12), ако е даден и в двете посоки, иначе 120 × 40. С `paneId`
- * от `layout` табът отива в този pane; непознат `paneId` се пренебрегва, а не-низ спира
- * съобщението (правилото на decoder-а в протокола).
+ * от `layout` табът отива в този pane; непознат `paneId` се пренебрегва (не-низ спира още
+ * `handle`).
  */
 function newTab(c, host, msg) {
-  if (msg.paneId !== undefined && typeof msg.paneId !== 'string') {
-    log('tab.new dropped', { host: host.id, reason: 'paneId is not a string', client: c.id });
-    return;
-  }
   const worktree = host.repos.flatMap((r) => r.worktrees).find((w) => w.id === msg.worktreeId);
   if (!worktree) {
     send(c, { t: 'error', id: msg.id ?? null, message: `unknown worktree ${msg.worktreeId}` });
@@ -709,7 +720,8 @@ function suggest(c, msg) {
 
 const messageHandlers = {
   hello: (c, host) => send(c, helloMessage(c, host)),
-  list: (c, host, msg) => sendList(c, host, msg.id),
+  // Новият host отговаря с `id:null` на `list` без `id`; старият го изпуска.
+  list: (c, host, msg) => sendList(c, host, host.id === 'default' ? msg.id : (msg.id ?? null)),
   attach,
   detach: (c, host, msg) => { c.attachments.delete(msg.contentId); },
   input,
@@ -725,10 +737,22 @@ const messageHandlers = {
   'pane.close': paneClose,
 };
 
+/** Строгите полета на layout съобщенията и типът им (правилото на decoder-а в протокола). */
+const STRICT_FIELDS = { keep: 'boolean', on: 'boolean', hold: 'boolean', tabId: 'string', paneId: 'string' };
+
+const badStrictField = (msg) => Object.keys(STRICT_FIELDS).find((k) => msg[k] !== undefined && typeof msg[k] !== STRICT_FIELDS[k]);
+
 function handle(c, msg) {
   const host = hosts.get(c.hostId);
   if (!host || (!host.online && !c.lan)) {
     send(c, { t: 'error', id: msg.id ?? null, message: 'host offline' });
+    return;
+  }
+  // Кадър със строго поле от грешен тип се пропуска без отговор, в каквото и да е съобщение.
+  // Старият host не знае тези полета и ги пренебрегва.
+  const bad = host.id === 'default' ? undefined : badStrictField(msg);
+  if (bad) {
+    log('frame dropped', { host: host.id, type: msg.t, field: bad, client: c.id });
     return;
   }
   const handler = messageHandlers[msg.t];

@@ -13,8 +13,9 @@ after(async () => { await mock?.stop(); });
 
 let nextId = 100;
 
-async function connect() {
-  const ws = new WebSocket(`ws://127.0.0.1:${mock.port}/client`, { headers: { Authorization: `Bearer ${mock.key}` } });
+async function connect(target = mock, hostId = null) {
+  const query = hostId ? `?host=${hostId}` : '';
+  const ws = new WebSocket(`ws://127.0.0.1:${target.port}/client${query}`, { headers: { Authorization: `Bearer ${target.key}` } });
   const frames = [];
   ws.on('message', (data) => { try { frames.push(JSON.parse(data.toString())); } catch { /* ping/pong */ } });
   await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
@@ -221,4 +222,82 @@ test('без промяна watch не праща нищо', async (t) => {
   await c.request({ t: 'watch', on: true });
   await pause(700);
   assert.equal(c.frames.filter((f) => f.t === 'list' && f.id === null).length, 0);
+});
+
+// Ревю F1: Mac-ът затваря таба, когато shell-ът му свърши (`exit`).
+test('exit в shell-а затваря таба', async (t) => {
+  const c = await connect();
+  t.after(() => c.close());
+  const { worktree } = await firstWorktreeWithTabs(c);
+  const tab = await c.request({ t: 'tab.new', worktreeId: worktree.id });
+  await c.request({ t: 'attach', contentId: tab.contentId, scrollback: 0 });
+  c.send({ t: 'input', contentId: tab.contentId, b64: Buffer.from('exit\r').toString('base64') });
+  await waitFor(() => c.frames.some((f) => f.t === 'detached' && f.contentId === tab.contentId), 'detached');
+  const after = worktreeOf(await c.request({ t: 'list' }), worktree.id);
+  assert.equal(after.tabs.some((x) => x.id === tab.tabId), false);
+  const again = await c.request({ t: 'attach', contentId: tab.contentId, scrollback: 0 });
+  assert.equal(again.t, 'error');
+});
+
+// Ревю F3: строгите полета с грешен тип спират кадъра без отговор, в каквото и да е съобщение.
+test('строги полета с грешен тип спират кадъра без отговор', async (t) => {
+  const c = await connect();
+  t.after(() => c.close());
+  const { worktree } = await firstWorktreeWithTabs(c);
+  await c.request({ t: 'list' });
+  await c.request({ t: 'watch', on: true });
+  const dropped = [
+    { t: 'watch', on: 'false' },
+    { t: 'tab.close', tabId: 5 },
+    { t: 'pane.close', paneId: 123 },
+    { t: 'attach', contentId: worktree.tabs[0].contentId, keep: 'yes' },
+    { t: 'tab.new', worktreeId: worktree.id, paneId: 7 },
+    { t: 'list', hold: 1 },
+  ];
+  const ids = dropped.map((msg) => { const id = nextId++; c.send({ ...msg, id }); return id; });
+  const tab = await c.request({ t: 'tab.new', worktreeId: worktree.id });
+  await waitFor(() => c.frames.some((f) => f.t === 'list' && f.id === null && worktreeOf(f, worktree.id).tabs.some((x) => x.id === tab.tabId)),
+    'watch още тече: `on:"false"` е пропуснат');
+  assert.deepEqual(c.frames.filter((f) => ids.includes(f.id)), []);
+});
+
+// Ревю F5: новият host отговаря на `list` без `id` с `id:null`.
+test('list без id получава id null', async (t) => {
+  const c = await connect();
+  t.after(() => c.close());
+  c.send({ t: 'list' });
+  await waitFor(() => c.frames.some((f) => f.t === 'list'), 'list');
+  assert.equal(Object.hasOwn(c.frames.find((f) => f.t === 'list'), 'id'), true);
+  assert.equal(c.frames.find((f) => f.t === 'list').id, null);
+});
+
+// Ревю F2: Mac-ът, който е бил извън линия, вижда нова връзка: `watch` трябва да се прати наново.
+test('watch свършва, когато Mac-ът излезе от линия', async (t) => {
+  const c = await connect();
+  t.after(() => c.close());
+  const { worktree } = await firstWorktreeWithTabs(c);
+  const tab = await c.request({ t: 'tab.new', worktreeId: worktree.id });
+  await c.request({ t: 'attach', contentId: tab.contentId, scrollback: 0 });
+  await c.request({ t: 'watch', on: true });
+  const mark = c.frames.length;
+  c.send({ t: 'input', contentId: tab.contentId, b64: Buffer.from('mock-offline\r').toString('base64') });
+  await waitFor(() => c.framesAfter(mark).some((f) => f.t === 'relay' && !f.hostOnline), 'Mac извън линия');
+  await waitFor(() => c.framesAfter(mark).some((f) => f.t === 'relay' && f.hostOnline), 'Mac пак на линия', 10_000);
+  const back = c.frames.length;
+  await c.request({ t: 'tab.new', worktreeId: worktree.id });
+  await pause(700);
+  assert.equal(c.framesAfter(back).some((f) => f.t === 'list' && f.id === null), false);
+});
+
+// Ревю F4: старият host не знае `paneId` и го пренебрегва, без да спира кадъра.
+test('старият host пренебрегва paneId от грешен тип', async (t) => {
+  const legacy = await startMock({ lan: false, env: { MOCK_SINGLE_HOST: '0', MOCK_OLD_RELAY: '0', MOCK_LEGACY: '1' } });
+  t.after(() => legacy.stop());
+  const c = await connect(legacy, 'default');
+  t.after(() => c.close());
+  const list = await c.request({ t: 'list' });
+  const worktree = allWorktrees(list)[0];
+  assert.equal(worktree.layout, undefined);
+  const reply = await c.request({ t: 'tab.new', worktreeId: worktree.id, paneId: 7 });
+  assert.equal(reply.t, 'tab.new');
 });
