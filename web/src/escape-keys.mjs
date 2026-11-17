@@ -8,10 +8,18 @@
 const CTRL_RB = ['\x1d', '\x1b[93;5u'];
 const ACTIONS = new Map([['r', 'resize'], ['\x1b[114u', 'resize'], ['q', 'quit'], ['\x1b[113u', 'quit']]);
 const KITTY_KEY = /^\x1b\[[0-9;:]*[A-Za-z~]/;
+const KITTY_FORMS = [...CTRL_RB, ...ACTIONS.keys()].filter((f) => f.startsWith('\x1b['));
+/** Самотен Esc и `ESC [` не чакат: Esc клавишът би закъснял до следващото натискане. */
+const MIN_PARTIAL = 3;
 
 /** Формата от `forms`, с която започва текстът, или `null`. */
 function startsWithAny(text, forms) {
   return forms.find((f) => text.startsWith(f)) ?? null;
+}
+
+/** Начало на kitty форма, разделена между две събития на stdin. */
+function isPartialForm(text) {
+  return text.length >= MIN_PARTIAL && KITTY_FORMS.some((f) => f.length > text.length && f.startsWith(text));
 }
 
 /** Дължината на един клавиш: цяла escape последователност или цяла UTF-8 буква. */
@@ -29,16 +37,23 @@ export class EscapeKeys {
   constructor() {
     /** След `Ctrl+]`: следващият клавиш е команда към `attach`, не към Mac-а. */
     this.armed = false;
+    /** Непълна kitty форма от края на предното парче. */
+    this.partial = '';
   }
 
   /** `forward` — за PTY-то на Mac-а; `actions` — командите в реда на натискане. */
   feed(bytes) {
-    const text = Buffer.from(bytes).toString('latin1');
+    const text = this.partial + Buffer.from(bytes).toString('latin1');
+    this.partial = '';
     let forward = '';
     const actions = [];
     let i = 0;
     while (i < text.length) {
       const rest = text.slice(i);
+      if (isPartialForm(rest)) {
+        this.partial = rest;
+        break;
+      }
       if (!this.armed) {
         const escape = startsWithAny(rest, CTRL_RB);
         if (escape) {
@@ -59,6 +74,8 @@ export class EscapeKeys {
       } else if (action) {
         actions.push(ACTIONS.get(action));
         i += action.length;
+        // След изхода нищо не стига до Mac-а: paste след `q` иначе би се изпълнил там.
+        if (ACTIONS.get(action) === 'quit') break;
       } else {
         i += keyLength(rest);
       }

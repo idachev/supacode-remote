@@ -13,6 +13,9 @@ export const MAX_PENDING = 4096;
 
 const ESC = 0x1b;
 const BEL = 0x07;
+/** CAN и SUB прекъсват всяка последователност и в терминала. */
+const CAN = 0x18;
+const SUB = 0x1a;
 const PREFIXES = new Set(['?', '>', '=', '<']);
 const OSC_QUERIES = new Set(['4', '10', '11', '12']);
 
@@ -68,6 +71,7 @@ export class QueryFilter {
       case 'csi':
         if (byte === ESC) return this.#restart(byte, out);
         this.pending.push(byte);
+        if (byte === CAN || byte === SUB) return this.#flush(out);
         if (byte >= 0x40 && byte <= 0x7e) this.#end(out, isCsiQuery(this.#body(2, 0)));
         return this.#capped(out);
       case 'osc':
@@ -77,6 +81,7 @@ export class QueryFilter {
           return this.#end(out, isOscQuery(this.#body(2, 1)));
         }
         this.pending.push(byte);
+        if (byte === CAN || byte === SUB) return this.#flush(out);
         if (byte === ESC) this.state += '-esc';
         return this.#capped(out);
       case 'osc-esc':
@@ -103,10 +108,9 @@ export class QueryFilter {
       const body = this.#body(2, 2);
       return this.#end(out, kind === 'osc' ? isOscQuery(body) : isDcsQuery(body));
     }
-    // Прекъсната последователност минава както е; ESC-ът е начало на нова.
+    // Прекъсната последователност минава; ESC-ът е начало на нова.
     this.pending.pop();
-    this.#flush(out);
-    this.#begin(ESC);
+    this.#restart(ESC, out);
     return this.#afterEsc(byte, out);
   }
 
@@ -115,8 +119,13 @@ export class QueryFilter {
     this.pending = [byte];
   }
 
+  /**
+   * ESC прекъсва текущата последователност. Терминалът би я прекъснал на същия ESC, но ако
+   * новата последователност е въпрос, ESC-ът не стига до него — затова CAN я затваря изрично.
+   */
   #restart(byte, out) {
     this.#flush(out);
+    out.push(CAN);
     this.#begin(byte);
   }
 

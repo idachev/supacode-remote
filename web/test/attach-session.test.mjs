@@ -12,6 +12,7 @@ class FakeHost extends EventEmitter {
   constructor() {
     super();
     this.calls = [];
+    this.lastAttachId = null;
     for (const name of ['setActive', 'open', 'close', 'input', 'resize']) {
       this[name] = (...args) => { this.calls.push([name, ...args]); return true; };
     }
@@ -118,6 +119,24 @@ test('detached завършва с причината', () => {
   host.emit('message', { t: 'detached', contentId: 'c1', reason: 'ended' });
   assert.deepEqual(exits, [{ code: 0, reason: 'ended' }]);
 });
+
+// Ревю F7: Mac-ът отговаря на неуспешен attach с грешка с id, без contentId.
+test('грешка за текущия attach завършва с нейния текст', () => {
+  const { session, host, exits } = setup();
+  session.start();
+  host.lastAttachId = 7;
+  host.emit('message', { t: 'error', id: 7, contentId: null, message: 'unknown content c1', code: null });
+  assert.deepEqual(exits, [{ code: 1, reason: 'error', message: 'unknown content c1' }]);
+});
+test('чужда грешка без contentId не спира сесията', () => {
+  const { session, host, exits } = setup();
+  session.start();
+  host.lastAttachId = 7;
+  host.emit('message', { t: 'error', id: 3, contentId: null, message: 'x', code: null });
+  assert.deepEqual(exits, []);
+});
+// Ревю F9: вложени kitty push-ове; pop с голямо N нулира целия stack (Ghostty FlagStack.pop).
+test('RESTORE нулира целия kitty stack', () => assert.ok(RESTORE.includes('\x1b[<99u')));
 
 test('stop затваря таба и връща терминала', () => {
   const { session, host, written } = setup();

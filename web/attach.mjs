@@ -58,6 +58,13 @@ async function chooseTab(tabs, query) {
   return tabs[index];
 }
 
+/** Съобщението при изход; `q` е изричен изход и не казва нищо. */
+function exitText(reason, message) {
+  if (reason === 'quit') return null;
+  if (reason === 'error') return `Mac-ът отказа: ${message}`;
+  return `Табът приключи (${reason}).`;
+}
+
 async function main() {
   if (!process.stdin.isTTY || !process.stdout.isTTY) fail('attach иска терминал (stdin и stdout).');
   const config = await new ConfigStore().load();
@@ -65,6 +72,8 @@ async function main() {
   if (!settings) fail('Няма ключ за връзка. Настрой уеб app-а (web/run.sh) и пробвай пак.');
 
   const logFile = createWriteStream(join(defaultConfigDir(), 'attach.log'), { flags: 'a', mode: 0o600 });
+  // Логът не бива да спира процеса (пълен диск): без слушател грешката би била uncaught.
+  logFile.on('error', () => {});
   const log = createLogger({ write: (line) => logFile.write(`${line}\n`) });
   log.info('attach.started', { pid: process.pid });
 
@@ -95,15 +104,23 @@ async function main() {
     session.stop();
     process.stdin.setRawMode(false);
     log.info('attach.stopped', { pid: process.pid, code });
-    // `detach` и RESTORE първо да излязат, после връзката и процесът.
-    setTimeout(() => {
+    // Затворен локален таб: stdout може никога да не извика callback-а.
+    setTimeout(() => process.exit(code), 1_000);
+    // Празният запис извиква callback-а след всичко писано преди него (RESTORE). После
+    // връзката се затваря (ws праща чакащия `detach` преди close кадъра) и процесът излиза.
+    process.stdout.write('', () => {
       relay.stop();
       if (message) process.stderr.write(`${message}\n`);
-      process.exit(code);
-    }, 100);
+      setTimeout(() => process.exit(code), 100);
+    });
   };
+  // Неочаквана грешка след raw режима: терминалът първо се връща, после изход с код 1.
+  process.on('uncaughtException', (err) => {
+    log.error('attach.crashed', { error: err });
+    shutdown(1, `attach: ${err?.message ?? err}`);
+  });
 
-  session.on('exit', ({ code, reason }) => shutdown(code, reason === 'quit' ? null : `Табът приключи (${reason}).`));
+  session.on('exit', ({ code, reason, message }) => shutdown(code, exitText(reason, message)));
   for (const signal of ['SIGHUP', 'SIGTERM', 'SIGINT']) process.on(signal, () => shutdown(0, null));
   process.stdout.on('resize', () => session.localResized());
 

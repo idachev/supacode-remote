@@ -19,8 +19,10 @@ export const CLEAR = '\x1b[3J\x1b[2J\x1b[H';
 /**
  * Локалният терминал след изход: програмата на Mac-а може да е включила alternate screen,
  * мишка, bracketed paste, focus или kitty клавиатура, и те биха останали в локалния таб.
+ * Kitty stack-ът може да е с няколко нива; pop с N над дълбочината го нулира целия (Ghostty
+ * `FlagStack.pop`, както и спецификацията на kitty).
  */
-export const RESTORE = '\x1b[?1049l\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[?1004l\x1b[<u\x1b[0m';
+export const RESTORE = '\x1b[?1049l\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[?1004l\x1b[<99u\x1b[0m';
 
 const grid = (s) => `${s.cols}×${s.rows}`;
 
@@ -79,6 +81,11 @@ export class AttachSession extends EventEmitter {
   }
 
   #onMessage(message) {
+    if (this.#isAttachError(message)) {
+      this.log.warn('attach.refused', { code: message.code ?? '' });
+      this.emit('exit', { code: 1, reason: 'error', message: message.message });
+      return;
+    }
     if (message.contentId !== this.contentId) return;
     switch (message.t) {
       case 'attached':
@@ -106,6 +113,14 @@ export class AttachSession extends EventEmitter {
       default:
         break;
     }
+  }
+
+  /**
+   * Отказ на текущия `attach` (табът е затворен между `list` и избора): Mac-ът отговаря с
+   * грешка с id-то на заявката и без `contentId`. Без това екранът би останал празен.
+   */
+  #isAttachError(message) {
+    return message.t === 'error' && message.id != null && message.id === this.host.lastAttachId;
   }
 
   #writeTitle() {

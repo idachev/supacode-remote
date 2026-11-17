@@ -39,3 +39,12 @@ test('незатворен OSC се пуска след MAX_PENDING байта',
   assert.equal(f.push(Buffer.from(big, 'binary')).toString('binary'), big);
   assert.equal(f.push(Buffer.from('b\x1b[6n', 'binary')).toString('binary'), 'b');
 });
+
+// Ревю F1: прекъсната последователност се затваря с CAN, иначе махнатият въпрос след нея би
+// оставил локалния терминал вътре в нея и той би глътнал следващия текст.
+test('OSC, прекъснат от въпрос, се затваря с CAN', () => assert.equal(run('\x1b]2;old\x1b[6nhello\x07'), '\x1b]2;old\x18hello\x07'));
+test('CSI, прекъснат от въпрос, се затваря с CAN', () => assert.equal(run('\x1b[1\x1b[6nX'), '\x1b[1\x18X'));
+// Ревю F2: CAN и SUB прекъсват последователността и в терминала.
+test('CAN прекъсва OSC и текстът след него минава', () => assert.equal(run('\x1b]11;?\x18hello\x07'), '\x1b]11;?\x18hello\x07'));
+test('SUB прекъсва DCS', () => assert.equal(run('\x1bP$q\x1ahi'), '\x1bP$q\x1ahi'));
+test('CAN прекъсва CSI', () => assert.equal(run('\x1b[6\x18n'), '\x1b[6\x18n'));

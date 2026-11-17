@@ -26,3 +26,19 @@ test('кирилица минава цяла', () => {
   const r = k().feed(Buffer.from('жq', 'utf8'));
   assert.equal(r.forward.toString('utf8'), 'жq');
 });
+
+// Ревю F3: kitty форма, разделена между две събития на stdin.
+test('kitty Ctrl+], разделен на две парчета, пак работи', () => {
+  const e = k();
+  assert.deepEqual(feed(e, '\x1b[93;'), { forward: '', actions: [] });
+  assert.deepEqual(feed(e, '5u'), { forward: '', actions: [] });
+  assert.deepEqual(feed(e, 'q'), { forward: '', actions: ['quit'] });
+});
+test('самотен Esc минава веднага', () => assert.deepEqual(feed(k(), '\x1b'), { forward: '\x1b', actions: [] }));
+test('непълна последователност, която не е Ctrl+], минава', () => {
+  const e = k();
+  assert.deepEqual(feed(e, '\x1b[9'), { forward: '', actions: [] });
+  assert.deepEqual(feed(e, '9~'), { forward: '\x1b[99~', actions: [] });
+});
+// Ревю F4: нищо след изхода не стига до Mac-а.
+test('входът след Ctrl+] и q се изхвърля', () => assert.deepEqual(feed(k(), '\x1dqrm\r'), { forward: '', actions: ['quit'] }));
