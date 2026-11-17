@@ -50,6 +50,14 @@
 // „Опресни“ връща `list` със същото id след 0,5 s. В таб: `mock-loadfail` пуска/спира едно
 // repository в `loadFailures`, `mock-refresh-timeout` — `refresh_timeout` на „Опресни“.
 //
+// Отдалеченият клиент в Supacode (branch `remote-client-host` на fork-а): `hello` има `caps` (без
+// `resize.hold` — още не е в host-а). `attach` с `keep:true` държи до 16 таба на връзка (17-ият —
+// `attach_limit`), `detach` спира само своя, `resize` важи за всеки закачен. Всеки worktree с табове
+// има `layout` (минимален модел: `mock-layout.mjs`). `watch` праща `list` с `id:null` при промяна,
+// най-много веднъж на 250 ms (заглавията в mock-а не се менят, затова правилото за 2 s не е нужно).
+// `tab.close`, `pane.split`, `pane.close` и `tab.new` с `paneId`; грешки `tab_invalid`, `pane_invalid`.
+// Старият host (MOCK_LEGACY) не знае нищо от това.
+//
 // LAN пътят (раздел „LAN shortcut“ в протокола): wss://127.0.0.1:LAN_PORT/lan (8788), от
 // emulator-а 10.0.2.2. TLS 1.3 със самоподписан сертификат от паметта, `fp` и `fpMac` в
 // `hello`. LAN=0 го изключва.
@@ -64,6 +72,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { homeRepos, officeRepos, rowIds, sections } from './mock-data.mjs';
+import { addTabToPane, layoutMessage, splitPane, syncLayout } from './mock-layout.mjs';
 
 const PORT = Number(process.env.PORT ?? 8787);
 const KEY = process.env.KEY ?? 'test-key';
@@ -73,6 +82,12 @@ let lanOn = process.env.LAN !== '0';
 const COLS = 120;
 const ROWS = 40;
 const SCREEN_BUFFER_BYTES = 64 * 1024;
+/** Най-много толкова закачени таба на връзка (`attach` с `keep`). */
+const ATTACH_LIMIT = 16;
+/** Какво знае host-ът отгоре на основните съобщения (`hello.caps`). */
+const CAPS = ['attach.keep', 'watch', 'layout', 'tab.close', 'pane.split', 'pane.close'];
+/** `watch`: най-много един `list` на толкова ms на връзка. */
+const WATCH_INTERVAL_MS = 250;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -115,7 +130,7 @@ const oldRelay = process.env.MOCK_OLD_RELAY === '1';
 /** Един Mac на mock relay-а. `lan` — само той предлага LAN; `rowIds`/`sections` — sidebar-ът му. */
 function makeHost({ id, name, online, repos: hostRepos, lan = false, rowIds: hostRowIds, sections: hostSections }) {
   return {
-    id, name, originalName: name, online, repos: hostRepos, sessions: new Map(), lan,
+    id, name, originalName: name, online, repos: hostRepos, sessions: new Map(), lan, layouts: new Map(),
     rowIds: hostRowIds, sections: hostSections,
     knownContent: new Set(hostRepos.flatMap((r) => r.worktrees.flatMap((w) => w.tabs.map((t) => t.contentId)))),
   };
@@ -148,12 +163,32 @@ function withDeleteFlags(host, repo) {
   return { ...repo, worktrees: repo.worktrees.map((w) => ({ ...w, canDeleteWorktree: deletable(w) })) };
 }
 
+/** Състоянието на split-овете на worktree-то, съгласувано с табовете му (или `null` без табове). */
+function layoutOf(host, worktree) {
+  const state = syncLayout(host.layouts.get(worktree.id), worktree.tabs);
+  if (state) host.layouts.set(worktree.id, state);
+  else host.layouts.delete(worktree.id);
+  return state;
+}
+
+/** Всеки worktree с табове получава `layout`; старият host не знае за него. */
+function withLayouts(host, repo) {
+  if (host.id === 'default') return repo;
+  return {
+    ...repo,
+    worktrees: repo.worktrees.map((w) => {
+      const state = layoutOf(host, w);
+      return state ? { ...w, layout: layoutMessage(state) } : w;
+    }),
+  };
+}
+
 function listMessage(host, id) {
   const extra = host.id === 'default' ? {} : {
     canRefreshWorktrees: true,
     ...(host.loadFailure ? { loadFailures: [host.loadFailure] } : {}),
   };
-  const repos = host.repos.map((r) => withDeleteFlags(host, r));
+  const repos = host.repos.map((r) => withLayouts(host, withDeleteFlags(host, r)));
   if (!withSections || !host.sections) return { t: 'list', id, repos, ...extra };
   return { t: 'list', id, repos: repos.map((r) => ({ ...r, rowIds: host.rowIds[r.id] })), sections: host.sections, ...extra };
 }
@@ -213,7 +248,7 @@ function spawnShell(cols, rows) {
 
 /** Клиентите, вързани към Mac-а и закачени за този таб. */
 function attachedClients(host, contentId) {
-  return [...clients].filter((c) => c.hostId === host.id && c.attached === contentId);
+  return [...clients].filter((c) => c.hostId === host.id && c.attachments.has(contentId));
 }
 
 /**
@@ -242,7 +277,7 @@ function onShellExit(s, e) {
   log('shell ended', { host: s.host.id, content: s.contentId, exit_code: e?.exitCode ?? null });
   s.host.sessions.delete(s.contentId);
   for (const c of attachedClients(s.host, s.contentId)) {
-    c.attached = null;
+    c.attachments.delete(s.contentId);
     send(c, { t: 'detached', contentId: s.contentId, reason: 'session ended' });
   }
 }
@@ -322,7 +357,7 @@ function setHostOnline(host, online) {
   host.online = online;
   log('host online changed', { host: host.id, online });
   // Host-ът си е отишъл — потоците му са спрели. LAN не минава през relay-а.
-  if (!online) [...clients].filter((c) => !c.lan && c.hostId === host.id).forEach((c) => { c.attached = null; });
+  if (!online) [...clients].filter((c) => !c.lan && c.hostId === host.id).forEach((c) => { c.attachments.clear(); });
   // Вързаните към него виждат ръба, другите — само новия списък.
   broadcastRelay();
 }
@@ -336,7 +371,7 @@ function send(c, msg) {
 function helloMessage(c, host) {
   return {
     // Стар Supacode (`default`) не знае своя hostId.
-    t: 'hello', v: 1, host: host.name ?? 'Mac', ...(host.id === 'default' ? {} : { hostId: host.id, app: 'Supacode 0.0.0-mock (1)' }),
+    t: 'hello', v: 1, host: host.name ?? 'Mac', ...(host.id === 'default' ? {} : { hostId: host.id, app: 'Supacode 0.0.0-mock (1)', caps: CAPS }),
     ...(host.lan && lanOn && !c.lan ? { lan: { addrs: LAN_ADDRS, port: LAN_PORT, fp: LAN_FP, fpMac: LAN_FP_MAC } } : {}),
   };
 }
@@ -346,8 +381,16 @@ function attach(c, host, msg) {
     send(c, { t: 'error', id: msg.id ?? null, message: `unknown content ${msg.contentId}` });
     return;
   }
+  // Старият host не знае `keep`: всеки attach откача другите, както преди.
+  const keep = msg.keep === true && host.id !== 'default';
+  if (keep && !c.attachments.has(msg.contentId) && c.attachments.size >= ATTACH_LIMIT) {
+    log('attach refused', { host: host.id, content: msg.contentId, client: c.id, attached: c.attachments.size });
+    send(c, { t: 'error', id: msg.id ?? null, code: 'attach_limit', contentId: msg.contentId, message: 'too many attached terminals' });
+    return;
+  }
   const s = session(host, msg.contentId);
-  c.attached = msg.contentId;
+  if (!keep) c.attachments.clear();
+  c.attachments.add(msg.contentId);
   send(c, { t: 'attached', id: msg.id, contentId: msg.contentId, cols: s.cols, rows: s.rows });
   // Първото `out` е „текущият екран“: тук — последните байтове на shell-а.
   send(c, { t: 'out', contentId: msg.contentId, b64: Buffer.concat(s.screen).toString('base64') });
@@ -355,7 +398,7 @@ function attach(c, host, msg) {
 
 function input(c, host, msg) {
   const s = host.sessions.get(msg.contentId);
-  if (!s || c.attached !== msg.contentId) {
+  if (!s || !c.attachments.has(msg.contentId)) {
     send(c, { t: 'error', id: null, message: 'not attached' });
     return;
   }
@@ -374,7 +417,7 @@ const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
  */
 function resize(c, host, msg) {
   const s = host.sessions.get(msg.contentId);
-  if (!s || c.attached !== msg.contentId || !Number.isInteger(msg.cols) || !Number.isInteger(msg.rows)) {
+  if (!s || !c.attachments.has(msg.contentId) || !Number.isInteger(msg.cols) || !Number.isInteger(msg.rows)) {
     log('resize ignored', { host: host.id, content: msg.contentId ?? null, client: c.id });
     return;
   }
@@ -391,8 +434,27 @@ function resize(c, host, msg) {
 
 let newTabCounter = 0;
 
-/** Нов таб: размерът от заявката (ЗД12), ако е даден и в двете посоки, иначе 120 × 40. */
+/** Нов shell-таб в worktree-то: добавя го в списъка и пуска сесията му. */
+function createTab(host, worktree, { cols = COLS, rows = ROWS, focused = false } = {}) {
+  newTabCounter += 1;
+  const contentId = `content-new-${newTabCounter}`;
+  const tabId = `tab-new-${newTabCounter}`;
+  worktree.tabs.push({ id: tabId, contentId, title: 'zsh', focused, working: false, readOnly: false, agents: [] });
+  host.knownContent.add(contentId);
+  session(host, contentId, cols, rows);
+  return { tabId, contentId };
+}
+
+/**
+ * Нов таб: размерът от заявката (ЗД12), ако е даден и в двете посоки, иначе 120 × 40. С `paneId`
+ * от `layout` табът отива в този pane; непознат `paneId` се пренебрегва, а не-низ спира
+ * съобщението (правилото на decoder-а в протокола).
+ */
 function newTab(c, host, msg) {
+  if (msg.paneId !== undefined && typeof msg.paneId !== 'string') {
+    log('tab.new dropped', { host: host.id, reason: 'paneId is not a string', client: c.id });
+    return;
+  }
   const worktree = host.repos.flatMap((r) => r.worktrees).find((w) => w.id === msg.worktreeId);
   if (!worktree) {
     send(c, { t: 'error', id: msg.id ?? null, message: `unknown worktree ${msg.worktreeId}` });
@@ -401,14 +463,122 @@ function newTab(c, host, msg) {
   const sized = Number.isInteger(msg.cols) && Number.isInteger(msg.rows);
   const cols = sized ? clamp(msg.cols, 20, 500) : COLS;
   const rows = sized ? clamp(msg.rows, 5, 200) : ROWS;
-  newTabCounter += 1;
-  const contentId = `content-new-${newTabCounter}`;
-  const tabId = `tab-new-${newTabCounter}`;
-  worktree.tabs.push({ id: tabId, contentId, title: 'zsh', focused: false, working: false, readOnly: false, agents: [] });
-  host.knownContent.add(contentId);
-  session(host, contentId, cols, rows);
-  log('tab opened', { host: host.id, worktree: msg.worktreeId, content: contentId, cols, rows });
+  const { tabId, contentId } = createTab(host, worktree, { cols, rows });
+  const state = host.id === 'default' ? null : layoutOf(host, worktree);
+  if (state && state.panes.some((p) => p.id === msg.paneId)) addTabToPane(state, msg.paneId, tabId);
+  // Размерът остава в края на реда: e2e тестът на страницата го чете оттам.
+  log('tab opened', { host: host.id, worktree: msg.worktreeId, ...(msg.paneId ? { pane: msg.paneId } : {}), content: contentId, cols, rows });
   send(c, { t: 'tab.new', id: msg.id, worktreeId: msg.worktreeId, tabId, contentId });
+}
+
+/** Таб по id в worktree-тата на Mac-а: `{ worktree, tab }` или `null`. */
+function findTab(host, tabId) {
+  for (const worktree of host.repos.flatMap((r) => r.worktrees)) {
+    const tab = worktree.tabs.find((t) => t.id === tabId);
+    if (tab) return { worktree, tab };
+  }
+  return null;
+}
+
+/** Pane по id: `{ worktree, state }` или `null`. */
+function findPane(host, paneId) {
+  for (const worktree of host.repos.flatMap((r) => r.worktrees)) {
+    const state = layoutOf(host, worktree);
+    if (state?.panes.some((p) => p.id === paneId)) return { worktree, state };
+  }
+  return null;
+}
+
+/** Затваря таба като бутона на Mac-а: маха го и спира shell-а (закачените получават `detached`). */
+function closeTab(host, worktree, tab) {
+  worktree.tabs.splice(worktree.tabs.indexOf(tab), 1);
+  host.knownContent.delete(tab.contentId);
+  host.sessions.get(tab.contentId)?.proc.kill();
+  log('tab closed', { host: host.id, worktree: worktree.id, content: tab.contentId });
+}
+
+/** Грешка на layout действие: винаги с `id` и `code` (раздел „tab.close“ в протокола). */
+function layoutError(c, msg, code, message) {
+  log(`${msg.t} failed`, { code, client: c.id });
+  send(c, { t: 'error', id: msg.id ?? null, message, code });
+}
+
+function tabClose(c, host, msg) {
+  if (host.id === 'default') return UNKNOWN_TYPE(c, msg);
+  if (typeof msg.tabId !== 'string' || !msg.tabId) return layoutError(c, msg, 'tab_invalid', 'tab.close needs a tabId');
+  const found = findTab(host, msg.tabId);
+  if (!found) return layoutError(c, msg, 'tab_invalid', 'no such tab');
+  closeTab(host, found.worktree, found.tab);
+  return send(c, { t: 'tab.close', id: msg.id ?? null, tabId: msg.tabId, worktreeId: found.worktree.id });
+}
+
+function paneSplit(c, host, msg) {
+  if (host.id === 'default') return UNKNOWN_TYPE(c, msg);
+  if (typeof msg.paneId !== 'string' || !msg.paneId) return layoutError(c, msg, 'pane_invalid', 'pane.split needs a paneId');
+  const found = findPane(host, msg.paneId);
+  if (!found) return layoutError(c, msg, 'pane_invalid', 'no such pane');
+  if (msg.direction !== 'horizontal' && msg.direction !== 'vertical') {
+    return layoutError(c, msg, 'pane_invalid', 'direction must be horizontal or vertical');
+  }
+  const { tabId, contentId } = createTab(host, found.worktree);
+  const paneId = splitPane(found.state, msg.paneId, msg.direction, tabId);
+  log('pane split', { host: host.id, worktree: found.worktree.id, pane: paneId, content: contentId, direction: msg.direction });
+  return send(c, { t: 'pane.split', id: msg.id ?? null, worktreeId: found.worktree.id, paneId, tabId, contentId });
+}
+
+function paneClose(c, host, msg) {
+  if (host.id === 'default') return UNKNOWN_TYPE(c, msg);
+  if (typeof msg.paneId !== 'string' || !msg.paneId) return layoutError(c, msg, 'pane_invalid', 'pane.close needs a paneId');
+  const found = findPane(host, msg.paneId);
+  if (!found) return layoutError(c, msg, 'pane_invalid', 'no such pane');
+  const pane = found.state.panes.find((p) => p.id === msg.paneId);
+  for (const tabId of [...pane.tabIds]) {
+    const tab = found.worktree.tabs.find((t) => t.id === tabId);
+    if (tab) closeTab(host, found.worktree, tab);
+  }
+  layoutOf(host, found.worktree);
+  return send(c, { t: 'pane.close', id: msg.id ?? null, paneId: msg.paneId, worktreeId: found.worktree.id });
+}
+
+// ---- watch ----
+
+/** Ключът на снимката: `list` без `id`, за да се види дали има промяна. */
+const snapshotKey = (list) => JSON.stringify({ ...list, id: null });
+
+/** `list` към клиента; запомня снимката, с която `watch` сравнява. */
+function sendList(c, host, id) {
+  const list = listMessage(host, id);
+  c.lastListKey = snapshotKey(list);
+  send(c, list);
+}
+
+let watchTimer = null;
+
+/**
+ * Проверка на 250 ms, само докато някой гледа (host-ът не работи нищо без watch): при разлика от
+ * последния изпратен `list` — нов `list` с `id:null`. Така и последното състояние винаги стига.
+ */
+function watchTick() {
+  const watchers = [...clients].filter((c) => c.watching);
+  if (watchers.length === 0) {
+    clearInterval(watchTimer);
+    watchTimer = null;
+    return;
+  }
+  for (const c of watchers) {
+    const host = hosts.get(c.hostId);
+    if (!host || (!host.online && !c.lan)) continue;
+    if (snapshotKey(listMessage(host, null)) !== c.lastListKey) sendList(c, host, null);
+  }
+}
+
+function watch(c, host, msg) {
+  if (host.id === 'default') return UNKNOWN_TYPE(c, msg);
+  c.watching = msg.on === true;
+  log('watch', { host: host.id, client: c.id, on: c.watching });
+  send(c, { t: 'watch', id: msg.id ?? null, on: c.watching });
+  if (c.watching && !watchTimer) watchTimer = setInterval(watchTick, WATCH_INTERVAL_MS);
+  return undefined;
 }
 
 /** Заявките `worktree.new`, които още чакат: repository + име с малки букви (`worktree_busy`). */
@@ -466,13 +636,8 @@ function finishWorktree(c, host, repo, name, msg) {
   const reply = { t: 'worktree.new', id: msg.id ?? null, repositoryId: repo.id, worktreeId: worktree.id, name };
   if (!name.startsWith('mock-notab')) {
     const sized = Number.isInteger(msg.cols) && Number.isInteger(msg.rows);
-    newTabCounter += 1;
-    const contentId = `content-new-${newTabCounter}`;
-    const tabId = `tab-new-${newTabCounter}`;
-    worktree.tabs.push({ id: tabId, contentId, title: 'zsh', focused: true, working: false, readOnly: false, agents: [] });
-    host.knownContent.add(contentId);
-    session(host, contentId, sized ? clamp(msg.cols, 20, 500) : COLS, sized ? clamp(msg.rows, 5, 200) : ROWS);
-    Object.assign(reply, { tabId, contentId });
+    const size = sized ? { cols: clamp(msg.cols, 20, 500), rows: clamp(msg.rows, 5, 200) } : {};
+    Object.assign(reply, createTab(host, worktree, { ...size, focused: true }));
   }
   log('worktree.new created', { host: host.id, repo: repo.id, name, content: reply.contentId ?? null, client: c.id });
   send(c, reply);
@@ -533,7 +698,7 @@ function refreshWorktrees(c, host, msg) {
       return worktreeError(c, msg, 'refresh_timeout', 'the refresh is still running on the Mac; send list again later');
     }
     log('worktrees.refresh done', { host: host.id, client: c.id });
-    send(c, listMessage(host, msg.id ?? null));
+    sendList(c, host, msg.id ?? null);
   }, 500);
 }
 
@@ -544,9 +709,9 @@ function suggest(c, msg) {
 
 const messageHandlers = {
   hello: (c, host) => send(c, helloMessage(c, host)),
-  list: (c, host, msg) => send(c, listMessage(host, msg.id)),
+  list: (c, host, msg) => sendList(c, host, msg.id),
   attach,
-  detach: (c, host, msg) => { if (c.attached === msg.contentId) c.attached = null; },
+  detach: (c, host, msg) => { c.attachments.delete(msg.contentId); },
   input,
   resize,
   'tab.new': newTab,
@@ -554,6 +719,10 @@ const messageHandlers = {
   'worktree.delete': deleteWorktree,
   'worktrees.refresh': refreshWorktrees,
   suggest: (c, host, msg) => suggest(c, msg),
+  watch,
+  'tab.close': tabClose,
+  'pane.split': paneSplit,
+  'pane.close': paneClose,
 };
 
 function handle(c, msg) {
@@ -609,7 +778,7 @@ server.on('upgrade', (req, socket, head) => {
 /** Нов клиент по relay-а или по LAN: същите съобщения, различен само произходът. */
 function acceptClient(ws, { endpoint, hostId, lan }) {
   const c = {
-    ws, attached: null, lan, hostId, id: Math.random().toString(16).slice(2, 10),
+    ws, attachments: new Set(), watching: false, lastListKey: null, lan, hostId, id: Math.random().toString(16).slice(2, 10),
     sendText: (text) => { if (ws.readyState === ws.OPEN) ws.send(text); },
   };
   clients.add(c);
