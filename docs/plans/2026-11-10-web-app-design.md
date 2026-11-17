@@ -224,7 +224,15 @@ Ctrl+⌘+B — колоната „Сесии“; Ctrl+⌘+K — търсене 
 ```
 web/run.sh            # npm install при нужда, после node server.mjs и отваря браузъра
 PORT=8791 web/run.sh  # друг порт;  --no-open — без браузър
+web/login-agent.sh install    # тръгва сам при login, във фон (LaunchAgent, без браузър)
+web/login-agent.sh uninstall  # спира го и го маха от login
 ```
+
+LaunchAgent-ът е `local.supacode-remote.web`: пуска `run.sh --no-open` на порт 8790 и го пуска
+наново, ако падне. launchd не чете профила на shell-а, затова `install` записва в agent-а папката
+на `node` от PATH (или от `NODE=/път/до/node`). Логът е `~/Library/Logs/supacode-remote-web.log`.
+След промяна в `web/` — рестарт с `launchctl kickstart -k gui/$(id -u)/local.supacode-remote.web`.
+Докато agent-ът работи, ръчно пуснатият `run.sh` иска друг порт.
 
 Срещу mock-а: `cd tools && npm install && LAN_ADDRS=127.0.0.1 node mock-host.mjs`, ключ
 `http://127.0.0.1:8787/test-key`.

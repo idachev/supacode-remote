@@ -182,7 +182,8 @@ Navigation 3. compileSdk и targetSdk са 36 (template-ът иска 37, но p
 
 - Локален app за лаптоп: Node сървър на `127.0.0.1` (порт 8790) е клиентът към relay-а и
   LAN-а, а страницата е само екран. Дизайн: `docs/plans/2026-11-10-web-app-design.md`.
-- Пуска се с `web/run.sh`; тестовете — `cd web && npm test` (искат `tools/node_modules` и
+- Пуска се с `web/run.sh`; при login във фон — `web/login-agent.sh install` (LaunchAgent на
+  порт 8790, подробно в дизайна, „Пускане“); тестовете — `cd web && npm test` (искат `tools/node_modules` и
   инсталиран Google Chrome за `page.e2e.test.mjs`, който кара страницата в браузър без прозорец
   срещу mock-а). Gradle build-ът не го докосва.
 - Логът на сървъра е един JSON ред на събитие (`src/log.mjs`, `LOG_LEVEL`); конзолата на
