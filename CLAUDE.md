@@ -202,7 +202,7 @@ Navigation 3. compileSdk и targetSdk са 36 (template-ът иска 37, но p
   терминала се махат от изхода (`QueryFilter`, същият списък като в `terminal.js`), за да не
   отговори и локалният Ghostty. `Ctrl+]` и после `r` — `resize` по прозореца; `Ctrl+]` и после
   `q` — изход. Логът е в `attach.log` до `config.json`. Дизайн:
-  `docs/plans/2026-11-17-ghostty-attach-design.md`.
+  `docs/plans/done/2026-11-17-ghostty-attach-design.md`.
 
 ## Задачи
 

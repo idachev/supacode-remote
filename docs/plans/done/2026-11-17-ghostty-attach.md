@@ -8,7 +8,7 @@
 
 **Tech Stack:** Node ≥ 22, ESM (`.mjs`), `node:test`, `ws`; mock-ът `tools/mock-host.mjs` през `test/helpers/mock.mjs`.
 
-**Spec:** `docs/plans/2026-11-17-ghostty-attach-design.md`
+**Spec:** `docs/plans/done/2026-11-17-ghostty-attach-design.md`
 
 ## Global Constraints
 
