@@ -197,6 +197,12 @@ Navigation 3. compileSdk и targetSdk са 36 (template-ът иска 37, но p
   `resize` тръгва само от бутона „Размер по този екран“ (ЗД12). Нищо автоматично.
 - xterm.js не отговаря на въпросите на програмата (parser hooks в `public/terminal.js`): отговаря
   Ghostty на Mac-а.
+- `node web/attach.mjs [таб]` (УА11, проба): един отдалечен таб в локалния терминал (Ghostty в
+  локалния Supacode). Самостоятелен процес с своя връзка и ключа на уеб app-а. Въпросите към
+  терминала се махат от изхода (`QueryFilter`, същият списък като в `terminal.js`), за да не
+  отговори и локалният Ghostty. `Ctrl+]` и после `r` — `resize` по прозореца; `Ctrl+]` и после
+  `q` — изход. Логът е в `attach.log` до `config.json`. Дизайн:
+  `docs/plans/2026-11-17-ghostty-attach-design.md`.
 
 ## Задачи
 
