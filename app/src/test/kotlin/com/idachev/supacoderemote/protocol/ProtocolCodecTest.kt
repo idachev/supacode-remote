@@ -150,6 +150,35 @@ class ProtocolCodecTest {
     assertEquals(ErrorReply(null, "host offline"), ProtocolCodec.decode("""{"t":"error","message":"host offline"}"""))
   }
 
+  /**
+   * Отдалеченият клиент в Supacode (branch `remote-client-host`) добави `caps`, `layout`, нови
+   * съобщения и кодове. Телефонът още не ги ползва: те не бива да чупят нищо.
+   */
+  @Test
+  fun `новите полета и съобщения на отдалечения клиент не чупят decoder-а`() {
+    assertEquals(
+      HelloReply(1, "Mac mini"),
+      ProtocolCodec.decode("""{"t":"hello","v":1,"host":"Mac mini","caps":["attach.keep","watch","layout","tab.close","pane.split","pane.close","resize.hold"]}"""),
+    )
+    val list = """
+      {"t":"list","id":null,"repos":[{"id":"r","name":"n","worktrees":[{"id":"w","name":"main","tabs":[
+        {"id":"t1","contentId":"c1","title":"zsh"},{"id":"t2","contentId":"c2","title":"claude"}],
+        "layout":{"mode":"tabsPerSplit","activeGroupId":"main","groups":[{"id":"main","focusedPaneId":"p2",
+          "tree":{"split":{"direction":"horizontal","ratio":0.5,"left":{"pane":"p1"},"right":{"pane":"p2"}}}}],
+          "panes":[{"id":"p1","tabIds":["t1"],"selectedTabId":"t1"},{"id":"p2","tabIds":["t2"]}]}}]}]}
+    """.trimIndent()
+    val worktree = (ProtocolCodec.decode(list) as ListReply).repos.single().worktrees.single()
+    assertEquals(listOf("c1", "c2"), worktree.tabs.map { it.contentId })
+    assertEquals(
+      ErrorReply(2, "too many attached terminals", "attach_limit", "c9"),
+      ProtocolCodec.decode("""{"t":"error","id":2,"code":"attach_limit","contentId":"c9","message":"too many attached terminals"}"""),
+    )
+    assertNull(ProtocolCodec.decode("""{"t":"watch","id":5,"on":true}"""))
+    assertNull(ProtocolCodec.decode("""{"t":"tab.close","id":6,"tabId":"t","worktreeId":"w"}"""))
+    assertNull(ProtocolCodec.decode("""{"t":"pane.split","id":7,"worktreeId":"w","paneId":"p","tabId":"t","contentId":"c"}"""))
+    assertNull(ProtocolCodec.decode("""{"t":"pane.close","id":8,"paneId":"p","worktreeId":"w"}"""))
+  }
+
   @Test
   fun `pong непознат тип и счупен JSON се пропускат`() {
     assertNull(ProtocolCodec.decode("pong"))

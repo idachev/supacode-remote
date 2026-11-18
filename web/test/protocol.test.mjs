@@ -123,3 +123,17 @@ test('терминалните съобщения без задължителн�
 test('encode пише JSON', () => {
   assert.equal(encode({ t: 'list', id: 1 }), '{"t":"list","id":1}');
 });
+
+// Отдалеченият клиент в Supacode (branch `remote-client-host`) добави `caps`, `layout`, нови
+// съобщения и кодове. Уеб app-ът още не ги ползва: те не бива да чупят нищо.
+test('новите полета и съобщения на отдалечения клиент не чупят decoder-а', () => {
+  const hello = decode('{"t":"hello","v":1,"host":"Mac","hostId":"h1","caps":["attach.keep","watch","layout","resize.hold"]}');
+  assert.equal(hello.host, 'Mac');
+  assert.equal(hello.hostId, 'h1');
+  const layout = { mode: 'tabsPerSplit', activeGroupId: 'main', groups: [{ id: 'main', tree: { pane: 'p1' } }], panes: [{ id: 'p1', tabIds: ['t1'] }] };
+  const list = decode(JSON.stringify({ t: 'list', id: null, repos: [{ id: 'r', name: 'n', worktrees: [{ id: 'w', name: 'main', tabs: [{ id: 't1', contentId: 'c1' }], layout }] }] }));
+  assert.equal(list.repos[0].worktrees[0].tabs[0].contentId, 'c1');
+  const error = decode('{"t":"error","id":2,"code":"attach_limit","contentId":"c9","message":"too many attached terminals"}');
+  assert.deepEqual([error.id, error.code, error.contentId], [2, 'attach_limit', 'c9']);
+  for (const t of ['watch', 'tab.close', 'pane.split', 'pane.close']) assert.equal(decode(JSON.stringify({ t, id: 1 })), null);
+});
