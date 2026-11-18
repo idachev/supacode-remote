@@ -350,6 +350,17 @@ function resizeSession(s, cols, rows) {
   attachedClients(s.host, s.contentId).forEach((c) => send(c, { t: 'size', contentId: s.contentId, cols, rows }));
 }
 
+/**
+ * Спира shell-а на затворен таб. Задържането свършва веднага, а не чак с асинхронния изход на
+ * shell-а: иначе таймерът му може да върне размера и да прати `size` за вече затворен таб.
+ */
+function stopSession(host, contentId) {
+  const s = host.sessions.get(contentId);
+  if (!s) return;
+  endHold(s, { restore: false });
+  s.proc.kill();
+}
+
 /** Mac-ът сам сменя pane-а си. Задържан размер не се мени: само се запомня новият размер на Mac-а. */
 function resizeFromMac(s, cols, rows) {
   s.mac = { cols, rows };
@@ -394,9 +405,9 @@ function orphanHolds(c) {
   }
 }
 
-/** Таб с поне един агент в `list`: само той получава Ctrl+L след задържан resize. */
-function hasAgent(host, contentId) {
-  return host.repos.some((r) => r.worktrees.some((w) => w.tabs.some((t) => t.contentId === contentId && t.agents?.length > 0)));
+/** Само таб с поне един агент в `list`, който не е read-only, получава Ctrl+L след задържан resize. */
+function wantsCtrlL(host, contentId) {
+  return host.repos.some((r) => r.worktrees.some((w) => w.tabs.some((t) => t.contentId === contentId && !t.readOnly && t.agents?.length > 0)));
 }
 
 /** Преименуване без нова връзка: relay-ят само праща новия списък. */
@@ -521,7 +532,7 @@ function resize(c, host, msg) {
   }
   log('resize applied', { host: host.id, content: msg.contentId, client: c.id, hold: held, cols, rows });
   resizeSession(s, cols, rows);
-  if (held && hasAgent(host, msg.contentId)) {
+  if (held && wantsCtrlL(host, msg.contentId)) {
     s.proc.write(Buffer.from([0x0c]));
     log('ctrl-l sent', { content: msg.contentId });
   }
@@ -584,7 +595,7 @@ function findPane(host, paneId) {
 function closeTab(host, worktree, tab) {
   worktree.tabs.splice(worktree.tabs.indexOf(tab), 1);
   host.knownContent.delete(tab.contentId);
-  host.sessions.get(tab.contentId)?.proc.kill();
+  stopSession(host, tab.contentId);
   log('tab closed', { host: host.id, worktree: worktree.id, content: tab.contentId });
 }
 
@@ -775,7 +786,7 @@ function deleteWorktree(c, host, msg) {
     for (const section of host.sections ?? []) {
       if (section.worktreeIds?.includes(worktree.id)) section.worktreeIds.splice(section.worktreeIds.indexOf(worktree.id), 1);
     }
-    for (const tab of worktree.tabs) host.sessions.get(tab.contentId)?.proc.kill();
+    for (const tab of worktree.tabs) stopSession(host, tab.contentId);
     log('worktree.delete done', { host: host.id, worktree: worktree.id, client: c.id });
     send(c, { t: 'worktree.delete', id: msg.id ?? null, worktreeId: worktree.id, repositoryId: repo.id });
   }, worktree.name.startsWith('mock-slow') ? 6_000 : 1_000);

@@ -132,3 +132,17 @@ test('resize_failed прекратява задържането', async (t) => {
   await pause(400);
   assert.equal(hasSize(other, contentId, 120, 40, mark), false, 'след resize_failed няма задържане за освобождаване');
 });
+
+// Ревю F1: read-only терминал не получава Ctrl+L, дори с агент.
+test('read-only таб с агент не получава Ctrl+L', async (t) => {
+  const c = await connect(mock);
+  t.after(() => c.close());
+  const list = await c.request({ t: 'list' });
+  const tab = allWorktrees(list).flatMap((w) => w.tabs).find((x) => x.readOnly && x.agents?.length > 0);
+  await c.request({ t: 'attach', contentId: tab.contentId, scrollback: 0 });
+  const from = mock.log().length;
+  await hold(c, tab.contentId, 93, 33);
+  await pause(200);
+  assert.equal(mock.log().slice(from).includes(`ctrl-l sent, content: ${tab.contentId}`), false);
+  c.send({ t: 'detach', contentId: tab.contentId });
+});
