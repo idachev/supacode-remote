@@ -5,6 +5,13 @@
 
 ## Направено
 
+- **УА12. Mock: съобщенията на отдалечения клиент в Supacode.** Готово (2026-11-18): mock-ът
+  говори `caps`, `attach keep`, `layout` (минимален модел), `watch`, `tab.close`, `pane.split`,
+  `pane.close`, `tab.new paneId` и `resize hold` от branch `remote-client-host` на fork-а, за да се
+  пробва Swift клиентът без втори Mac. Android и уеб само търпят новите полета (тестове в
+  `ProtocolCodecTest` и `protocol.test.mjs`); `Protocol.kt` и `protocol.mjs` не са сменени.
+  Решения на 3amigos: обхват, минимален layout, срок 30 s, Ctrl+L само за таб с агент, връщане към
+  размера на Mac-а. Codex ревюта: 5 + 2 находки, поправени (commits f0c47f7, a50b759, e17b6c2, d8ae617).
 - **УА11. `attach`: отдалечен таб в истинския Ghostty (етап 1).** Работи (собственикът,
   2026-11-17): `node web/attach.mjs [таб]` в таб на локалния Supacode. Самостоятелен процес с
   ключа на уеб app-а; `QueryFilter` маха въпросите към терминала от изхода; `Ctrl+]` и после
