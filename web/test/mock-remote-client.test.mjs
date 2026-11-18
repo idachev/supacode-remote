@@ -4,40 +4,14 @@
 // Суров WebSocket клиент, без `RelayClient`: тестът проверява самите кадри.
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
-import WebSocket from 'ws';
 import { startMock, waitFor } from './helpers/mock.mjs';
+import { allWorktrees, connect as connectTo, pause, takeId, worktreeOf } from './helpers/mock-client.mjs';
 
 let mock;
 before(async () => { mock = await startMock(); });
 after(async () => { await mock?.stop(); });
 
-let nextId = 100;
-
-async function connect(target = mock, hostId = null) {
-  const query = hostId ? `?host=${hostId}` : '';
-  const ws = new WebSocket(`ws://127.0.0.1:${target.port}/client${query}`, { headers: { Authorization: `Bearer ${target.key}` } });
-  const frames = [];
-  ws.on('message', (data) => { try { frames.push(JSON.parse(data.toString())); } catch { /* ping/pong */ } });
-  await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
-  await waitFor(() => frames.some((f) => f.t === 'relay' && f.hostOnline), 'relay hostOnline');
-  const client = {
-    ws, frames,
-    send: (msg) => ws.send(JSON.stringify(msg)),
-    /** Праща заявка с ново id и чака отговора с това id (или `error`). */
-    async request(msg) {
-      const id = nextId++;
-      client.send({ ...msg, id });
-      await waitFor(() => frames.some((f) => f.id === id), `отговор на ${msg.t}`);
-      return frames.find((f) => f.id === id);
-    },
-    framesAfter: (mark) => frames.slice(mark),
-    close: () => ws.close(),
-  };
-  return client;
-}
-
-const allWorktrees = (list) => list.repos.flatMap((r) => r.worktrees);
-const worktreeOf = (list, worktreeId) => allWorktrees(list).find((w) => w.id === worktreeId);
+const connect = (target = mock, hostId = null) => connectTo(target, hostId);
 
 async function firstWorktreeWithTabs(c) {
   const list = await c.request({ t: 'list' });
@@ -45,15 +19,14 @@ async function firstWorktreeWithTabs(c) {
   return { list, worktree };
 }
 
-const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 
-test('hello има caps без resize.hold', async (t) => {
+test('hello има всички caps на host-а', async (t) => {
   const c = await connect();
   t.after(() => c.close());
   c.send({ t: 'hello', v: 1 });
   await waitFor(() => c.frames.some((f) => f.t === 'hello'), 'hello');
   const hello = c.frames.find((f) => f.t === 'hello');
-  assert.deepEqual(hello.caps, ['attach.keep', 'watch', 'layout', 'tab.close', 'pane.split', 'pane.close']);
+  assert.deepEqual(hello.caps, ['attach.keep', 'watch', 'layout', 'tab.close', 'pane.split', 'pane.close', 'resize.hold']);
 });
 
 test('всеки worktree с табове има layout с един pane и всичките му табове', async (t) => {
@@ -254,7 +227,7 @@ test('строги полета с грешен тип спират кадъра
     { t: 'tab.new', worktreeId: worktree.id, paneId: 7 },
     { t: 'list', hold: 1 },
   ];
-  const ids = dropped.map((msg) => { const id = nextId++; c.send({ ...msg, id }); return id; });
+  const ids = dropped.map((msg) => { const id = takeId(); c.send({ ...msg, id }); return id; });
   const tab = await c.request({ t: 'tab.new', worktreeId: worktree.id });
   await waitFor(() => c.frames.some((f) => f.t === 'list' && f.id === null && worktreeOf(f, worktree.id).tabs.some((x) => x.id === tab.tabId)),
     'watch още тече: `on:"false"` е пропуснат');

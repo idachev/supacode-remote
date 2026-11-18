@@ -177,8 +177,9 @@ Navigation 3. compileSdk и targetSdk са 36 (template-ът иска 37, но p
   `mock-await` / `mock-busy` сменят агента на таба за известията.
 - Mock-ът знае и съобщенията на отдалечения клиент в Supacode (branch `remote-client-host` на
   fork-а): `caps`, `attach keep` (16, `attach_limit`), `layout` (минимален модел в
-  `tools/mock-layout.mjs`), `watch`, `tab.close`, `pane.split`, `pane.close`, `tab.new paneId`.
-  Без `resize hold`. Тестове: `web/test/mock-remote-client.test.mjs`.
+  `tools/mock-layout.mjs`), `watch`, `tab.close`, `pane.split`, `pane.close`, `tab.new paneId`,
+  `resize hold` (срокът без собственик — `MOCK_HOLD_GRACE_MS`, по подразбиране 30 s). Тестове:
+  `web/test/mock-remote-client.test.mjs`, `web/test/mock-hold.test.mjs`.
 - `adb shell input text` не пише кирилица: в emulator-а има добавена българска подредба на
   Gboard (БДС фонетична); кирилицата се проверява с тап по клавишите и с hex-а в лога на mock-а.
 

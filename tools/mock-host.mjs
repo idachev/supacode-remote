@@ -50,12 +50,17 @@
 // „Опресни“ връща `list` със същото id след 0,5 s. В таб: `mock-loadfail` пуска/спира едно
 // repository в `loadFailures`, `mock-refresh-timeout` — `refresh_timeout` на „Опресни“.
 //
-// Отдалеченият клиент в Supacode (branch `remote-client-host` на fork-а): `hello` има `caps` (без
-// `resize.hold` — още не е в host-а). `attach` с `keep:true` държи до 16 таба на връзка (17-ият —
+// Отдалеченият клиент в Supacode (branch `remote-client-host` на fork-а): `hello` има `caps`. `attach` с `keep:true` държи до 16 таба на връзка (17-ият —
 // `attach_limit`), `detach` спира само своя, `resize` важи за всеки закачен. Всеки worktree с табове
 // има `layout` (минимален модел: `mock-layout.mjs`). `watch` праща `list` с `id:null` при промяна,
 // най-много веднъж на 250 ms (заглавията в mock-а не се менят, затова правилото за 2 s не е нужно).
 // `tab.close`, `pane.split`, `pane.close` и `tab.new` с `paneId`; грешки `tab_invalid`, `pane_invalid`.
+// `resize` с `hold:true` задържа размера за връзката, поискала последна: Ctrl+L след него само за
+// таб с агент; обикновен `resize` го прекратява; `detach` на собственика или негов `attach` на друг
+// таб без `keep` го освобождава; паднала връзка го държи 30 s без собственик (MOCK_HOLD_GRACE_MS),
+// а `resize` с `hold` в това време го поема. При край без по-нов resize размерът се връща към
+// „pane-а на Mac-а“ (120 × 40, или 100 × 30 след `mock-resize`) и всички закачени получават `size`.
+// `mock-resize` по време на задържане сменя само размера на Mac-а, не PTY-то.
 // `exit` в shell-а затваря таба, както на Mac-а. Строго поле от грешен тип (`keep`, `on`, `hold`,
 // `tabId`, `paneId`) спира кадъра без отговор.
 // Старият host (MOCK_LEGACY) не знае нищо от това.
@@ -87,7 +92,9 @@ const SCREEN_BUFFER_BYTES = 64 * 1024;
 /** Най-много толкова закачени таба на връзка (`attach` с `keep`). */
 const ATTACH_LIMIT = 16;
 /** Какво знае host-ът отгоре на основните съобщения (`hello.caps`). */
-const CAPS = ['attach.keep', 'watch', 'layout', 'tab.close', 'pane.split', 'pane.close'];
+const CAPS = ['attach.keep', 'watch', 'layout', 'tab.close', 'pane.split', 'pane.close', 'resize.hold'];
+/** Колко дълго задържан размер остава без собственик след паднала връзка. */
+const HOLD_GRACE_MS = Number(process.env.MOCK_HOLD_GRACE_MS ?? 30_000);
 /** `watch`: най-много един `list` на толкова ms на връзка. */
 const WATCH_INTERVAL_MS = 250;
 
@@ -260,7 +267,11 @@ function attachedClients(host, contentId) {
 function session(host, contentId, cols = COLS, rows = ROWS) {
   let s = host.sessions.get(contentId);
   if (s) return s;
-  s = { host, contentId, proc: spawnShell(cols, rows), cols, rows, screen: [], screenBytes: 0, line: '' };
+  // `mac` е размерът на pane-а на Mac-а: към него се връща таб, чието задържане свършва.
+  s = {
+    host, contentId, proc: spawnShell(cols, rows), cols, rows, screen: [], screenBytes: 0, line: '',
+    mac: { cols: COLS, rows: ROWS }, hold: null,
+  };
   host.sessions.set(contentId, s);
   s.proc.onData((buf) => onShellData(s, buf));
   s.proc.onExit((e) => onShellExit(s, e));
@@ -278,6 +289,7 @@ function onShellData(s, buf) {
 function onShellExit(s, e) {
   log('shell ended', { host: s.host.id, content: s.contentId, exit_code: e?.exitCode ?? null });
   s.host.sessions.delete(s.contentId);
+  endHold(s, { restore: false });
   // Mac-ът затваря таба, щом shell-ът му свърши (`exit`); `tab.close` вече го е махнал.
   for (const worktree of s.host.repos.flatMap((r) => r.worktrees)) {
     const tab = worktree.tabs.find((t) => t.contentId === s.contentId);
@@ -292,7 +304,7 @@ function onShellExit(s, e) {
 
 /** Специалните редове от горния коментар, по края на реда. */
 const lineCommands = {
-  'mock-resize': (s) => resizeSession(s, 100, 30),
+  'mock-resize': (s) => resizeFromMac(s, 100, 30),
   'mock-resize-fail': (s) => { s.resizeFails = true; },
   'mock-resize-ok': (s) => { s.resizeFails = false; },
   'mock-await': (s) => setActivity(s.host, s.contentId, 'awaitingInput'),
@@ -338,6 +350,55 @@ function resizeSession(s, cols, rows) {
   attachedClients(s.host, s.contentId).forEach((c) => send(c, { t: 'size', contentId: s.contentId, cols, rows }));
 }
 
+/** Mac-ът сам сменя pane-а си. Задържан размер не се мени: само се запомня новият размер на Mac-а. */
+function resizeFromMac(s, cols, rows) {
+  s.mac = { cols, rows };
+  if (s.hold) {
+    log('mac resize while held', { host: s.host.id, content: s.contentId, cols, rows });
+    return;
+  }
+  resizeSession(s, cols, rows);
+}
+
+// ---- Задържан размер (`resize` с `hold:true`) ----
+
+/**
+ * Край на задържането. `restore` — без по-нов resize: размерът на Mac-а се връща и всички закачени
+ * получават `size`. Без `restore` (по-нов resize, `resize_failed`, край на shell-а) — нищо не се мени.
+ */
+function endHold(s, { restore }) {
+  if (!s.hold) return;
+  clearTimeout(s.hold.graceTimer);
+  s.hold = null;
+  log('hold ended', { host: s.host.id, content: s.contentId, restore });
+  if (restore && s.host.sessions.get(s.contentId) === s) resizeSession(s, s.mac.cols, s.mac.rows);
+}
+
+/** Задържанията на тази връзка по тези табове свършват веднага (`detach`, `attach` без `keep`). */
+function releaseHolds(c, host, contentIds) {
+  for (const contentId of contentIds) {
+    const s = host.sessions.get(contentId);
+    if (s?.hold?.owner === c) endHold(s, { restore: true });
+  }
+}
+
+/** Връзката на собственика падна: задържането остава без собственик за `HOLD_GRACE_MS`. */
+function orphanHolds(c) {
+  for (const host of hosts.values()) {
+    for (const s of host.sessions.values()) {
+      if (s.hold?.owner !== c) continue;
+      s.hold.owner = null;
+      log('hold orphaned', { host: host.id, content: s.contentId, grace_ms: HOLD_GRACE_MS });
+      s.hold.graceTimer = setTimeout(() => endHold(s, { restore: true }), HOLD_GRACE_MS);
+    }
+  }
+}
+
+/** Таб с поне един агент в `list`: само той получава Ctrl+L след задържан resize. */
+function hasAgent(host, contentId) {
+  return host.repos.some((r) => r.worktrees.some((w) => w.tabs.some((t) => t.contentId === contentId && t.agents?.length > 0)));
+}
+
 /** Преименуване без нова връзка: relay-ят само праща новия списък. */
 function toggleHostName(host) {
   host.name = host.name === host.originalName ? `${host.originalName} (нов)` : host.originalName;
@@ -368,6 +429,7 @@ function setHostOnline(host, online) {
   // Върнатият Mac вижда нова връзка: и `watch` трябва да се прати наново.
   if (!online) {
     [...clients].filter((c) => !c.lan && c.hostId === host.id).forEach((c) => {
+      orphanHolds(c);
       c.attachments.clear();
       c.watching = false;
       c.lastListKey = null;
@@ -404,7 +466,11 @@ function attach(c, host, msg) {
     return;
   }
   const s = session(host, msg.contentId);
-  if (!keep) c.attachments.clear();
+  if (!keep) {
+    // Повторен attach на същия таб пази задържането му; другите табове на връзката се освобождават.
+    releaseHolds(c, host, [...c.attachments].filter((id) => id !== msg.contentId));
+    c.attachments.clear();
+  }
   c.attachments.add(msg.contentId);
   send(c, { t: 'attached', id: msg.id, contentId: msg.contentId, cols: s.cols, rows: s.rows });
   // Първото `out` е „текущият екран“: тук — последните байтове на shell-а.
@@ -428,7 +494,9 @@ const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
 /**
  * „Размер по този екран“ (ЗД12): само за закачен таб; host-ът ограничава и праща `size` на всички,
- * и когато размерът вече е такъв. Неуспех — `error` с `code:"resize_failed"` само на питащия.
+ * и когато размерът вече е такъв. Неуспех — `error` с `code:"resize_failed"` само на питащия; той
+ * прекратява и задържането. С `hold:true` размерът получава собственик (тази връзка) и Ctrl+L, ако
+ * табът има агент; без `hold` задържането свършва, без размерът да се връща.
  */
 function resize(c, host, msg) {
   const s = host.sessions.get(msg.contentId);
@@ -436,15 +504,27 @@ function resize(c, host, msg) {
     log('resize ignored', { host: host.id, content: msg.contentId ?? null, client: c.id });
     return;
   }
+  const held = msg.hold === true && host.id !== 'default';
   if (s.resizeFails) {
     log('resize failed', { host: host.id, content: msg.contentId, client: c.id });
+    endHold(s, { restore: false });
     send(c, { t: 'error', id: msg.id ?? null, message: 'terminal did not start', code: 'resize_failed', contentId: msg.contentId });
     return;
   }
   const cols = clamp(msg.cols, 20, 500);
   const rows = clamp(msg.rows, 5, 200);
-  log('resize applied', { host: host.id, content: msg.contentId, client: c.id, cols, rows });
+  if (held) {
+    clearTimeout(s.hold?.graceTimer);
+    s.hold = { owner: c, graceTimer: null };
+  } else {
+    endHold(s, { restore: false });
+  }
+  log('resize applied', { host: host.id, content: msg.contentId, client: c.id, hold: held, cols, rows });
   resizeSession(s, cols, rows);
+  if (held && hasAgent(host, msg.contentId)) {
+    s.proc.write(Buffer.from([0x0c]));
+    log('ctrl-l sent', { content: msg.contentId });
+  }
 }
 
 let newTabCounter = 0;
@@ -723,7 +803,10 @@ const messageHandlers = {
   // Новият host отговаря с `id:null` на `list` без `id`; старият го изпуска.
   list: (c, host, msg) => sendList(c, host, host.id === 'default' ? msg.id : (msg.id ?? null)),
   attach,
-  detach: (c, host, msg) => { c.attachments.delete(msg.contentId); },
+  detach: (c, host, msg) => {
+    releaseHolds(c, host, [msg.contentId]);
+    c.attachments.delete(msg.contentId);
+  },
   input,
   resize,
   'tab.new': newTab,
@@ -811,6 +894,7 @@ function acceptClient(ws, { endpoint, hostId, lan }) {
   ws.on('message', (data) => onClientText(c, endpoint, data.toString('utf8')));
   ws.on('close', () => {
     clients.delete(c);
+    orphanHolds(c);
     log('client closed', { endpoint, host: hostId ?? null, client: c.id });
   });
 }
