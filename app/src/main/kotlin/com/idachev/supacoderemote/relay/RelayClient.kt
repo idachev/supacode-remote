@@ -323,7 +323,7 @@ class RelayClient(
         else -> return false
       }
       when (message) {
-        is AttachRequest -> gate.attachSent(via, message.id, message.contentId)
+        is AttachRequest -> gate.attachSent(via, message.id, message.contentId, keep = message.keep == true)
         is DetachRequest -> sendDetaches(gate.detachSent(via, message.contentId))
       }
       return true
