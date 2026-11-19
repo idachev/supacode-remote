@@ -458,6 +458,24 @@ class TerminalViewModelTest {
     assertEquals(1, commands.jumpWheels().size)
   }
 
+  /** АЦ1: под „Настройка“ или при завъртане табът е скрит — скролът към програмата спира. */
+  @Test
+  fun `скрит екран спира „Най-долу“`() = runTest(dispatcher) {
+    link.hostCaps.value = setOf("attach.keep")
+    val commands = attachedWithCommands()
+    vm.jumpToBottom()
+    runCurrent()
+    assertTrue(vm.state.value.jumping)
+    vm.onWheelInput(sgrDown)
+    vm.onHidden()
+    runCurrent()
+    // Веднага, не чак когато страницата спре да отговаря.
+    assertFalse(vm.state.value.jumping)
+    advanceTimeBy(TerminalViewModel.JUMP_MAX_MS)
+    runCurrent()
+    assertEquals(1, commands.jumpWheels().size)
+  }
+
   @Test
   fun `без attach нищо не се пише`() = runTest(dispatcher) {
     link.hostSession.value = 1
