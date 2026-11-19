@@ -383,6 +383,24 @@ class TerminalPoolTest {
     assertFalse(TerminalPool.shrinksOnTrim(ComponentCallbacks2.TRIM_MEMORY_BACKGROUND))
   }
 
+  /**
+   * F3: страницата на скрит таб се е заредила чак след като екранът е излязъл. Attach оттук би
+   * бил без keep при неизвестни caps и би спрял видимия — тръгва при показване.
+   */
+  @Test
+  fun `страница, заредена докато табът е скрит, не прави attach`() = runTest(dispatcher) {
+    val owner = Any()
+    val a = pool.open("A", owner)
+    pool.leave("A", owner)
+    runCurrent()
+    a.onWebReady()
+    runCurrent()
+    assertEquals(emptyList<AttachRequest>(), attaches("A"))
+    pool.open("A", Any())
+    runCurrent()
+    assertEquals(1, attaches("A").size)
+  }
+
   @Test
   fun `смяна на Mac-а изчиства пула`() = runTest(dispatcher) {
     visit("A")
