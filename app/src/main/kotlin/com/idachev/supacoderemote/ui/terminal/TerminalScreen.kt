@@ -104,6 +104,7 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
       link = container.relay,
       notices = container.notices,
       contentId = key.contentId,
+      pool = container.terminalPool,
       overscrollToProgram = { container.settingsStore.overscrollToProgram.value },
     )
   }

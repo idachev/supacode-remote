@@ -3,20 +3,16 @@ package com.idachev.supacoderemote.terminal
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.idachev.supacoderemote.Notices
-import com.idachev.supacoderemote.protocol.AttachRequest
-import com.idachev.supacoderemote.protocol.Attached
-import com.idachev.supacoderemote.protocol.Detached
 import com.idachev.supacoderemote.protocol.ErrorReply
 import com.idachev.supacoderemote.protocol.InputRequest
-import com.idachev.supacoderemote.protocol.Output
 import com.idachev.supacoderemote.protocol.ServerMessage
 import com.idachev.supacoderemote.protocol.ResizeRequest
-import com.idachev.supacoderemote.protocol.SizeChanged
 import com.idachev.supacoderemote.protocol.SuggestRequest
 import com.idachev.supacoderemote.protocol.Suggestions
 import com.idachev.supacoderemote.protocol.TerminalBytes
 import com.idachev.supacoderemote.protocol.TerminalKeys
 import com.idachev.supacoderemote.relay.HostLink
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
@@ -24,7 +20,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -108,21 +104,22 @@ data class TerminalUiState(
 )
 
 /**
- * Един таб на Mac-а, гледан от телефона.
+ * Екранът на един таб на Mac-а (ДЗ18): лентите, полето за писане, „Живи клавиши“, Ctrl,
+ * предложенията и „Най-долу“. Самият терминал — attach-ът, потокът, маркираното и „Пауза“ — е
+ * [TerminalSession] от [TerminalPool] и остава жив след излизане от екрана.
  *
- * Размерът винаги е на Mac-а: `attached` и `size` го казват, а телефонът никога не праща
- * свой. `attach` се прави наново при всяка нова сесия с host-а (reconnect) и при всяко
- * ново зареждане на страницата с xterm.js, защото тогава екранът е празен.
+ * Входът, `resize`, „Предложи“ и скролът към програмата вървят само за [contentId] — таба на
+ * този екран, т.е. видимия (АЦ1).
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 class TerminalViewModel(
   private val link: HostLink,
   private val notices: Notices,
   val contentId: String,
+  private val pool: TerminalPool,
   private val suggestTimeoutMs: Long = SUGGEST_TIMEOUT_MS,
   /** „Скрол стига до агента“ от „Настройка“; чете се при всеки скрол. */
   private val overscrollToProgram: () -> Boolean = { true },
-  /** Таванът на „Пауза“; над него паузата спира сама и маркираното се отменя. */
-  pauseCapBytes: Long = OutputPause.CAP_BYTES,
   /** Паузата между текста от полето и неговия Enter (виж [sendLine]). */
   private val enterDelayMs: Long = ENTER_DELAY_MS,
   /** Часовникът, с който „Най-долу“ мери колко бързо отговаря програмата. */
@@ -132,21 +129,23 @@ class TerminalViewModel(
   private val _state = MutableStateFlow(TerminalUiState())
   val state: StateFlow<TerminalUiState> = _state.asStateFlow()
 
-  private val _commands = Channel<TerminalCommand>(Channel.UNLIMITED)
+  /** Пазен от пула; сменя се само ако пулът го е пуснал, докато екранът още е отворен. */
+  private val _session = MutableStateFlow(pool.open(contentId, this))
+  private val session: TerminalSession get() = _session.value
+
+  /** Синхронното огледало на сесията в [state] (виж [TerminalSession.observer]). */
+  private val mirror: (TerminalSessionState) -> Unit = { s ->
+    _state.update { it.copy(phase = s.phase, selection = s.selection, pausedBytes = s.pausedBytes) }
+    // Нов attach, `detached` или паднала връзка: „Най-долу“ скролираше стария екран.
+    if (s.phase !is AttachPhase.Attached) cancelJump()
+  }
 
   /** Командите към xterm.js. Чете ги само един — WebView-то на екрана. */
-  val commands: Flow<TerminalCommand> = _commands.receiveAsFlow()
+  val commands: Flow<TerminalCommand> = _session.flatMapLatest { it.commands }
 
-  private var webReady = false
-  private var attachId: Int? = null
-
-  /** Последният изпратен `attach`; `detach`-ът при затваряне е за него. */
-  private var lastAttachId: Int? = null
   private var suggestId: Int? = null
   private var suggestTimeout: Job? = null
-  private val pause = OutputPause(pauseCapBytes)
   private var pendingEnter: Job? = null
-  private var pauseTicker: Job? = null
   private var jumpJob: Job? = null
 
   /** Байтовете от страницата за скрола на „Най-долу“; има го само докато той тече. */
@@ -156,37 +155,31 @@ class TerminalViewModel(
   private var jumpSignatures: Channel<Int>? = null
 
   init {
+    bind(session)
     viewModelScope.launch { link.messages.collect(::onMessage) }
-    viewModelScope.launch {
-      link.hostSession.collect { session ->
-        if (session == null) {
-          cancelJump()
-          attachId = null
-          _state.update { it.copy(phase = AttachPhase.Waiting) }
-        } else if (webReady) {
-          attach()
-        }
-      }
-    }
+  }
+
+  private fun bind(next: TerminalSession) {
+    _session.value = next
+    next.observer = mirror
+    mirror(next.state.value)
   }
 
   /**
-   * Страницата с xterm.js е заредена (първия път или след ново WebView). Старите команди
-   * са за предишната страница, затова се изхвърлят и екранът се иска наново.
+   * Страницата с xterm.js е заредена (първия път или след ново WebView). Сесията изхвърля
+   * старите команди и иска екрана наново. Ако пулът междувременно е пуснал таба (друг Mac,
+   * недостиг на памет), екранът взима нов.
    */
   fun onWebReady() {
-    webReady = true
     cancelJump()
-    while (_commands.tryReceive().isSuccess) Unit
-    // Новата страница е празна и маркирано няма; задържаното ще дойде наново с attach.
-    pause.end()
-    stopPauseTicker()
-    _state.update { it.copy(selection = null) }
-    if (link.hostSession.value != null) attach()
+    if (session.released) bind(pool.open(contentId, this))
+    session.onWebReady()
   }
 
   fun onWebGone() {
-    webReady = false
+    // Старият екран на същия таб (бързо назад и пак напред) маха своята страница след като
+    // новият екран вече е взел терминала — тя не е неговата.
+    if (session.owner === this) session.onWebGone()
   }
 
   /** Бутонът „Свържи отново“ след `detached`. */
@@ -195,50 +188,12 @@ class TerminalViewModel(
       notices.show("Няма връзка с Mac-а")
       return
     }
-    attach()
+    session.attach()
   }
 
-  private fun attach() {
-    val id = link.nextId()
-    attachId = id
-    lastAttachId = id
-    _state.update { it.copy(phase = AttachPhase.Attaching) }
-    if (!link.send(AttachRequest(id = id, contentId = contentId))) {
-      attachId = null
-      _state.update { it.copy(phase = AttachPhase.Waiting) }
-    }
-  }
-
+  /** Само каквото е на екрана; потокът на терминала е в [TerminalSession]. */
   private fun onMessage(message: ServerMessage) {
     when (message) {
-      is Attached -> if (message.contentId == contentId) {
-        cancelJump()
-        endPause(OutputPause.EndReason.Reattach)
-        attachId = null
-        // Init чисти терминала, а с него и маркираното.
-        _state.update { it.copy(phase = AttachPhase.Attached(message.cols, message.rows), selection = null) }
-        _commands.trySend(TerminalCommand.Init(message.cols, message.rows))
-      }
-      is Output -> if (message.contentId == contentId) {
-        if (!pause.offer(message.b64)) {
-          _commands.trySend(TerminalCommand.Write(message.b64))
-        } else if (pause.overCap) {
-          endPause(OutputPause.EndReason.Overflow)
-          notices.show("Пауза спря: над ${OutputPause.formatSize(OutputPause.CAP_BYTES)} нов изход, маркирането е отменено")
-        } else {
-          schedulePauseChip()
-        }
-      }
-      is SizeChanged -> if (message.contentId == contentId) {
-        endPause(OutputPause.EndReason.Resize)
-        _state.update { it.copy(phase = AttachPhase.Attached(message.cols, message.rows)) }
-        _commands.trySend(TerminalCommand.Resize(message.cols, message.rows))
-      }
-      is Detached -> if (message.contentId == contentId) {
-        cancelJump()
-        attachId = null
-        _state.update { it.copy(phase = AttachPhase.Detached(message.reason?.ifBlank { null } ?: "сесията е спряла")) }
-      }
       is Suggestions -> if (message.id != null && message.id == suggestId) {
         finishSuggest()
         _state.update { it.copy(suggestions = message.suggestions) }
@@ -247,13 +202,6 @@ class TerminalViewModel(
       is ErrorReply -> {
         // Самото съобщение вече е в snackbar-а (AppContainer); тук само спираме чакането.
         if (message.id != null && message.id == suggestId) finishSuggest()
-        if (message.code == ErrorReply.RESIZE_FAILED && message.contentId == contentId) {
-          _commands.trySend(TerminalCommand.ResizeFailed)
-        }
-        if (message.id != null && message.id == attachId) {
-          attachId = null
-          _state.update { it.copy(phase = AttachPhase.Detached(message.message)) }
-        }
       }
       else -> Unit
     }
@@ -298,11 +246,11 @@ class TerminalViewModel(
    */
   fun scrollHistory(pages: Int) {
     cancelJump()
-    _commands.trySend(TerminalCommand.ScrollPages(pages))
+    session.command(TerminalCommand.ScrollPages(pages))
   }
 
   fun scrollToBottom() {
-    _commands.trySend(TerminalCommand.ScrollToBottom)
+    session.command(TerminalCommand.ScrollToBottom)
   }
 
   /**
@@ -325,7 +273,7 @@ class TerminalViewModel(
       return
     }
     cancelJump()
-    _commands.trySend(TerminalCommand.ScrollToBottom)
+    session.command(TerminalCommand.ScrollToBottom)
     if (_state.value.phase !is AttachPhase.Attached) return
     val replies = Channel<String>(Channel.UNLIMITED)
     val signatures = Channel<Int>(Channel.UNLIMITED)
@@ -355,11 +303,11 @@ class TerminalViewModel(
     while (true) {
       // Отговорите от предишния пакет не бива да минат за отговор на новия.
       while (replies.tryReceive().isSuccess) Unit
-      _commands.trySend(TerminalCommand.Wheel(up = false, lines = JUMP_LINES, programOnly = true))
+      session.command(TerminalCommand.Wheel(up = false, lines = JUMP_LINES, programOnly = true))
       withTimeoutOrNull(JUMP_REPLY_MS) { replies.receive() } ?: return
       delay(JUMP_EVERY_MS)
       while (signatures.tryReceive().isSuccess) Unit
-      _commands.trySend(TerminalCommand.ReportScreen)
+      session.command(TerminalCommand.ReportScreen)
       val signature = withTimeoutOrNull(JUMP_REPLY_MS) { signatures.receive() } ?: return
       val now = nowMs()
       if (last != null && signature != last) {
@@ -404,7 +352,7 @@ class TerminalViewModel(
 
   /** „Размер по този екран“: първо страницата мери колко влиза, после [onGrid] праща `resize`. */
   fun fitToScreen() {
-    _commands.trySend(TerminalCommand.MeasureGrid)
+    session.command(TerminalCommand.MeasureGrid)
   }
 
   /**
@@ -419,83 +367,25 @@ class TerminalViewModel(
 
   /** Иска текста на терминала; идва обратно през `onText` на WebView-то. */
   fun requestText() {
-    _commands.trySend(TerminalCommand.RequestText)
+    session.command(TerminalCommand.RequestText)
   }
 
   /**
    * Страницата докладва маркираното (след дълго натискане и плъзгане). `null` — маркираното
    * е изчезнало там (докосване, нов attach) и лентата трябва да се скрие.
    */
-  fun onSelection(selection: TerminalSelection?) {
-    _state.update { it.copy(selection = selection) }
-    if (selection != null && !pause.paused) startPause()
-    if (selection == null) endPause(OutputPause.EndReason.SelectionGone)
-  }
-
-  /** Маркирането започна: изходът спира да се пише, за да не избута маркирания текст. */
-  private fun startPause() {
-    pause.start()
-    _state.update { it.copy(pausedBytes = 0) }
-  }
-
-  /** Чипът се обновява най-много веднъж на [PAUSE_TICK_MS], не при всяко `out`. */
-  private fun schedulePauseChip() {
-    if (pauseTicker != null) return
-    pauseTicker = viewModelScope.launch {
-      delay(PAUSE_TICK_MS)
-      pauseTicker = null
-      if (pause.paused) _state.update { it.copy(pausedBytes = pause.queuedBytes) }
-    }
-  }
-
-  /**
-   * Край на паузата: задържаният изход се пише по ред, наведнъж. Без [OutputPause.EndReason.Copied]
-   * и [OutputPause.EndReason.SelectionGone] маркираното се отменя първо — изходът го мести.
-   */
-  private fun endPause(reason: OutputPause.EndReason) {
-    if (!pause.paused) return
-    val cancel = reason != OutputPause.EndReason.Copied && reason != OutputPause.EndReason.SelectionGone
-    if (cancel && _state.value.selection != null) {
-      _state.update { it.copy(selection = null) }
-      _commands.trySend(TerminalCommand.ClearSelection)
-    }
-    stopPauseTicker()
-    pause.end().forEach { _commands.trySend(TerminalCommand.Write(it)) }
-  }
-
-  private fun stopPauseTicker() {
-    pauseTicker?.cancel()
-    pauseTicker = null
-    _state.update { it.copy(pausedBytes = null) }
-  }
+  fun onSelection(selection: TerminalSelection?) = session.onSelection(selection)
 
   /** ◀ ▶ за началото: една клетка назад (минус) или напред, през края на реда. */
-  fun moveSelectionStart(delta: Int) = adjustSelection { it.moveStart(delta) }
+  fun moveSelectionStart(delta: Int) = session.moveSelectionStart(delta)
 
   /** ◀ ▶ за края: една клетка назад (минус) или напред, през края на реда. */
-  fun moveSelectionEnd(delta: Int) = adjustSelection { it.moveEnd(delta) }
-
-  private fun adjustSelection(change: (TerminalSelection) -> TerminalSelection) {
-    val current = _state.value.selection ?: return
-    val next = change(current)
-    if (next == current) return
-    _state.update { it.copy(selection = next) }
-    _commands.trySend(TerminalCommand.Select(next.start, next.end))
-  }
+  fun moveSelectionEnd(delta: Int) = session.moveSelectionEnd(delta)
 
   /** „Копирай“ в лентата за маркиране: страницата връща показания текст и маха маркираното. */
-  fun copySelection() {
-    if (_state.value.selection == null) return
-    _state.update { it.copy(selection = null) }
-    _commands.trySend(TerminalCommand.CopySelection)
-    endPause(OutputPause.EndReason.Copied)
-  }
+  fun copySelection() = session.copySelection()
 
-  fun clearSelection() {
-    _state.update { it.copy(selection = null) }
-    _commands.trySend(TerminalCommand.ClearSelection)
-    endPause(OutputPause.EndReason.Cancelled)
-  }
+  fun clearSelection() = session.clearSelection()
 
   /**
    * Скрол отвъд ръба на историята на телефона (или в TUI без история): същият скрол като
@@ -515,7 +405,7 @@ class TerminalViewModel(
   fun scrollWheel(up: Boolean) {
     cancelJump()
     if (_state.value.phase !is AttachPhase.Attached) return
-    _commands.trySend(TerminalCommand.Wheel(up))
+    session.command(TerminalCommand.Wheel(up))
   }
 
   /** Байтовете, които xterm.js е произвел за скрола от [scrollWheel] (mouse report, стрелки). */
@@ -557,7 +447,7 @@ class TerminalViewModel(
     flushPendingEnter()
     // Вход към програмата: първо се показва задържаният изход, иначе отговорът ѝ идва
     // след стария екран.
-    endPause(OutputPause.EndReason.Input)
+    session.endPause(OutputPause.EndReason.Input)
     if (_state.value.phase !is AttachPhase.Attached) {
       notices.show("Терминалът не е свързан")
       return false
@@ -599,11 +489,15 @@ class TerminalViewModel(
     _state.update { it.copy(suggesting = false) }
   }
 
-  /** Екранът е затворен (entry-то е махнато от стека): host-ът спира потока. */
+  /**
+   * Екранът е затворен (entry-то е махнато от стека). Терминалът остава жив в пула; дали
+   * Mac-ът спира потока, решава пулът (`detach` само без `attach.keep`).
+   */
   override fun onCleared() {
     // Излизане веднага след „Прати“: Enter-ът не бива да остане неизпратен в полето на агента.
     flushPendingEnter()
-    link.detach(contentId, lastAttachId)
+    if (session.observer === mirror) session.observer = null
+    pool.leave(contentId, this)
   }
 
   companion object {
@@ -614,7 +508,7 @@ class TerminalViewModel(
     const val ENTER_DELAY_MS = 150L
 
     /** Колко често чипът „Пауза“ показва нов размер. */
-    const val PAUSE_TICK_MS = 250L
+    const val PAUSE_TICK_MS = TerminalSession.PAUSE_TICK_MS
 
     /**
      * „Най-долу“: редове скрол в един пакет; mouse report-ът е ~13 байта, 100 са ~1,3 KB.
