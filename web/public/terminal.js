@@ -10,6 +10,7 @@
 // xterm.js, преди той да напише отговор.
 
 import { clipboardText } from './osc52.js';
+import { findUrls, isWebUrl, wrappedLine } from './terminal-links.js';
 
 const MIN_FONT = 6;
 const MAX_FONT = 22;
@@ -89,6 +90,7 @@ export class TerminalView {
     this.#blockReplies();
     this.#wireClipboard();
     this.#wireInput();
+    this.#wireLinks();
     new ResizeObserver(() => this.fit()).observe(area);
   }
 
@@ -106,6 +108,51 @@ export class TerminalView {
       const text = clipboardText(data);
       if (text) this.onClipboard(text);
       return true;
+    });
+  }
+
+  /**
+   * http/https адресите в терминала се отварят с клик в нов таб на браузъра. Маркирането с
+   * мишката, което свършва върху адреса, не го отваря. OSC 8 линковете (`linkHandler`) минават
+   * през същата проверка, без питането `confirm()` по подразбиране на xterm.js.
+   *
+   * xterm.js пази отговора на provider-а за реда под мишката, докато тя не мине на друг ред, и
+   * след нов изход на същия ред. Затова при клик адресът се търси наново: стар адрес, който вече
+   * не е на екрана, не се отваря.
+   */
+  #wireLinks() {
+    const open = (url) => {
+      if (isWebUrl(url) && !this.term.hasSelection()) window.open(url, '_blank', 'noopener,noreferrer');
+    };
+    this.term.options.linkHandler = { activate: (_e, url) => open(url) };
+    this.term.registerLinkProvider({
+      provideLinks: (lineNumber, callback) => {
+        const row = lineNumber - 1;
+        const links = this.#linksAround(row)
+          .filter(({ first, last }) => first.y <= row && row <= last.y)
+          .map(({ first, last, lastWidth, url }) => ({
+            // Диапазонът на xterm.js е 1-базиран и включва последната клетка (и на широк знак).
+            range: { start: { x: first.x + 1, y: first.y + 1 }, end: { x: last.x + lastWidth, y: last.y + 1 } },
+            text: url,
+            activate: () => {
+              const now = this.#linksAround(first.y);
+              if (now.some((l) => l.url === url && l.first.x === first.x && l.first.y === first.y)) open(url);
+            },
+          }));
+        callback(links.length ? links : undefined);
+      },
+    });
+  }
+
+  /** Адресите в реда `row` и в пренесените му части, с първата и последната им клетка. */
+  #linksAround(row) {
+    const buffer = this.term.buffer.active;
+    const line = wrappedLine(buffer, row);
+    return findUrls(line.text).map(({ start, end, url }) => {
+      const first = line.cells[start];
+      const last = line.cells[end - 1];
+      const lastWidth = buffer.getLine(last.y)?.getCell(last.x)?.getWidth() || 1;
+      return { first, last, lastWidth, url };
     });
   }
 

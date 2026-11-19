@@ -116,6 +116,11 @@ Navigation 3. compileSdk и targetSdk са 36 (template-ът иска 37, но p
   `TerminalWebView`), не в страницата — Chromium прекъсва докосването на страницата
   (touchcancel), щом сам познае дълго натискане, и плъзгането не стига до JS. Не слагай
   `OnLongClickListener` на WebView-то: и той прекъсва докосването.
+- Линк в терминала (http/https) се отваря с тап: тапът се хваща в Android (`onSingleTapUp` в
+  `TerminalWebView`), страницата дава реда и мястото (`supa.tap` → `SupaBridge.tapText`), а
+  адресът се търси и проверява в `TerminalLinks` (Kotlin, с JVM тестове). Изходът не е доверен:
+  само http/https с host. Regex-ът минава и през ICU на Android (`(?U)` там не работи) — проба в
+  emulator-а, не само JVM тест.
 - Бутоните за маркираното (лентата за маркиране) са в Compose над WebView-то, не в
   страницата. Диапазонът се мести в `TerminalSelection`
   (Kotlin, с JVM тестове); страницата само показва дадения диапазон (`supa.selectRange`) и
@@ -202,6 +207,8 @@ Navigation 3. compileSdk и targetSdk са 36 (template-ът иска 37, но p
   `resize` тръгва само от бутона „Размер по този екран“ (ЗД12). Нищо автоматично.
 - xterm.js не отговаря на въпросите на програмата (parser hooks в `public/terminal.js`): отговаря
   Ghostty на Mac-а.
+- Линковете (http/https и OSC 8) се отварят с клик в нов таб: link provider в `public/terminal.js`,
+  търсенето в `public/terminal-links.js` (същите правила като `TerminalLinks` на телефона).
 - `node web/attach.mjs [таб]` (УА11, проба): един отдалечен таб в локалния терминал (Ghostty в
   локалния Supacode). Самостоятелен процес с своя връзка и ключа на уеб app-а. Въпросите към
   терминала се махат от изхода (`QueryFilter`, същият списък като в `terminal.js`), за да не

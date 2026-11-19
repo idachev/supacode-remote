@@ -1,6 +1,10 @@
 package com.idachev.supacoderemote.ui.terminal
 
 import android.annotation.SuppressLint
+import android.content.ActivityNotFoundException
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -32,6 +36,7 @@ import com.idachev.supacoderemote.protocol.ProtocolCodec
 import com.idachev.supacoderemote.settings.TextSize
 import com.idachev.supacoderemote.terminal.Cell
 import com.idachev.supacoderemote.terminal.TerminalCommand
+import com.idachev.supacoderemote.terminal.TerminalLinks
 import com.idachev.supacoderemote.terminal.TerminalSelection
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -197,6 +202,16 @@ fun TerminalWebView(
         fun input(data: String) {
           main.post { currentOnInput(data) }
         }
+
+        /**
+         * Тап в терминала (`supa.tap`): редът с пренесените му части и индексът на тапнатия знак.
+         * Адрес под пръста се отваря в браузъра; иначе тапът не прави нищо.
+         */
+        @JavascriptInterface
+        fun tapText(text: String, index: Int) {
+          val url = TerminalLinks.urlAt(text, index) ?: return
+          main.post { openInBrowser(context, url) }
+        }
       }, "SupaBridge")
       installSelectionGesture(this)
       loadUrl("file:///android_asset/terminal/index.html")
@@ -253,6 +268,22 @@ private const val TAG = "TerminalWebView"
 private const val GRID_ESTIMATE_DELAY_MS = 500L
 
 /**
+ * Адресът от терминала в браузъра на телефона. Изходът на програмата не е доверен: проверката
+ * за http/https е и тук, точно преди Intent-а. Без `resolveActivity`: без `<queries>` в
+ * manifest-а той връща null и линкът никога не би се отворил.
+ */
+private fun openInBrowser(context: Context, url: String) {
+  if (!TerminalLinks.isWebUrl(url)) return
+  val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).addCategory(Intent.CATEGORY_BROWSABLE)
+  try {
+    context.startActivity(intent)
+  } catch (e: ActivityNotFoundException) {
+    // Адресът не се логва: може да носи ключове или лични данни.
+    Log.w(TAG, "няма app за линка", e)
+  }
+}
+
+/**
  * Маркиране с дълго натискане. Хваща се тук, а не в страницата: щом Chromium сам познае
  * дълго натискане, той прекъсва докосването на страницата (touchcancel) и тя не вижда
  * плъзгането. След дългото натискане WebView-то получава CANCEL (страницата спира да
@@ -270,6 +301,13 @@ private fun installSelectionGesture(webView: WebView) {
       webView.onTouchEvent(cancel)
       cancel.recycle()
       webView.evaluateJavascript("supa.selectStart(${e.x},${e.y})", null)
+    }
+
+    // Тап без движение (скролът не е тап): ако е по адрес, страницата го дава на SupaBridge.tapText.
+    // Събитието остава и за WebView-то.
+    override fun onSingleTapUp(e: MotionEvent): Boolean {
+      webView.evaluateJavascript("supa.tap(${e.x},${e.y})", null)
+      return false
     }
   })
   webView.setOnTouchListener { _, event ->

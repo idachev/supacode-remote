@@ -197,6 +197,85 @@ test('OSC 52 от програмата копира в clipboard-а на бра�
   assert.ok(!/1b5d3532/.test(mock.log().slice(from)), 'отговор с OSC 52 към PTY-то');
 });
 
+/** Средата на знака `offset` от първото срещане на `needle` в показаните редове на терминала. */
+const pointOf = (needle, offset) => page.evaluate(({ needle, offset }) => {
+  for (const row of document.querySelectorAll('.xterm-rows > div')) {
+    let at = row.textContent.indexOf(needle);
+    if (at < 0) continue;
+    at += offset;
+    const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (at < node.length) {
+        const range = document.createRange();
+        range.setStart(node, at);
+        range.setEnd(node, at + 1);
+        const r = range.getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      }
+      at -= node.length;
+    }
+  }
+  return null;
+}, { needle, offset });
+
+/**
+ * Клик като от човек: мишката идва от друг ред. xterm.js пази линковете на реда, над който е
+ * мишката, докато тя не мине на друг ред — и след нов изход на същия ред.
+ */
+async function clickAt(point) {
+  await page.mouse.move(point.x, point.y + 60);
+  await page.mouse.move(point.x - 3, point.y);
+  await page.mouse.move(point.x, point.y);
+  await new Promise((r) => setTimeout(r, 100));
+  await page.mouse.down();
+  await page.mouse.up();
+}
+
+test('http/https адрес и OSC 8 линк в терминала се отварят с клик в нов таб', async (t) => {
+  if (!browser) return t.skip('няма Google Chrome');
+  await page.evaluate(() => {
+    window.opened = [];
+    window.open = (...args) => { window.opened.push(args); return null; };
+  });
+  // Адресът се сглобява от printf, за да не е цял в командата на реда отгоре.
+  await typeInTerminal("clear; printf 'виж https://relay.%s/e2e-link. и %s\\n' example.com край");
+  await waitFor(async () => (await screenText()).includes('виж https://relay.example.com/e2e-link. и край'), 'адресът');
+  await clickAt(await pointOf('виж https://relay.example.com', 10));
+  await waitFor(async () => (await page.evaluate(() => window.opened.length)) === 1, 'отворен линк');
+  assert.deepEqual(await page.evaluate(() => window.opened[0]),
+    ['https://relay.example.com/e2e-link', '_blank', 'noopener,noreferrer']);
+  // Нов изход на същия ред, докато мишката е на реда, но не върху адреса: xterm.js пази стария
+  // отговор на provider-а за реда и после показва стария линк, но той не се отваря, защото адресът
+  // вече не е там (F3). (Мишка върху линка би накарала xterm.js да попита наново.)
+  const old = await pointOf('виж https://relay.example.com', 10);
+  await page.mouse.move(old.x + 500, old.y);
+  await new Promise((r) => setTimeout(r, 100));
+  await typeInTerminal("clear; printf 'обикновен текст без никакъв адрес в него\\n'");
+  await waitFor(async () => (await screenText()).includes('обикновен текст без никакъв'), 'новият ред');
+  await page.mouse.move(old.x, old.y);
+  await new Promise((r) => setTimeout(r, 100));
+  await page.mouse.down();
+  await page.mouse.up();
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(await page.evaluate(() => window.opened.length), 1);
+  await typeInTerminal("clear; printf 'виж https://relay.%s/e2e-link. и %s\\n' example.com край");
+  await waitFor(async () => (await screenText()).includes('виж https://relay.example.com/e2e-link. и край'), 'адресът пак');
+  // Текст до адреса не отваря нищо.
+  await clickAt(await pointOf('и край', 3));
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(await page.evaluate(() => window.opened.length), 1);
+
+  // OSC 8: текстът е друг, отваря се адресът от последователността; javascript: — нищо.
+  await typeInTerminal("clear; printf '\\033]8;;https://relay.example.com/osc8\\033\\\\Документация\\033]8;;\\033\\\\ \\033]8;;javascript:alert(1)\\033\\\\Опасно\\033]8;;\\033\\\\\\n'");
+  await waitFor(async () => (await screenText()).includes('Документация Опасно'), 'OSC 8 линковете');
+  await clickAt(await pointOf('Документация Опасно', 2));
+  await waitFor(async () => (await page.evaluate(() => window.opened.length)) === 2, 'отворен OSC 8 линк');
+  assert.equal(await page.evaluate(() => window.opened[1][0]), 'https://relay.example.com/osc8');
+  await clickAt(await pointOf('Документация Опасно', 15));
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(await page.evaluate(() => window.opened.length), 2);
+});
+
 test('„агент чака“: известие при преход, когато страницата не е пред очите (УА2)', async (t) => {
   if (!browser) return t.skip('няма Google Chrome');
   // Chrome без прозорец не показва известия: записваме ги и казваме, че прозорецът не е на фокус.

@@ -2,9 +2,9 @@
 //
 // Kotlin вика supa.init / write / resize / resizeFailed / reportGrid / scrollPages / scrollToBottom / wheel / copyText;
 // selectStart / selectMove / selectEnd (от дългото натискане в Android), selectRange /
-// copySelection / clearSelection (от лентата за маркиране); страницата вика
+// copySelection / clearSelection (от лентата за маркиране), tap (тап за линковете); страницата вика
 // SupaBridge.ready(), text(), copy(), selection(), selectionGone(), overscroll(), input(),
-// height(), rowHeight(), grid() и gridEstimate().
+// height(), rowHeight(), grid(), gridEstimate() и tapText().
 //
 // Размерът на терминала е винаги този на Mac-а (cols × rows от `attached` и `size`).
 // Страницата никога не го сменя сама: вместо това подбира шрифта така, че всички колони
@@ -422,6 +422,65 @@
   };
   window.supa.clearSelection = function () {
     term.clearSelection();
+  };
+
+  // ---- Линкове: тап по http/https адрес го отваря в браузъра ----
+  //
+  // Тапът се хваща в Android (onSingleTapUp), както дългото натискане: дали WebView-то прави от
+  // тап mouse събитията, които xterm.js чака за своите линкове, не е сигурно. Страницата дава
+  // само реда и мястото на тапа в него; адресът се търси и проверява в Kotlin (TerminalLinks).
+
+  /**
+   * Редът на [cell] заедно с пренесените му части (isWrapped) като един низ и индексът на
+   * тапнатия знак в него. Широк знак (емоджи) заема две клетки, а в низа е един знак, затова
+   * индексът не е колоната. Ред, разбит на две от самия TUI, не се събира. Същото правило има
+   * уеб app-ът (`wrappedLine` в web/public/terminal-links.js, с тестове).
+   *
+   * Широк знак, който не влиза в последната клетка, xterm.js пренася на следващия ред и оставя
+   * клетката празна (без знак, не интервал). Пред пренесен ред такива клетки се пропускат: иначе
+   * интервал би разделил адреса.
+   */
+  function wrappedLineAt(cell) {
+    var buffer = term.buffer.active;
+    var first = cell.row;
+    while (first > 0 && buffer.getLine(first) && buffer.getLine(first).isWrapped) first--;
+    var text = '';
+    var index = -1;
+    for (var y = first; y < buffer.length; y++) {
+      var line = buffer.getLine(y);
+      if (!line || (y > first && !line.isWrapped)) break;
+      var end = line.length;
+      var next = buffer.getLine(y + 1);
+      if (next && next.isWrapped) {
+        while (end > 0 && isUnwritten(line.getCell(end - 1))) end--;
+      }
+      var start = 0;
+      for (var x = 0; x < end; x++) {
+        var c = line.getCell(x);
+        if (!c) continue;
+        // Втората половина на широк знак е празна клетка с ширина 0: тап там е тап по знака.
+        if (c.getWidth() === 0) {
+          if (y === cell.row && x === cell.col) index = start;
+          continue;
+        }
+        start = text.length;
+        if (y === cell.row && x === cell.col) index = start;
+        text += c.getChars() || ' ';
+      }
+    }
+    return { text: text, index: index };
+  }
+
+  function isUnwritten(c) {
+    return !!c && c.getWidth() === 1 && c.getChars() === '';
+  }
+
+  window.supa.tap = function (x, y) {
+    // Тап при маркирано само маха маркираното.
+    if (reported !== null || selectAnchor) return;
+    var p = clientPoint(x, y);
+    var line = wrappedLineAt(cellAt(p.x, p.y));
+    if (line.index >= 0 && /https?:\/\//i.test(line.text) && bridge.tapText) bridge.tapText(line.text, line.index);
   };
 
   var touch = null; // { startX, startY, lastX, lastY, over, overDir, axis }
