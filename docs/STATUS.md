@@ -10,7 +10,9 @@
   клик в нов таб (и OSC 8 линкове, без `confirm()` на xterm.js). Отваря се само http/https с host:
   изходът на програмата не е доверен. Търсенето е в `TerminalLinks` (Kotlin) и
   `web/public/terminal-links.js` с еднакви правила и тестове. Пренесен ред (`isWrapped`) се
-  събира; ред, разбит от самия TUI, не.
+  събира; ред, разбит от самия TUI, не — но Claude Code слага пълния адрес в OSC 8 на всяка част
+  и той се отваря цял и на двете места (проба: суровият изход на Claude Code 2.1.328). При
+  програма, която следи мишката, уеб линкът е с ⌘+клик (ЛК1, решение на собственика).
 - **УА12. Mock: съобщенията на отдалечения клиент в Supacode.** Готово (2026-11-18): mock-ът
   говори `caps`, `attach keep`, `layout` (минимален модел), `watch`, `tab.close`, `pane.split`,
   `pane.close`, `tab.new paneId` и `resize hold` от branch `remote-client-host` на fork-а, за да се

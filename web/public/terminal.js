@@ -121,10 +121,13 @@ export class TerminalView {
    * не е на екрана, не се отваря.
    */
   #wireLinks() {
-    const open = (url) => {
+    // Програма, която следи мишката, получава и клика: тогава линкът е с ⌘+клик, както в Ghostty
+    // (ЛК1), иначе всеки клик в нея би отварял и таб.
+    const open = (url, e) => {
+      if (this.term.modes.mouseTrackingMode !== 'none' && !e?.metaKey) return;
       if (isWebUrl(url) && !this.term.hasSelection()) window.open(url, '_blank', 'noopener,noreferrer');
     };
-    this.term.options.linkHandler = { activate: (_e, url) => open(url) };
+    this.term.options.linkHandler = { activate: (e, url) => open(url, e) };
     this.term.registerLinkProvider({
       provideLinks: (lineNumber, callback) => {
         const row = lineNumber - 1;
@@ -134,9 +137,9 @@ export class TerminalView {
             // Диапазонът на xterm.js е 1-базиран и включва последната клетка (и на широк знак).
             range: { start: { x: first.x + 1, y: first.y + 1 }, end: { x: last.x + lastWidth, y: last.y + 1 } },
             text: url,
-            activate: () => {
+            activate: (e) => {
               const now = this.#linksAround(first.y);
-              if (now.some((l) => l.url === url && l.first.x === first.x && l.first.y === first.y)) open(url);
+              if (now.some((l) => l.url === url && l.first.x === first.x && l.first.y === first.y)) open(url, e);
             },
           }));
         callback(links.length ? links : undefined);

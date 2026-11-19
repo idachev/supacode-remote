@@ -4,7 +4,7 @@
 // selectStart / selectMove / selectEnd (от дългото натискане в Android), selectRange /
 // copySelection / clearSelection (от лентата за маркиране), tap (тап за линковете); страницата вика
 // SupaBridge.ready(), text(), copy(), selection(), selectionGone(), overscroll(), input(),
-// height(), rowHeight(), grid(), gridEstimate() и tapText().
+// height(), rowHeight(), grid(), gridEstimate(), tapText() и tapUrl().
 //
 // Размерът на терминала е винаги този на Mac-а (cols × rows от `attached` и `size`).
 // Страницата никога не го сменя сама: вместо това подбира шрифта така, че всички колони
@@ -33,6 +33,9 @@
     // Mac-ът праща сурови VT байтове; `\n` си е `\n`.
     convertEol: false,
     minimumContrastRatio: 1,
+    // OSC 8 линковете се отварят от supa.tap (oscUrlAt), не от xterm.js: неговото отваряне по
+    // подразбиране пита с confirm(), а диалог в WebView-то би спрял страницата.
+    linkHandler: { activate: function () {} },
     theme: {
       background: '#1e1e1e',
       foreground: '#d4d4d4',
@@ -475,11 +478,48 @@
     return !!c && c.getWidth() === 1 && c.getChars() === '';
   }
 
+  /**
+   * OSC 8 адресът на [cell] или null. Claude Code чупи дълъг адрес на два реда сам (не е пренос
+   * на xterm.js), но всяка част носи пълния адрес в OSC 8 — затова той е пред търсенето в текста,
+   * което би дало само първата част. xterm.js няма публичен API за него: пита се неговият OSC 8
+   * provider (вътрешен; xterm.js е вграден, 5.5.0). Ако го няма или отговори по-късно — null.
+   */
+  function oscUrlAt(cell) {
+    var found = null;
+    try {
+      var providers = term._core._linkProviderService.linkProviders;
+      for (var i = 0; i < providers.length && found === null; i++) {
+        providers[i].provideLinks(cell.row + 1, function (links) {
+          (links || []).forEach(function (link) {
+            if (found === null && rangeHas(link.range, cell)) found = link.text;
+          });
+        });
+      }
+    } catch (e) {
+      return null;
+    }
+    return found;
+  }
+
+  /** Диапазонът на xterm.js е 1-базиран и включва края. */
+  function rangeHas(range, cell) {
+    var x = cell.col + 1, y = cell.row + 1;
+    var afterStart = y > range.start.y || (y === range.start.y && x >= range.start.x);
+    var beforeEnd = y < range.end.y || (y === range.end.y && x <= range.end.x);
+    return afterStart && beforeEnd;
+  }
+
   window.supa.tap = function (x, y) {
     // Тап при маркирано само маха маркираното.
     if (reported !== null || selectAnchor) return;
     var p = clientPoint(x, y);
-    var line = wrappedLineAt(cellAt(p.x, p.y));
+    var cell = cellAt(p.x, p.y);
+    var osc = oscUrlAt(cell);
+    if (osc !== null) {
+      if (bridge.tapUrl) bridge.tapUrl(osc);
+      return;
+    }
+    var line = wrappedLineAt(cell);
     if (line.index >= 0 && /https?:\/\//i.test(line.text) && bridge.tapText) bridge.tapText(line.text, line.index);
   };
 

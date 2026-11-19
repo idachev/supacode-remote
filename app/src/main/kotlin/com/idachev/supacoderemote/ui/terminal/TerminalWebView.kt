@@ -212,6 +212,12 @@ fun TerminalWebView(
           val url = TerminalLinks.urlAt(text, index) ?: return
           main.post { openInBrowser(context, url) }
         }
+
+        /** Тап по OSC 8 линк (`supa.tap`): адресът от последователността, не от текста. */
+        @JavascriptInterface
+        fun tapUrl(url: String) {
+          main.post { openInBrowser(context, url) }
+        }
       }, "SupaBridge")
       installSelectionGesture(this)
       loadUrl("file:///android_asset/terminal/index.html")

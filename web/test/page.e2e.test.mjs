@@ -274,6 +274,38 @@ test('http/https адрес и OSC 8 линк в терминала се отв�
   await clickAt(await pointOf('Документация Опасно', 15));
   await new Promise((r) => setTimeout(r, 300));
   assert.equal(await page.evaluate(() => window.opened.length), 2);
+
+  // Claude Code чупи дълъг адрес на два реда сам (не е пренос на xterm.js), но двете части носят
+  // пълния адрес в OSC 8: отваря се целият, не първата част от текста.
+  const full = 'https://relay.example.com/long/first-second';
+  await typeInTerminal(`clear; printf '\\033]8;;${full}\\033\\\\https://relay.example.com/long/first-\\033]8;;\\033\\\\\\n\\033]8;;${full}\\033\\\\second\\033]8;;\\033\\\\ край\\n'`);
+  await waitFor(async () => (await screenText()).includes('second край'), 'адресът на два реда');
+  await clickAt(await pointOf('https://relay.example.com/long/first-', 10));
+  await waitFor(async () => (await page.evaluate(() => window.opened.length)) === 3, 'първата част');
+  await clickAt(await pointOf('second край', 2));
+  await waitFor(async () => (await page.evaluate(() => window.opened.length)) === 4, 'втората част');
+  assert.deepEqual(await page.evaluate(() => window.opened.slice(2).map((o) => o[0])), [full, full]);
+});
+
+test('програма, която следи мишката: обикновеният клик е неин, линкът се отваря с ⌘+клик (ЛК1)', async (t) => {
+  if (!browser) return t.skip('няма Google Chrome');
+  await page.evaluate(() => { window.opened = []; });
+  // `cat` поема mouse report-ите, за да не стигнат до реда на shell-а.
+  await typeInTerminal("clear; printf '\\033[?1000h\\033[?1006hвиж https://relay.%s/mouse\\n' example.com; cat > /dev/null");
+  await waitFor(async () => (await screenText()).includes('виж https://relay.example.com/mouse'), 'адресът');
+  const from = mock.log().length;
+  await clickAt(await pointOf('виж https://relay.example.com', 10));
+  await waitFor(() => /text: '\\u001b\[<0;/.test(mock.log().slice(from)), 'кликът при програмата');
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(await page.evaluate(() => window.opened.length), 0);
+  await page.keyboard.down('Meta');
+  await clickAt(await pointOf('виж https://relay.example.com', 10));
+  await page.keyboard.up('Meta');
+  await waitFor(async () => (await page.evaluate(() => window.opened.length)) === 1, '⌘+клик');
+  assert.equal(await page.evaluate(() => window.opened[0][0]), 'https://relay.example.com/mouse');
+  await page.locator('.xterm-helper-textarea').focus();
+  await page.keyboard.press('Control+c');
+  await typeInTerminal("printf '\\033[?1006l\\033[?1000l'; clear");
 });
 
 test('„агент чака“: известие при преход, когато страницата не е пред очите (УА2)', async (t) => {
