@@ -422,6 +422,53 @@ class RelayLanTest {
     assertFalse(fromClientOnLan.any { it.contains("watch") })
   }
 
+  /**
+   * Mac-ът може да се върне с друга версия на Supacode, затова caps на relay сокета не оцеляват
+   * `hostOnline:false`: до новия `hello` са `null` и първият attach е без keep (ДЗ8b), както в уеб.
+   */
+  @Test
+  fun `Mac-ът изчезва от relay-а — caps на сокета чакат новия hello`() = runBlocking<Unit> {
+    val hellos = AtomicInteger(0)
+    relayServer.enqueue(MockResponse.Builder().webSocketUpgrade(object : WebSocketListener() {
+      override fun onOpen(webSocket: WebSocket, response: Response) {
+        openSockets.incrementAndGet()
+        relaySocket = webSocket
+        webSocket.send("""{"t":"relay","hostOnline":true}""")
+      }
+
+      override fun onMessage(webSocket: WebSocket, text: String) {
+        fromClientOnRelay.put(text)
+        // Само първият hello получава отговор сам; вторият — когато тестът реши.
+        if (text.contains("\"hello\"") && hellos.incrementAndGet() == 1) {
+          webSocket.send("""{"t":"hello","v":1,"host":"Test Mac"$relayCaps}""")
+        }
+      }
+
+      override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+        webSocket.close(1000, null)
+      }
+
+      override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+        openSockets.decrementAndGet()
+      }
+
+      override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+        openSockets.decrementAndGet()
+      }
+    }).build())
+    val relay = client()
+    withTimeout(5_000) { relay.hostCaps.first { it == setOf("watch") } }
+    relaySocket!!.send("""{"t":"relay","hostOnline":false}""")
+    withTimeout(5_000) { relay.path.first { it == LinkPath.NONE } }
+    relaySocket!!.send("""{"t":"relay","hostOnline":true}""")
+    withTimeout(5_000) { relay.path.first { it == LinkPath.RELAY } }
+    assertNull(relay.hostCaps.value)
+    nextMatching(fromClientOnRelay) { it.contains("\"hello\"") }
+    nextMatching(fromClientOnRelay) { it.contains("\"hello\"") }
+    relaySocket!!.send("""{"t":"hello","v":1,"host":"Test Mac","caps":["attach.keep"]}""")
+    withTimeout(5_000) { relay.hostCaps.first { it == setOf("attach.keep") } }
+  }
+
   private val officeStatus =
     """{"t":"relay","hostOnline":true,"host":"office","hosts":[{"id":"office","name":"Office Mac","online":true}]}"""
 

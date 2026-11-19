@@ -584,6 +584,9 @@ class RelayClient(
     if (online && !_hostOnline.value) {
       webSocket.send(ProtocolCodec.encode(HelloRequest()))
     }
+    // Mac-ът може да се върне с друга версия: до новия `hello` caps не са известни, а първият
+    // attach е без keep (ДЗ8b).
+    if (!online) forgetCaps(webSocket)
     setHostOnline(online, attempt)
   }
 
