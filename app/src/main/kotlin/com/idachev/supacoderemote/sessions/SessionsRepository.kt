@@ -14,7 +14,8 @@ import kotlinx.coroutines.launch
 
 /**
  * Последният `list` от host-а. „Сесии“ и „Worktree“ четат оттук и питат на 3 s, докато
- * се виждат, затова отговорът се пази на едно място, а не във всеки екран.
+ * се виждат (или Mac-ът го праща сам с `watch`, [ListWatch]), затова отговорът се пази на едно
+ * място, а не във всеки екран.
  */
 class SessionsRepository(private val relay: RelayClient, scope: CoroutineScope) {
 

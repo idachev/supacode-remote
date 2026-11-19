@@ -144,6 +144,133 @@ class TerminalStreamGateTest {
     assertFalse(gate.isStaleDetach("c9", null))
   }
 
+  // ---- attach keep: няколко терминала на един път (ДЗ14–ДЗ16) ----
+
+  private fun attachedFor(id: Int, contentId: String) = Attached(id = id, contentId = contentId, cols = 80, rows = 24)
+
+  /** A и B са живи по relay-а с keep: A е видимият, B — скритият. */
+  private fun twoKeptOnRelay() {
+    gate.attachSent(relay, 1, "A", keep = true)
+    assertTrue(deliver(relay, attachedFor(1, "A")))
+    gate.attachSent(relay, 2, "B", keep = true)
+    assertTrue(deliver(relay, attachedFor(2, "B")))
+  }
+
+  @Test
+  fun `два терминала с keep на един път текат заедно`() {
+    twoKeptOnRelay()
+    assertTrue(deliver(relay, Output("A", "a")))
+    assertTrue(deliver(relay, Output("B", "b")))
+    assertTrue(gate.isAttached("A"))
+    assertTrue(gate.isAttached("B"))
+  }
+
+  @Test
+  fun `attach без keep на пътя спира другите терминали там`() {
+    twoKeptOnRelay()
+    gate.attachSent(relay, 3, "C")
+    assertFalse(deliver(relay, Output("A", "a")))
+    assertFalse(deliver(relay, Output("B", "b")))
+    assertFalse(gate.isAttached("A"))
+    assertTrue(deliver(relay, attachedFor(3, "C")))
+    assertTrue(deliver(relay, Output("C", "c")))
+  }
+
+  /** RF1: щом видимият е по LAN, по relay-а не остава нито един attach — и скритите (ДЗ8a). */
+  @Test
+  fun `след LAN attached на видимия скритите на relay-а получават detach`() {
+    twoKeptOnRelay()
+    gate.attachSent(lan, 3, "A", keep = true)
+    val handoff = gate.accept(lan, attachedFor(3, "A"))
+    assertTrue(handoff.deliver)
+    assertEquals(listOf(relay to "A", relay to "B"), handoff.detach)
+    assertFalse(deliver(relay, Output("B", "hidden-late")))
+    assertFalse(deliver(relay, Output("A", "relay-late")))
+    assertTrue(deliver(lan, Output("A", "lan-live")))
+    assertFalse(gate.isAttached("B"))
+  }
+
+  @Test
+  fun `изходът на видимия по relay тече до LAN attached`() {
+    twoKeptOnRelay()
+    gate.attachSent(lan, 3, "A", keep = true)
+    assertTrue(deliver(relay, Output("A", "gap")))
+    assertTrue(deliver(relay, Output("B", "hidden")))
+    // Кадър на A по LAN преди неговия attached (стар поток) не минава.
+    assertFalse(deliver(lan, Output("A", "early")))
+  }
+
+  @Test
+  fun `closed на пътя маха всички терминали по него`() {
+    twoKeptOnRelay()
+    gate.closed(relay)
+    assertFalse(gate.isAttached("A"))
+    assertFalse(gate.isAttached("B"))
+    assertFalse(deliver(relay, Output("A", "a")))
+    assertFalse(deliver(relay, Output("B", "b")))
+  }
+
+  /** RF4: detach на скрития спира само него. */
+  @Test
+  fun `закъснял detach на скрит не спира видимия`() {
+    twoKeptOnRelay()
+    assertEquals(emptyList<Pair<Any, String>>(), gate.detachSent(relay, "B"))
+    assertTrue(deliver(relay, Output("A", "a")))
+    assertFalse(deliver(relay, Output("B", "b")))
+    assertTrue(gate.isAttached("A"))
+    assertFalse(gate.isAttached("B"))
+  }
+
+  /**
+   * Скритият B е тръгнал с attach по relay-а, но още без отговор, когато видимият A мине на LAN.
+   * detach-ът по relay-а отменя и него: закъснелият му `attached` там не бива да стане текущ и да
+   * спре A по LAN.
+   */
+  @Test
+  fun `detach при смяна на пътя отменя и чакащия attach там`() {
+    gate.attachSent(relay, 1, "A", keep = true)
+    assertTrue(deliver(relay, attachedFor(1, "A")))
+    gate.attachSent(relay, 2, "B", keep = true)
+    gate.attachSent(lan, 3, "A", keep = true)
+    assertEquals(listOf(relay to "A", relay to "B"), gate.accept(lan, attachedFor(3, "A")).detach)
+    val late = gate.accept(relay, attachedFor(2, "B"))
+    assertFalse(late.deliver)
+    assertEquals(emptyList<Pair<Any, String>>(), late.detach)
+    assertTrue(deliver(lan, Output("A", "lan-live")))
+    assertTrue(gate.isAttached("A"))
+  }
+
+  /**
+   * ПБ1 (ДЗ8a): нова сесия по LAN — скритият B получава detach по relay-а веднага, а видимият A
+   * тече по relay-а до своя attached по LAN (АЦ2).
+   */
+  @Test
+  fun `detach на скрит по другите пътища не пипа текущия път`() {
+    twoKeptOnRelay()
+    gate.attachSent(lan, 3, "A", keep = true)
+    assertEquals(listOf(relay to "B"), gate.takeOtherPaths("B", current = lan))
+    assertFalse(deliver(relay, Output("B", "hidden-late")))
+    assertFalse(gate.isAttached("B"))
+    assertTrue(deliver(relay, Output("A", "gap")))
+    assertEquals(listOf(relay to "A"), gate.accept(lan, attachedFor(3, "A")).detach)
+    // По текущия път нищо не се маха: hostOnline false → true на същия сокет.
+    gate.attachSent(lan, 4, "C", keep = true)
+    assertTrue(deliver(lan, attachedFor(4, "C")))
+    assertEquals(emptyList<Pair<Any, String>>(), gate.takeOtherPaths("C", current = lan))
+    assertTrue(deliver(lan, Output("C", "c")))
+  }
+
+  /** Както днес с един чакащ attach: attach без keep отменя чакащия attach на друг терминал по пътя. */
+  @Test
+  fun `attach без keep отменя чакащия attach на друг терминал по същия път`() {
+    gate.attachSent(relay, 1, "A", keep = true)
+    gate.attachSent(relay, 2, "B")
+    assertFalse(gate.isAttached("A"))
+    assertFalse(deliver(relay, attachedFor(1, "A")))
+    assertTrue(deliver(relay, attachedFor(2, "B")))
+    assertTrue(deliver(relay, Output("B", "b")))
+  }
+
   /** detach по LAN, докато relay-ят носи потока: relay кадрите вече не минават. */
   @Test
   fun `detach по другия път спира и текущия път`() {

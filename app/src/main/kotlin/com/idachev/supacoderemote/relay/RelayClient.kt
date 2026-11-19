@@ -11,6 +11,7 @@ import com.idachev.supacoderemote.protocol.ProtocolCodec
 import com.idachev.supacoderemote.protocol.RelayStatus
 import com.idachev.supacoderemote.protocol.RelayUrl
 import com.idachev.supacoderemote.protocol.ServerMessage
+import com.idachev.supacoderemote.protocol.WatchRequest
 import com.idachev.supacoderemote.settings.HostSelection
 import com.idachev.supacoderemote.settings.MemoryHostSelection
 import com.idachev.supacoderemote.settings.RelaySettings
@@ -74,8 +75,28 @@ interface HostLink {
    */
   fun detach(contentId: String, lastAttachId: Int?): Boolean = send(DetachRequest(contentId))
 
+  /**
+   * ДЗ8a: скрит таб след нова сесия — `detach` по пътищата, по които Mac-ът още го държи, освен
+   * текущия (relay сокетът при преминаване на LAN). Видимият не минава оттук: неговият стар поток
+   * тече до `attached` по новия път ([TerminalStreamGate], АЦ2). По подразбиране нищо — за
+   * fake-овете в тестовете, които имат един път.
+   */
+  fun detachOtherPaths(contentId: String) {}
+
   /** Id за заявка, която чака отговор със същото `id`. */
   fun nextId(): Int
+
+  /**
+   * `caps` от `hello` на сокета, по който вървят заявките сега (relay или LAN). `null` — няма път
+   * или `hello` по този сокет още не е дошъл; тогава `watch` и `keep` не се ползват. По
+   * подразбиране `null`, за да не се пипат fake-овете в тестовете.
+   */
+  val hostCaps: StateFlow<Set<String>?> get() = NO_CAPS
+
+  companion object {
+    /** Връзка, която не знае `caps` — значи стар Mac. */
+    val NO_CAPS: StateFlow<Set<String>?> = MutableStateFlow<Set<String>?>(null).asStateFlow()
+  }
 }
 
 /**
@@ -174,6 +195,23 @@ class RelayClient(
    */
   private val _path = MutableStateFlow(LinkPath.NONE)
   val path: StateFlow<LinkPath> = _path.asStateFlow()
+
+  /**
+   * `caps` от последния `hello` на всеки жив сокет (relay сокетът, LAN сесията). По сокет, а не за
+   * Mac-а: при връщане LAN → relay нов `hello` по relay-а не тръгва, а caps-ът му трябва (ДЗ8b).
+   * Пази се с [lock].
+   */
+  private val capsBySocket = HashMap<Any, Set<String>>()
+
+  private val _hostCaps = MutableStateFlow<Set<String>?>(null)
+  override val hostCaps: StateFlow<Set<String>?> = _hostCaps.asStateFlow()
+
+  /**
+   * Сокетът, по който последно е тръгнал `watch` с `on:true`. При смяна relay → LAN relay сокетът
+   * остава отворен като резерва, а Mac-ът продължава да праща списъка по него, докато не чуе
+   * `on:false` (ДЗ8a). Пази се с [lock].
+   */
+  private var watchSocket: Any? = null
 
   @Volatile private var lan: LanSession? = null
   @Volatile private var lanLastFrameAt = 0L
@@ -281,6 +319,7 @@ class RelayClient(
   /** По LAN, ако е горе, иначе по relay-а. Relay сокетът остава отворен като резерва. */
   override fun send(message: ClientMessage): Boolean {
     val text = ProtocolCodec.encode(message)
+    if (message is WatchRequest) return sendWatch(message, text)
     if (message !is AttachRequest && message !is DetachRequest) return sendText(text)
     // Под streamLock-а: отговорът по пътя не може да бъде решен, преди gate да знае за заявката.
     synchronized(streamLock) {
@@ -292,7 +331,7 @@ class RelayClient(
         else -> return false
       }
       when (message) {
-        is AttachRequest -> gate.attachSent(via, message.id, message.contentId)
+        is AttachRequest -> gate.attachSent(via, message.id, message.contentId, keep = message.keep == true)
         is DetachRequest -> sendDetaches(gate.detachSent(via, message.contentId))
       }
       return true
@@ -307,6 +346,13 @@ class RelayClient(
       // host-ът е забравил attach-а, а нова връзка не бива да праща нищо преди hostOnline:true.
       if (_hostSession.value == null || !gate.isAttached(contentId)) return true
       return send(DetachRequest(contentId))
+    }
+  }
+
+  override fun detachOtherPaths(contentId: String) {
+    synchronized(streamLock) {
+      val current = socketFor(_path.value) ?: return
+      sendDetaches(gate.takeOtherPaths(contentId, current))
     }
   }
 
@@ -336,9 +382,68 @@ class RelayClient(
     synchronized(streamLock) { gate.closed(source) }
   }
 
-  private fun sendText(text: String): Boolean {
-    lan?.let { if (it.send(text)) return true }
-    return socket?.send(text) ?: false
+  private fun sendText(text: String): Boolean = sendTextVia(text) != null
+
+  /** Сокетът, по който е тръгнал [text], или `null`, ако не е тръгнал. */
+  private fun sendTextVia(text: String): Any? {
+    lan?.let { if (it.send(text)) return it }
+    socket?.let { if (it.send(text)) return it }
+    return null
+  }
+
+  /**
+   * Под [lock], не под [streamLock]: смяната на пътя ([updateRouteLocked]) чете [watchSocket] под
+   * [lock], а редът е винаги [lock] → [streamLock].
+   */
+  private fun sendWatch(message: WatchRequest, text: String): Boolean {
+    synchronized(lock) {
+      val via = sendTextVia(text) ?: return false
+      watchSocket = if (message.on) via else null
+      return true
+    }
+  }
+
+  /** `hello` от свързания Mac по [source]: неговите caps, ако сокетът още е жив. */
+  private fun rememberCaps(source: Any, caps: List<String>) {
+    synchronized(lock) {
+      if (source !== socket && source !== lan) return
+      capsBySocket[source] = caps.toSet()
+      publishCapsLocked(_path.value)
+    }
+  }
+
+  private fun forgetCaps(source: Any) {
+    synchronized(lock) {
+      capsBySocket.remove(source)
+      publishCapsLocked(_path.value)
+    }
+  }
+
+  private fun socketFor(route: LinkPath): Any? = when (route) {
+    LinkPath.LAN -> lan
+    LinkPath.RELAY -> socket
+    LinkPath.NONE -> null
+  }
+
+  private fun publishCapsLocked(route: LinkPath) {
+    _hostCaps.value = socketFor(route)?.let { capsBySocket[it] }
+  }
+
+  /**
+   * Пътят се е сменил: `watch` по стария сокет, ако той още е отворен, спира с `on:false` — на
+   * практика relay → LAN, където relay сокетът остава само за ping. Към офлайн host ([route] NONE)
+   * не тръгва нищо; там Mac-ът вече е забравил watch-а заедно с връзката.
+   */
+  private fun stopStaleWatchLocked(route: LinkPath) {
+    val old = watchSocket ?: return
+    if (old === socketFor(route)) return
+    watchSocket = null
+    if (route == LinkPath.NONE) return
+    val text = ProtocolCodec.encode(WatchRequest(nextId(), on = false))
+    when {
+      old === socket -> socket?.send(text)
+      old === lan -> lan?.send(text)
+    }
   }
 
   private fun restartLocked() {
@@ -349,6 +454,9 @@ class RelayClient(
     attempts.incrementAndGet()
     socket = null
     closeLanLocked()
+    // Новата връзка почва без caps и без watch: Mac-ът ги е забравил заедно със старата.
+    capsBySocket.clear()
+    watchSocket = null
     _hostOnline.value = false
     updateRouteLocked()
     _boundHostId.value = selection.selectedHostId.value
@@ -415,7 +523,10 @@ class RelayClient(
         when (message) {
           is RelayStatus -> if (!onRelayStatus(webSocket, message, attempt)) return
           is HelloReply -> {
-            if (!isForeignHello(message)) onOwnHello(message)
+            if (!isForeignHello(message)) {
+              onOwnHello(message)
+              rememberCaps(webSocket, message.caps)
+            }
             onRelayHello(message)
           }
           else -> Unit
@@ -460,6 +571,7 @@ class RelayClient(
       keepalive.cancel()
       if (socket === ws) socket = null
       sourceClosed(ws)
+      forgetCaps(ws)
       // Нормално затваряне при отиване във фон; при вече паднала връзка не прави нищо.
       ws.close(1000, null)
       setHostOnline(false, attempt)
@@ -487,6 +599,9 @@ class RelayClient(
     if (online && !_hostOnline.value) {
       webSocket.send(ProtocolCodec.encode(HelloRequest()))
     }
+    // Mac-ът може да се върне с друга версия: до новия `hello` caps не са известни, а първият
+    // attach е без keep (ДЗ8b).
+    if (!online) forgetCaps(webSocket)
     setHostOnline(online, attempt)
   }
 
@@ -505,7 +620,10 @@ class RelayClient(
       _hostOnline.value -> LinkPath.RELAY
       else -> LinkPath.NONE
     }
+    // caps преди пътя и сесията: който види новата сесия, вижда и caps на нейния сокет, не на стария.
+    publishCapsLocked(route)
     if (route == _path.value) return
+    stopStaleWatchLocked(route)
     _path.value = route
     if (route == LinkPath.NONE) {
       _hostSession.value = null
@@ -589,13 +707,17 @@ class RelayClient(
       lanLastFrameAt = System.currentTimeMillis()
       val message = ProtocolCodec.decode(text) ?: return
       // `lan` в hello по самия LAN не значи нищо ново.
-      if (message is HelloReply) onOwnHello(message)
+      if (message is HelloReply) {
+        onOwnHello(message)
+        rememberCaps(session, message.caps)
+      }
       deliver(session, message)
     }
 
     override fun onClosed(session: LanSession, reason: String) {
       sourceClosed(session)
       synchronized(lock) {
+        capsBySocket.remove(session)
         if (lan !== session) return
         lan = null
         lanKeepalive?.cancel()

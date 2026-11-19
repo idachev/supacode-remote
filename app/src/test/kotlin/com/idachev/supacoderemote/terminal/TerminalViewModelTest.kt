@@ -18,7 +18,9 @@ import com.idachev.supacoderemote.protocol.Suggestions
 import com.idachev.supacoderemote.protocol.TerminalBytes
 import com.idachev.supacoderemote.protocol.TerminalKeys
 import com.idachev.supacoderemote.relay.HostLink
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -46,6 +48,7 @@ class TerminalViewModelTest {
   private class FakeLink : HostLink {
     override val messages = MutableSharedFlow<ServerMessage>(extraBufferCapacity = 64)
     override val hostSession = MutableStateFlow<Int?>(null)
+    override val hostCaps = MutableStateFlow<Set<String>?>(null)
     val sent = mutableListOf<ClientMessage>()
     var up = true
     private var id = 0
@@ -63,12 +66,19 @@ class TerminalViewModelTest {
   private lateinit var store: ViewModelStore
   private lateinit var vm: TerminalViewModel
 
+  /** Терминалът живее в пула; scope-ът му е на същия тестов dispatcher, както main. */
+  private lateinit var pool: TerminalPool
+
+  private fun newPool(pauseCapBytes: Long = OutputPause.CAP_BYTES) =
+    TerminalPool(link, Notices(), CoroutineScope(SupervisorJob() + dispatcher), pauseCapBytes = pauseCapBytes)
+
   @Before
   fun setUp() {
     Dispatchers.setMain(dispatcher)
     link = FakeLink()
     store = ViewModelStore()
-    vm = TerminalViewModel(link, Notices(), "c1", suggestTimeoutMs = 5_000, nowMs = { dispatcher.scheduler.currentTime })
+    pool = newPool()
+    vm = TerminalViewModel(link, Notices(), "c1", pool, suggestTimeoutMs = 5_000, nowMs = { dispatcher.scheduler.currentTime })
     store.put("vm", vm)
   }
 
@@ -267,7 +277,7 @@ class TerminalViewModelTest {
   @Test
   fun `скрол отвъд историята иска скрол като от trackpad-а, само ако е включено`() = runTest(dispatcher) {
     var enabled = true
-    val vm2 = TerminalViewModel(link, Notices(), "c1", suggestTimeoutMs = 5_000, overscrollToProgram = { enabled })
+    val vm2 = TerminalViewModel(link, Notices(), "c1", pool, suggestTimeoutMs = 5_000, overscrollToProgram = { enabled })
     store.put("vm2", vm2)
     link.hostSession.value = 1
     runCurrent()
@@ -615,7 +625,7 @@ class TerminalViewModelTest {
   @Test
   fun `над тавана паузата спира сама и маркираното се отменя`() = runTest(dispatcher) {
     store.clear()
-    vm = TerminalViewModel(link, Notices(), "c1", suggestTimeoutMs = 5_000, pauseCapBytes = 3)
+    vm = TerminalViewModel(link, Notices(), "c1", newPool(pauseCapBytes = 3), suggestTimeoutMs = 5_000)
     store = ViewModelStore().also { it.put("vm", vm) }
     val commands = attached()
     vm.onSelection(oneCell)
@@ -660,6 +670,46 @@ class TerminalViewModelTest {
     assertEquals(DetachRequest("c1"), link.sent.last())
   }
 
+  /** ДЗ17: с attach.keep терминалът остава жив в пула — връщането към таба е без мрежа. */
+  @Test
+  fun `с attach keep затварянето на екрана не праща detach`() = runTest(dispatcher) {
+    link.hostCaps.value = setOf("attach.keep")
+    link.hostSession.value = 1
+    runCurrent()
+    vm.onWebReady()
+    emit(Attached(1, "c1", 120, 40))
+    store.clear()
+    runCurrent()
+    assertTrue(link.sent.none { it is DetachRequest })
+    assertEquals(listOf("c1"), pool.sessions.map { it.contentId })
+    // Нов екран на същия таб: същият терминал, без attach, вече закачен.
+    val again = TerminalViewModel(link, Notices(), "c1", pool)
+    store = ViewModelStore().also { it.put("vm", again) }
+    runCurrent()
+    assertEquals(1, link.sent.count { it is AttachRequest })
+    assertEquals(AttachPhase.Attached(120, 40), again.state.value.phase)
+  }
+
+  /** ДЗ19: екранът е скрит (друг екран отгоре, завъртане) — изходът чака и идва при показване. */
+  @Test
+  fun `скрит екран не рисува, а при показване изходът идва наведнъж`() = runTest(dispatcher) {
+    link.hostCaps.value = setOf("attach.keep")
+    link.hostSession.value = 1
+    runCurrent()
+    vm.onWebReady()
+    val commands = collectCommands()
+    emit(Attached(1, "c1", 120, 40))
+    commands.clear()
+    vm.onHidden()
+    emit(Output("c1", "aGk="))
+    assertTrue(commands.isEmpty())
+    vm.onShown()
+    runCurrent()
+    assertEquals(listOf<TerminalCommand>(TerminalCommand.Write("aGk=")), commands)
+    assertEquals(1, link.sent.count { it is AttachRequest })
+    assertTrue(link.sent.none { it is DetachRequest })
+  }
+
   @Test
   fun `по подразбиране двете ленти са скрити и терминалът е на цял екран`() {
     assertEquals(TerminalBars(topBar = false, input = false), vm.state.value.bars)
@@ -680,11 +730,11 @@ class TerminalViewModelTest {
 
   @Test
   fun `следващият таб тръгва със скрити ленти, дори предишният да е оставен с показани`() {
-    val first = TerminalViewModel(link, Notices(), "c1")
+    val first = TerminalViewModel(link, Notices(), "c1", pool)
     store.put("first", first)
     first.toggleTopBar()
     first.setInputShown(true)
-    val second = TerminalViewModel(link, Notices(), "c2")
+    val second = TerminalViewModel(link, Notices(), "c2", pool)
     store.put("second", second)
     assertEquals(TerminalBars(topBar = false, input = false), second.state.value.bars)
     assertEquals(TerminalBars(topBar = true, input = true), first.state.value.bars)

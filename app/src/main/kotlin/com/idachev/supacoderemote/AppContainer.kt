@@ -1,14 +1,17 @@
 package com.idachev.supacoderemote
 
 import android.content.Context
+import android.util.Log
 import com.idachev.supacoderemote.alerts.AgentAlerts
 import com.idachev.supacoderemote.protocol.ErrorReply
 import com.idachev.supacoderemote.relay.RelayClient
+import com.idachev.supacoderemote.sessions.ListWatch
 import com.idachev.supacoderemote.sessions.SessionsRepository
 import com.idachev.supacoderemote.sessions.WorktreeActions
 import com.idachev.supacoderemote.settings.KeystoreSettingsStore
 import com.idachev.supacoderemote.settings.SettingsStore
 import com.idachev.supacoderemote.terminal.TerminalGridMemory
+import com.idachev.supacoderemote.terminal.TerminalPool
 import com.idachev.supacoderemote.ui.hosts.HostLabels
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -18,6 +21,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.launch
@@ -51,11 +55,26 @@ class AppContainer(context: Context) {
   /** Изтриване на worktree и „Опресни“ на Mac-а (ЗД13). */
   val worktreeActions: WorktreeActions = WorktreeActions(relay, notices, refreshList = { sessions.refresh() }, scope = appScope)
 
+  /**
+   * Живите терминали (ДЗ17): до 4 таба остават закачени и след излизане от екрана. На main
+   * нишката, защото екраните пипат същото състояние. Друг Mac или нов ключ го изчистват (ДЗ13).
+   */
+  val terminalPool: TerminalPool = TerminalPool(
+    link = relay,
+    notices = notices,
+    scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
+    resets = combine(relay.boundHostId, settingsStore.settings) { host, settings -> host to settings },
+    log = { Log.w("TerminalPool", it) },
+  )
+
   /** Последният размер, премерен от терминала; с него тръгва нов таб (АН1). */
   val terminalGrid: TerminalGridMemory = TerminalGridMemory()
 
   /** Дали приложението се вижда. Пише го [SupacodeRemoteApp] от ProcessLifecycleOwner. */
   val appInForeground: MutableStateFlow<Boolean> = MutableStateFlow(false)
+
+  /** Списъкът с `watch`, докато приложението е пред очите и Mac-ът го може; иначе питане (ДЗ3). */
+  val listWatch: ListWatch = ListWatch(relay, appInForeground, refresh = { sessions.refresh() }, scope = appScope)
 
   /** Известията „агент чака“; включват се от „Настройка“. */
   val agentAlerts: AgentAlerts = AgentAlerts(context, sessions.repos, relay.boundHostId, appInForeground, appScope)

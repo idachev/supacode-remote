@@ -4,6 +4,7 @@ import com.idachev.supacoderemote.protocol.AttachRequest
 import com.idachev.supacoderemote.protocol.ListRequest
 import com.idachev.supacoderemote.protocol.Output
 import com.idachev.supacoderemote.protocol.ServerMessage
+import com.idachev.supacoderemote.protocol.WatchRequest
 import com.idachev.supacoderemote.settings.HostSelection
 import com.idachev.supacoderemote.settings.MemoryHostSelection
 import com.idachev.supacoderemote.settings.RelaySettings
@@ -26,6 +27,7 @@ import okhttp3.tls.HeldCertificate
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -112,8 +114,11 @@ class RelayLanTest {
     }
   }).build()
 
-  /** Mac-ът на LAN: същите текстови съобщения като по relay-а, без relay статус. */
-  private fun lanHost(): MockResponse = MockResponse.Builder().webSocketUpgrade(object : WebSocketListener() {
+  /**
+   * Mac-ът на LAN: същите текстови съобщения като по relay-а, без relay статус. [hello] е краят на
+   * отговора на `hello` (напр. `caps`); `null` — Mac-ът не отговаря на `hello`.
+   */
+  private fun lanHost(hello: String? = ""): MockResponse = MockResponse.Builder().webSocketUpgrade(object : WebSocketListener() {
     override fun onOpen(webSocket: WebSocket, response: Response) {
       openSockets.incrementAndGet()
       lanSocket = webSocket
@@ -121,7 +126,7 @@ class RelayLanTest {
 
     override fun onMessage(webSocket: WebSocket, text: String) {
       fromClientOnLan.put(text)
-      if (text.contains("\"hello\"")) webSocket.send("""{"t":"hello","v":1,"host":"Test Mac"}""")
+      if (hello != null && text.contains("\"hello\"")) webSocket.send("""{"t":"hello","v":1,"host":"Test Mac"$hello}""")
     }
 
     override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
@@ -351,6 +356,139 @@ class RelayLanTest {
     val seen = synchronized(outputs) { outputs.toList() }
     assertEquals(listOf("relay-screen", "lan-screen", "lan-live", "relay-screen", "relay-live"), seen)
     collector.cancel()
+  }
+
+  private val relayCaps = ""","caps":["watch"]"""
+  private val lanCaps = ""","caps":["watch","attach.keep"]"""
+
+  /** Relay-ят предлага LAN, първият опит пада (404), вторият (след 1,5 s) се вдига. */
+  private fun clientWithLanAfterRetry(lanHello: String? = lanCaps): RelayClient {
+    relayServer.enqueue(relayHost(relayCaps + lanJson(lanServer.port)))
+    lanServer.enqueue(MockResponse.Builder().code(404).build())
+    lanServer.enqueue(lanHost(lanHello))
+    return RelayClient(OkHttpClient(), scope, timing.copy(lanRetryFirstMs = 1_500)).also {
+      clients += it
+      it.configure(RelaySettings("http://${relayServer.hostName}:${relayServer.port}", key))
+      it.setForeground(true)
+    }
+  }
+
+  @Test
+  fun `caps идват от hello на текущия път`() = runBlocking<Unit> {
+    val relay = clientWithLanAfterRetry()
+    withTimeout(5_000) { relay.hostCaps.first { it == setOf("watch") } }
+    assertEquals(LinkPath.RELAY, relay.path.value)
+    withTimeout(5_000) { relay.hostCaps.first { it == setOf("watch", "attach.keep") } }
+    assertEquals(LinkPath.LAN, relay.path.value)
+  }
+
+  /** RF2: при връщане от LAN нов `hello` по relay-а не тръгва — важат пазените му caps. */
+  @Test
+  fun `caps на relay сокета остават след падане на LAN`() = runBlocking<Unit> {
+    val relay = clientWithLanAfterRetry()
+    withTimeout(5_000) { relay.hostCaps.first { it == setOf("watch", "attach.keep") } }
+    fromClientOnRelay.clear()
+    lanSocket!!.close(1001, "bye")
+    withTimeout(5_000) { relay.path.first { it == LinkPath.RELAY } }
+    assertEquals(setOf("watch"), relay.hostCaps.value)
+    assertFalse("нов hello по relay-а: $fromClientOnRelay", fromClientOnRelay.any { it.contains("\"hello\"") })
+  }
+
+  @Test
+  fun `нов LAN сокет без hello — caps са null`() = runBlocking<Unit> {
+    relayServer.enqueue(relayHost(relayCaps + lanJson(lanServer.port)))
+    lanServer.enqueue(lanHost(hello = null))
+    val relay = client()
+    withTimeout(5_000) { relay.path.first { it == LinkPath.LAN } }
+    // Пътят и caps се сменят заедно: LAN сокетът още не е казал какво разбира.
+    assertNull(relay.hostCaps.value)
+    assertEquals("""{"t":"hello","v":1}""", next(fromClientOnLan))
+    lanSocket!!.send("""{"t":"hello","v":1,"host":"Test Mac"$lanCaps}""")
+    withTimeout(5_000) { relay.hostCaps.first { it == setOf("watch", "attach.keep") } }
+  }
+
+  /** ДЗ8a: relay-ят при жив LAN носи само ping — watch по него спира. */
+  @Test
+  fun `watch по relay-а се спира там при преминаване на LAN`() = runBlocking<Unit> {
+    val relay = clientWithLanAfterRetry()
+    withTimeout(5_000) { relay.hostCaps.first { it == setOf("watch") } }
+    assertTrue(relay.send(WatchRequest(1, true)))
+    assertEquals("""{"t":"watch","id":1,"on":true}""", nextMatching(fromClientOnRelay) { it.contains("watch") })
+    withTimeout(5_000) { relay.path.first { it == LinkPath.LAN } }
+    val off = nextMatching(fromClientOnRelay) { it.contains("watch") }
+    assertTrue(off, Regex("""\{"t":"watch","id":\d+,"on":false}""").matches(off))
+    // По LAN нищо за watch не е тръгнало само.
+    Thread.sleep(200)
+    assertFalse(fromClientOnLan.any { it.contains("watch") })
+  }
+
+  /**
+   * Mac-ът може да се върне с друга версия на Supacode, затова caps на relay сокета не оцеляват
+   * `hostOnline:false`: до новия `hello` са `null` и първият attach е без keep (ДЗ8b), както в уеб.
+   */
+  @Test
+  fun `Mac-ът изчезва от relay-а — caps на сокета чакат новия hello`() = runBlocking<Unit> {
+    val hellos = AtomicInteger(0)
+    relayServer.enqueue(MockResponse.Builder().webSocketUpgrade(object : WebSocketListener() {
+      override fun onOpen(webSocket: WebSocket, response: Response) {
+        openSockets.incrementAndGet()
+        relaySocket = webSocket
+        webSocket.send("""{"t":"relay","hostOnline":true}""")
+      }
+
+      override fun onMessage(webSocket: WebSocket, text: String) {
+        fromClientOnRelay.put(text)
+        // Само първият hello получава отговор сам; вторият — когато тестът реши.
+        if (text.contains("\"hello\"") && hellos.incrementAndGet() == 1) {
+          webSocket.send("""{"t":"hello","v":1,"host":"Test Mac"$relayCaps}""")
+        }
+      }
+
+      override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+        webSocket.close(1000, null)
+      }
+
+      override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+        openSockets.decrementAndGet()
+      }
+
+      override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+        openSockets.decrementAndGet()
+      }
+    }).build())
+    val relay = client()
+    withTimeout(5_000) { relay.hostCaps.first { it == setOf("watch") } }
+    relaySocket!!.send("""{"t":"relay","hostOnline":false}""")
+    withTimeout(5_000) { relay.path.first { it == LinkPath.NONE } }
+    relaySocket!!.send("""{"t":"relay","hostOnline":true}""")
+    withTimeout(5_000) { relay.path.first { it == LinkPath.RELAY } }
+    assertNull(relay.hostCaps.value)
+    nextMatching(fromClientOnRelay) { it.contains("\"hello\"") }
+    nextMatching(fromClientOnRelay) { it.contains("\"hello\"") }
+    relaySocket!!.send("""{"t":"hello","v":1,"host":"Test Mac","caps":["attach.keep"]}""")
+    withTimeout(5_000) { relay.hostCaps.first { it == setOf("attach.keep") } }
+  }
+
+  /** ПБ1 (ДЗ8a): скрит таб след преминаване на LAN — detach по relay-а, по LAN нищо. */
+  @Test
+  fun `detach по другите пътища тръгва по relay-а, а не по текущия LAN`() = runBlocking<Unit> {
+    relayServer.enqueue(relayHostWithAttach(lanJson(lanServer.port)))
+    lanServer.enqueue(MockResponse.Builder().code(404).build())
+    lanServer.enqueue(lanHostWithAttach())
+    val relay = RelayClient(OkHttpClient(), scope, timing.copy(lanRetryFirstMs = 1_500)).also { clients += it }
+    relay.configure(RelaySettings("http://${relayServer.hostName}:${relayServer.port}", key))
+    relay.setForeground(true)
+    withTimeout(5_000) { relay.path.first { it == LinkPath.RELAY } }
+    relay.send(AttachRequest(id = 1, contentId = "b", keep = true))
+    nextMatching(fromClientOnRelay) { it.contains("\"t\":\"attach\"") }
+    withTimeout(5_000) { relay.path.first { it == LinkPath.LAN } }
+    relay.detachOtherPaths("b")
+    assertEquals("""{"t":"detach","contentId":"b"}""", nextMatching(fromClientOnRelay) { it.contains("detach") })
+    // Вторият път няма какво да спре: gate-ът вече не държи b никъде.
+    relay.detachOtherPaths("b")
+    Thread.sleep(300)
+    assertFalse(fromClientOnRelay.any { it.contains("detach") })
+    assertFalse(fromClientOnLan.any { it.contains("detach") })
   }
 
   private val officeStatus =

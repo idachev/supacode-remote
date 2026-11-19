@@ -41,15 +41,17 @@ const val LIST_POLL_MS = 3_000L
 
 /**
  * Пита host-а за списъка веднага и после на всеки [LIST_POLL_MS], само докато екранът
- * се вижда и host-ът е онлайн. Нова сесия с host-а започва цикъла отначало.
+ * се вижда и host-ът е онлайн. Нова сесия с host-а започва цикъла отначало. С `watch`
+ * ([com.idachev.supacoderemote.sessions.ListWatch]) не пита: Mac-ът праща списъка сам.
  */
 @Composable
 fun PollSessionsWhileVisible() {
   val container = LocalAppContainer.current
   val lifecycle = LocalLifecycleOwner.current.lifecycle
   val hostSession by container.relay.hostSession.collectAsStateWithLifecycle()
-  LaunchedEffect(lifecycle, hostSession) {
-    if (hostSession == null) return@LaunchedEffect
+  val watching by container.listWatch.watching.collectAsStateWithLifecycle()
+  LaunchedEffect(lifecycle, hostSession, watching) {
+    if (hostSession == null || watching) return@LaunchedEffect
     lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
       while (true) {
         container.sessions.refresh()
