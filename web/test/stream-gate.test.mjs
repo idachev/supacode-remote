@@ -227,3 +227,17 @@ test('attach без keep отменя чакащия attach на друг тер
   assert.equal(deliver(relay, attached(2, 'B')), true);
   assert.equal(deliver(relay, out('b', 'B')), true);
 });
+
+// ДЗ8a: при нова сесия по LAN скритият B получава detach по relay-а веднага, а видимият A тече
+// по relay-а до своя attached по LAN (АЦ2) — тогава detach само за него.
+test('detach на скрит по другите пътища не пипа текущия път', () => {
+  const { relay, lan, gate, deliver } = twoOnRelay();
+  gate.attachSent(lan, 3, 'A', true);
+  assert.deepEqual(pairs(gate.takeOtherPaths('B', lan)), ['relay:B']);
+  assert.deepEqual(gate.takeOtherPaths('B', lan), []);
+  assert.equal(gate.isAttached('B'), false);
+  assert.equal(deliver(relay, out('b-late', 'B')), false);
+  assert.equal(deliver(relay, out('a-gap', 'A')), true);
+  assert.deepEqual(pairs(gate.accept(lan, attached(3, 'A')).detach), ['relay:A']);
+  assert.equal(deliver(lan, out('a-live', 'A')), true);
+});

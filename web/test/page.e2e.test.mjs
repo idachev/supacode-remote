@@ -406,6 +406,32 @@ test('вход отива само във видимия таб', async (t) => {
   assert.deepEqual(inputsSince(from, 'content-claude'), []);
 });
 
+test('над тавана най-отдавна видяният терминал изчезва от страницата', async (t) => {
+  if (!browser) return t.skip('няма Google Chrome');
+  const terminalOf = (contentId) => page.locator(`.term-view[data-content-id="${contentId}"]`).count();
+  app.host.keptLimit = 2;
+  try {
+    await page.locator('.tab', { hasText: 'claude' }).click();
+    await waitLive();
+    await page.locator('.tab', { hasText: 'codex review' }).click();
+    await waitLive();
+    assert.equal(await terminalOf('content-claude'), 1);
+    // Третият таб на worktree-то (новият от теста с Ctrl+⌘+↓).
+    await page.keyboard.press('Control+Meta+ArrowDown');
+    await waitFor(() => /#c=content-new-\d+$/.test(page.url()), 'третият таб');
+    await waitLive();
+    await waitFor(async () => (await terminalOf('content-claude')) === 0, 'терминалът на A е махнат');
+    assert.equal(await terminalOf('content-codex'), 1);
+    // Празният и двата живи.
+    assert.equal(await page.locator('.term-view').count(), 3);
+    // Следващите тестове чакат адрес `#c=content-new-…` от свой нов таб: тук се връщаме на codex.
+    await page.locator('.tab', { hasText: 'codex review' }).click();
+    await waitLive();
+  } finally {
+    app.host.keptLimit = 8;
+  }
+});
+
 test('презареждане отваря същия таб наново', async (t) => {
   if (!browser) return t.skip('няма Google Chrome');
   const url = page.url();

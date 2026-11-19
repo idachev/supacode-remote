@@ -396,6 +396,8 @@ export class HostController extends EventEmitter {
     // Той не е виждал и списъка ни; видимият таб се закача веднага, скритите — при показване.
     this.#startListing();
     if (this.visible) this.#attach(this.visible);
+    // ДЗ8a: скритите не текат по стария път, ако той още е жив (relay сокетът при LAN), и без видим.
+    for (const contentId of this.kept) if (contentId !== this.visible) this.relay.detachOtherPaths(contentId);
     this.#onCaps();
   }
 

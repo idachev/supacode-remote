@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { RelayClient } from '../src/relay-client.mjs';
 import { HostController } from '../src/host-controller.mjs';
 import { startMock, waitFor } from './helpers/mock.mjs';
-import { connect as rawConnect } from './helpers/mock-client.mjs';
+import { connect as rawConnect, takeId } from './helpers/mock-client.mjs';
 
 let mock;
 before(async () => { mock = await startMock({ lan: false }); });
@@ -276,4 +276,53 @@ test('relay → LAN при живи табове: по relay-а detach за вс
   assert.equal(idle.length, 1);
   assert.ok(idle[0].includes('"keep":true'));
   assert.deepEqual(c.released(), []);
+});
+
+// ДЗ8a без видим таб: скритите не чакат `attached` на видим по новия път — detach по стария веднага.
+test('relay → LAN без видим таб: скритите получават detach по relay-а, при връщане — един attach по LAN', async (t) => {
+  const lanMock = await startMock();
+  t.after(() => lanMock.stop());
+  const c = client(t, lanMock, { timing: { lanRetryFirstMs: 300, lanRetryMaxMs: 600 } });
+  c.host.setActive(true);
+  await waitFor(() => c.relay.state.path === 'lan' && c.relay.state.caps, 'LAN с caps');
+  c.host.open('content-shell-main');
+  await waitFor(() => c.attachedFor('content-shell-main') === 1, 'attached по LAN');
+  c.host.input(b64('mock-lan-off\r'), 'content-shell-main');
+  await waitFor(() => c.relay.state.path === 'relay' && c.relay.state.caps, 'relay с caps');
+  await waitFor(() => c.attachedFor('content-shell-main') === 2, 'attached по relay-а');
+  c.host.open('content-compact');
+  await waitFor(() => c.attachedFor('content-compact') === 1, 'attached на втория');
+  c.host.open('content-idle');
+  await waitFor(() => c.attachedFor('content-idle') === 1, 'attached на третия');
+  // Видимият се затваря (изтрит worktree): остават само скрити.
+  c.host.close();
+  assert.equal(c.host.visible, null);
+  assert.deepEqual(c.host.kept, ['content-compact', 'content-shell-main']);
+  const from = c.mark();
+  // LAN се връща от друг клиент: на страницата няма видим таб, в който да се пише.
+  const other = await rawConnect(lanMock);
+  t.after(() => other.close());
+  await other.request({ t: 'attach', contentId: 'content-codex', scrollback: 0 });
+  other.send({ t: 'input', id: takeId(), contentId: 'content-codex', b64: b64('mock-lan-on\r') });
+  await waitFor(() => c.relay.state.path === 'lan', 'пак LAN', 10_000);
+  await waitFor(() => ['content-compact', 'content-shell-main'].every((id) => c.frames(from, 'detach', id).length === 1), 'detach по relay-а за скритите');
+  assert.equal(c.frames(from, 'attach', null, 'lan').length, 0);
+  assert.equal(c.frames(from, 'detach', null, 'lan').length, 0);
+  // Закъснял кадър на скрития по relay-а вече не стига до страницата.
+  assert.equal(c.relay.gate.isAttached('content-compact'), false);
+  await waitFor(() => c.relay.state.caps, 'caps по LAN');
+  c.host.open('content-compact');
+  await waitFor(() => c.attachedFor('content-compact') === 2, 'attached по LAN при връщане');
+  const lan = c.frames(from, 'attach', 'content-compact', 'lan');
+  assert.equal(lan.length, 1);
+  assert.ok(lan[0].includes('"keep":true'));
+  assert.equal(c.frames(from, 'attach', 'content-compact').length, 0, 'attach по relay-а');
+  // Обратно на relay-а (LAN пада): за паднал сокет detach не тръгва.
+  const back = c.mark();
+  c.host.input(b64('mock-lan-off\r'), 'content-compact');
+  await waitFor(() => c.relay.state.path === 'relay', 'relay път');
+  await waitFor(() => c.attachedFor('content-compact') === 3, 'attached по relay-а');
+  await pause(300);
+  assert.equal(c.frames(back, 'detach').length, 0);
+  assert.equal(c.frames(back, 'detach', null, 'lan').length, 0);
 });

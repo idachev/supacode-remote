@@ -133,6 +133,16 @@ export class RelayClient extends EventEmitter {
     return this.send({ t: 'detach', contentId });
   }
 
+  /**
+   * ДЗ8a: скрит таб след смяна на пътя — `detach` по другите пътища, по които Mac-ът още го държи
+   * (relay сокетът при преминаване на LAN). Видимият не минава оттук: неговият стар поток тече до
+   * `attached` по новия път (`TerminalStreamGate`).
+   */
+  detachOtherPaths(contentId) {
+    const current = this.#socketOf(this.state.path);
+    if (current) this.#sendDetaches(this.gate.takeOtherPaths(contentId, current));
+  }
+
   // ---- състояние и изпращане ----
 
   #set(patch) {

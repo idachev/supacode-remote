@@ -51,6 +51,7 @@ const terminals = new Map();
 function makeView(contentId) {
   const box = document.createElement('div');
   box.className = 'term-view';
+  if (contentId) box.dataset.contentId = contentId;
   $('term').append(box);
   return new TerminalView(box, $('term-area'), {
     // Вход само от видимия таб (АЦ1): скрит терминал не бива да пише в своя PTY.

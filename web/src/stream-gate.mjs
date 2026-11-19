@@ -59,6 +59,15 @@ export class TerminalStreamGate {
     return this.#takeAttached((_path, terminal) => terminal === contentId);
   }
 
+  /**
+   * ДЗ8a: скрит терминал при нова сесия по `current` — Mac-ът още го държи по другите живи
+   * пътища, а там той вече не бива да тече. Маха двойките и ги връща за `detach`; паднал път
+   * (`closed`) вече го няма тук, затова по него нищо не тръгва.
+   */
+  takeOtherPaths(contentId, current) {
+    return this.#takeAttached((path, terminal) => terminal === contentId && path !== current);
+  }
+
   /** `detach` от таб, чийто последен attach е `attachId`, е остарял: друг го е закачил след него. */
   isStaleDetach(contentId, attachId) {
     if (!this.latestAttachId.has(contentId)) return false;
