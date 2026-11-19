@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
+import com.idachev.supacoderemote.terminal.TerminalPool
 
 class SupacodeRemoteApp : Application() {
 
@@ -19,13 +20,22 @@ class SupacodeRemoteApp : Application() {
     ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
       override fun onStart(owner: LifecycleOwner) {
         container.appInForeground.value = true
+        container.terminalPool.foregrounded()
         container.relay.setForeground(true)
       }
 
       override fun onStop(owner: LifecycleOwner) {
         container.appInForeground.value = false
+        // Преди връзката: detach на скритите табове тръгва, докато тя още е горе (ДЗ20).
+        container.terminalPool.backgrounded()
         container.relay.setForeground(false)
       }
     })
+  }
+
+  /** Недостиг на памет: живите терминали се свиват до видимия (ДЗ20). */
+  override fun onTrimMemory(level: Int) {
+    super.onTrimMemory(level)
+    if (TerminalPool.shrinksOnTrim(level)) container.terminalPool.shrinkToVisible()
   }
 }

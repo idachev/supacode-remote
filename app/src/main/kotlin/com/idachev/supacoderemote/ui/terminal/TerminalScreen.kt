@@ -29,6 +29,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalFocusManager
@@ -109,6 +110,18 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
     )
   }
   val state by vm.state.collectAsStateWithLifecycle()
+  // Табът е видим, докато екранът е в композицията (и след завъртане); иначе е скрит в пула.
+  DisposableEffect(vm) {
+    vm.onShown()
+    onDispose { vm.onHidden() }
+  }
+  val terminal by vm.terminal.collectAsStateWithLifecycle()
+  val appContext = LocalContext.current.applicationContext
+  // Страницата живее с терминала (ДЗ17): при връщане към таба е същата, със същия скрол.
+  val page = remember(terminal) {
+    (terminal.page as? TerminalPageView)
+      ?: TerminalPageView(appContext, readyWithoutScreen = terminal::onWebReady).also { terminal.page = it }
+  }
   val textSize by container.settingsStore.textSize.collectAsStateWithLifecycle()
   val context = LocalContext.current
   var copyText by remember { mutableStateOf<String?>(null) }
@@ -187,9 +200,9 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
   ) { padding ->
     Box(Modifier.fillMaxSize().padding(padding).background(TerminalBackground)) {
       TerminalWebView(
-        commands = vm.commands,
+        page = page,
+        commands = terminal.commands,
         onReady = vm::onWebReady,
-        onGone = vm::onWebGone,
         // Долу в мястото: WebView-то е колкото терминала, празното над него е на Box-а.
         modifier = Modifier.fillMaxWidth().align(Alignment.BottomCenter).testTag("terminal-web"),
         onText = { copyText = it },

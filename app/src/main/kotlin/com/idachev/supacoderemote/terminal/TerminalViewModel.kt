@@ -133,6 +133,9 @@ class TerminalViewModel(
   private val _session = MutableStateFlow(pool.open(contentId, this))
   private val session: TerminalSession get() = _session.value
 
+  /** Живият терминал на екрана; с него идва и страницата му ([TerminalSession.page]). */
+  val terminal: StateFlow<TerminalSession> = _session.asStateFlow()
+
   /** Синхронното огледало на сесията в [state] (виж [TerminalSession.observer]). */
   private val mirror: (TerminalSessionState) -> Unit = { s ->
     _state.update { it.copy(phase = s.phase, selection = s.selection, pausedBytes = s.pausedBytes) }
@@ -176,10 +179,20 @@ class TerminalViewModel(
     session.onWebReady()
   }
 
-  fun onWebGone() {
-    // Старият екран на същия таб (бързо назад и пак напред) маха своята страница след като
-    // новият екран вече е взел терминала — тя не е неговата.
-    if (session.owner === this) session.onWebGone()
+  /**
+   * Екранът е пред очите (и след завъртане или връщане от „Настройка“): табът става видим —
+   * чакащият изход се пише наведнъж, а ако Mac-ът е забравил attach-а — нов (ДЗ7, ДЗ19).
+   */
+  fun onShown() {
+    bind(pool.open(contentId, this))
+  }
+
+  /**
+   * Екранът вече не се вижда: табът остава жив в пула скрит (без `attach.keep` — `detach`,
+   * както преди). Скритият таб не рисува, изходът му чака в [HiddenOutput].
+   */
+  fun onHidden() {
+    pool.leave(contentId, this)
   }
 
   /** Бутонът „Свържи отново“ след `detached`. */

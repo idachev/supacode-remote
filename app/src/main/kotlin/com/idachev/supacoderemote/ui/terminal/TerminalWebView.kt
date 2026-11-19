@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.content.MutableContextWrapper
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -11,6 +12,7 @@ import android.util.Log
 import android.view.GestureDetector
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
+import android.view.ViewGroup
 import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
@@ -37,23 +39,228 @@ import com.idachev.supacoderemote.settings.TextSize
 import com.idachev.supacoderemote.terminal.Cell
 import com.idachev.supacoderemote.terminal.TerminalCommand
 import com.idachev.supacoderemote.terminal.TerminalLinks
+import com.idachev.supacoderemote.terminal.TerminalPage
 import com.idachev.supacoderemote.terminal.TerminalSelection
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.builtins.serializer
 
+/** Какво страницата казва на екрана, който я показва сега. Екранът се сменя, страницата остава. */
+class PageCallbacks(
+  val onReady: () -> Unit,
+  val onText: (String) -> Unit,
+  val onCopy: (String) -> Unit,
+  val onOverscroll: (up: Boolean) -> Unit,
+  val onInput: (String) -> Unit,
+  val onScreenSignature: (Int) -> Unit,
+  val onGrid: (cols: Int, rows: Int) -> Unit,
+  val onGridEstimate: (cols: Int, rows: Int) -> Unit,
+  val onSelection: (TerminalSelection?) -> Unit,
+)
+
 /**
- * xterm.js от assets в WebView. Няма CDN: всичко е в `assets/terminal/`.
+ * WebView-то с xterm.js на един таб, пазено с терминала му в пула (ДЗ17). Екранът го закача,
+ * докато се вижда, и го откача при излизане, без да го унищожава: връщането към таба е със
+ * същия екран, история и скрол, без ново зареждане и без attach.
  *
- * [onReady] идва при всяко зареждане на страницата — тогава екранът е празен и трябва
- * нов `attach`. Командите се изпълняват едва след това, в реда, в който са дошли.
+ * Създава се с [MutableContextWrapper]: WebView, създадено с Activity, би държало старото
+ * Activity след завъртане. Докато е закачено, базата е текущото Activity (за `startActivity` на
+ * линковете), а откачено — Application-ът.
+ *
+ * [readyWithoutScreen] — страницата се е заредила, докато никой екран не я показва.
  */
 @SuppressLint("SetJavaScriptEnabled")
+class TerminalPageView(private val appContext: Context, private val readyWithoutScreen: () -> Unit) : TerminalPage {
+
+  private val context = MutableContextWrapper(appContext)
+  private val main = Handler(Looper.getMainLooper())
+
+  /** Колбеците на екрана, който показва страницата; `null` — скрита. */
+  var callbacks: PageCallbacks? = null
+
+  /** Страницата е заредена (SupaBridge.ready). Пази се със страницата, не с екрана. */
+  var ready by mutableStateOf(false)
+    private set
+
+  /** Височината на терминала в страницата (dp); до първия доклад WebView-то е цялото място. */
+  var pageHeight by mutableStateOf<Int?>(null)
+    private set
+
+  /** Височината на един ред (dp), за отстъпа на цял екран; до първия доклад отстъп няма. */
+  var rowHeight by mutableStateOf(0f)
+    private set
+
+  /**
+   * Екранът, чийто AndroidView държи WebView-то. При бързо „назад и пак напред“ два екрана на
+   * същия таб са в композицията наведнъж; командите чете само последният.
+   */
+  var holder by mutableStateOf<Any?>(null)
+    private set
+
+  val webView: WebView = WebView(context).apply {
+    settings.javaScriptEnabled = true
+    settings.allowFileAccess = false
+    settings.allowContentAccess = false
+    // Без zoom: размерът на текста е настройка („Размер на текста“).
+    settings.setSupportZoom(false)
+    settings.builtInZoomControls = false
+    settings.displayZoomControls = false
+    settings.useWideViewPort = true
+    settings.loadWithOverviewMode = false
+    // 120 колони на телефон дават шрифт около 5 px; без това WebView го вдига на 8 px
+    // и колоните излизат извън екрана.
+    settings.minimumFontSize = 1
+    settings.minimumLogicalFontSize = 1
+    settings.textZoom = 100
+    setBackgroundColor(android.graphics.Color.rgb(0x1e, 0x1e, 0x1e))
+    // Без glow / разтягане на WebView-то на ръба; скролът отвъд ръба стига до програмата.
+    overScrollMode = android.view.View.OVER_SCROLL_NEVER
+    webChromeClient = object : WebChromeClient() {
+      override fun onConsoleMessage(message: ConsoleMessage): Boolean {
+        Log.d(TAG, "js: ${message.message()} (${message.sourceId()}:${message.lineNumber()})")
+        return true
+      }
+    }
+    // Методите на моста идват от нишката на WebView-то, не от main.
+    addJavascriptInterface(object {
+      @JavascriptInterface
+      fun ready() {
+        main.post {
+          ready = true
+          callbacks?.onReady?.invoke() ?: readyWithoutScreen()
+        }
+      }
+
+      /** Отговорът на `supa.copyText()`: текстът на терминала като обикновен текст. */
+      @JavascriptInterface
+      fun text(value: String) {
+        main.post { callbacks?.onText?.invoke(value) }
+      }
+
+      /** „Копирай“ от лентата за маркиране: показаният текст. */
+      @JavascriptInterface
+      fun copy(value: String) {
+        main.post { callbacks?.onCopy?.invoke(value) }
+      }
+
+      /**
+       * Маркираното след дълго натискане: краищата (включително) и размерът на буфера
+       * ([cols] × [rows] с историята), за да не излязат ◀ ▶ извън него.
+       */
+      @JavascriptInterface
+      fun selection(startCol: Int, startRow: Int, endCol: Int, endRow: Int, cols: Int, rows: Int) {
+        val value = TerminalSelection.of(Cell(startCol, startRow), Cell(endCol, endRow), cols, rows)
+        main.post { callbacks?.onSelection?.invoke(value) }
+      }
+
+      /** Маркираното е изчезнало в страницата (тап, reset): лентата се скрива. */
+      @JavascriptInterface
+      fun selectionGone() {
+        main.post { callbacks?.onSelection?.invoke(null) }
+      }
+
+      /** Скрол отвъд ръба на историята: "up" / "down" — скрол като от trackpad-а към програмата. */
+      @JavascriptInterface
+      fun overscroll(direction: String) {
+        main.post { callbacks?.onOverscroll?.invoke(direction == "up") }
+      }
+
+      /**
+       * Височината на терминала (CSS px = dp). WebView-то става точно толкова: така при
+       * zoom видимата част не може да излезе в празното извън терминала.
+       */
+      @JavascriptInterface
+      fun height(dp: Int) {
+        main.post { pageHeight = dp }
+      }
+
+      /** Височината на един ред на терминала (CSS px = dp), за отстъпа на цял екран. */
+      @JavascriptInterface
+      fun rowHeight(dp: Double) {
+        main.post { rowHeight = dp.toFloat() }
+      }
+
+      /** Подписът на екрана, поискан от `supa.reportScreen` („Най-долу“). */
+      @JavascriptInterface
+      fun screenSignature(hash: Int) {
+        main.post { callbacks?.onScreenSignature?.invoke(hash) }
+      }
+
+      /** Отговорът на `supa.measureGrid`: размерът, който влиза в мястото на терминала. */
+      @JavascriptInterface
+      fun grid(cols: Int, rows: Int) {
+        main.post { callbacks?.onGrid?.invoke(cols, rows) }
+      }
+
+      /** Отговорът на `supa.reportGrid`: мярката за нов таб. */
+      @JavascriptInterface
+      fun gridEstimate(cols: Int, rows: Int) {
+        main.post { callbacks?.onGridEstimate?.invoke(cols, rows) }
+      }
+
+      /** Байтовете на xterm.js за скрола от `supa.wheel` (mouse report или стрелки). */
+      @JavascriptInterface
+      fun input(data: String) {
+        main.post { callbacks?.onInput?.invoke(data) }
+      }
+
+      /**
+       * Тап в терминала (`supa.tap`): редът с пренесените му части и индексът на тапнатия знак.
+       * Адрес под пръста се отваря в браузъра; иначе тапът не прави нищо.
+       */
+      @JavascriptInterface
+      fun tapText(text: String, index: Int) {
+        val url = TerminalLinks.urlAt(text, index) ?: return
+        main.post { openInBrowser(context, url) }
+      }
+
+      /** Тап по OSC 8 линк (`supa.tap`): адресът от последователността, не от текста. */
+      @JavascriptInterface
+      fun tapUrl(url: String) {
+        main.post { openInBrowser(context, url) }
+      }
+    }, "SupaBridge")
+    installSelectionGesture(this)
+    loadUrl("file:///android_asset/terminal/index.html")
+  }
+
+  /** Екранът [owner] показва страницата: линковете се отварят от неговото Activity. */
+  fun attachTo(activity: Context, owner: Any, screen: PageCallbacks) {
+    context.baseContext = activity
+    holder = owner
+    callbacks = screen
+  }
+
+  /** Екранът [owner] не я показва вече. Ако по-нов екран вече я е взел — нищо. */
+  fun detachFrom(owner: Any) {
+    if (holder !== owner) return
+    holder = null
+    callbacks = null
+    (webView.parent as? ViewGroup)?.removeView(webView)
+    context.baseContext = appContext
+  }
+
+  override fun destroy() {
+    holder = null
+    callbacks = null
+    (webView.parent as? ViewGroup)?.removeView(webView)
+    webView.removeJavascriptInterface("SupaBridge")
+    webView.destroy()
+  }
+}
+
+/**
+ * Показва [page] — xterm.js от assets в WebView. Няма CDN: всичко е в `assets/terminal/`.
+ *
+ * [onReady] идва, когато страницата се зареди — тогава екранът е празен и трябва нов `attach`.
+ * Страницата се пази с терминала, затова това е само първото показване на таба. Командите се
+ * изпълняват едва след това, в реда, в който са дошли, и само докато този екран държи страницата.
+ */
 @Composable
 fun TerminalWebView(
+  page: TerminalPageView,
   commands: Flow<TerminalCommand>,
   onReady: () -> Unit,
-  onGone: () -> Unit,
   modifier: Modifier = Modifier,
   onText: (String) -> Unit = {},
   onCopy: (String) -> Unit = {},
@@ -88,165 +295,47 @@ fun TerminalWebView(
   // Цялото място за терминала (dp), не височината на WebView-то: тя е колкото терминала на Mac-а.
   // Дробно: закръглено надолу до цяло dp, понякога губи ред, който влиза.
   var areaHeight by remember { mutableStateOf(0f) }
-  var ready by remember { mutableStateOf(false) }
-  // Височината на терминала в страницата (dp); до първия доклад WebView-то е цялото място.
-  var pageHeight by remember { mutableStateOf<Int?>(null) }
-  // Височината на един ред (dp), за [rowPadding]; до първия доклад отстъп няма.
-  var rowHeight by remember { mutableStateOf(0f) }
-  val main = remember { Handler(Looper.getMainLooper()) }
-
-  val webView = remember {
-    WebView(context).apply {
-      settings.javaScriptEnabled = true
-      settings.allowFileAccess = false
-      settings.allowContentAccess = false
-      // Без zoom: размерът на текста е настройка („Размер на текста“).
-      settings.setSupportZoom(false)
-      settings.builtInZoomControls = false
-      settings.displayZoomControls = false
-      settings.useWideViewPort = true
-      settings.loadWithOverviewMode = false
-      // 120 колони на телефон дават шрифт около 5 px; без това WebView го вдига на 8 px
-      // и колоните излизат извън екрана.
-      settings.minimumFontSize = 1
-      settings.minimumLogicalFontSize = 1
-      settings.textZoom = 100
-      setBackgroundColor(android.graphics.Color.rgb(0x1e, 0x1e, 0x1e))
-      // Без glow / разтягане на WebView-то на ръба; скролът отвъд ръба стига до програмата.
-      overScrollMode = android.view.View.OVER_SCROLL_NEVER
-      webChromeClient = object : WebChromeClient() {
-        override fun onConsoleMessage(message: ConsoleMessage): Boolean {
-          Log.d(TAG, "js: ${message.message()} (${message.sourceId()}:${message.lineNumber()})")
-          return true
-        }
-      }
-      // Методите на моста идват от нишката на WebView-то, не от main.
-      addJavascriptInterface(object {
-        @JavascriptInterface
-        fun ready() {
-          main.post {
-            ready = true
-            currentOnReady()
-          }
-        }
-
-        /** Отговорът на `supa.copyText()`: текстът на терминала като обикновен текст. */
-        @JavascriptInterface
-        fun text(value: String) {
-          main.post { currentOnText(value) }
-        }
-
-        /** „Копирай“ от лентата за маркиране: показаният текст. */
-        @JavascriptInterface
-        fun copy(value: String) {
-          main.post { currentOnCopy(value) }
-        }
-
-        /**
-         * Маркираното след дълго натискане: краищата (включително) и размерът на буфера
-         * ([cols] × [rows] с историята), за да не излязат ◀ ▶ извън него.
-         */
-        @JavascriptInterface
-        fun selection(startCol: Int, startRow: Int, endCol: Int, endRow: Int, cols: Int, rows: Int) {
-          val value = TerminalSelection.of(Cell(startCol, startRow), Cell(endCol, endRow), cols, rows)
-          main.post { currentOnSelection(value) }
-        }
-
-        /** Маркираното е изчезнало в страницата (тап, reset): лентата се скрива. */
-        @JavascriptInterface
-        fun selectionGone() {
-          main.post { currentOnSelection(null) }
-        }
-
-        /** Скрол отвъд ръба на историята: "up" / "down" — скрол като от trackpad-а към програмата. */
-        @JavascriptInterface
-        fun overscroll(direction: String) {
-          main.post { currentOnOverscroll(direction == "up") }
-        }
-
-        /**
-         * Височината на терминала (CSS px = dp). WebView-то става точно толкова: така при
-         * zoom видимата част не може да излезе в празното извън терминала.
-         */
-        @JavascriptInterface
-        fun height(dp: Int) {
-          main.post { pageHeight = dp }
-        }
-
-        /** Височината на един ред на терминала (CSS px = dp), за [rowPadding]. */
-        @JavascriptInterface
-        fun rowHeight(dp: Double) {
-          main.post { rowHeight = dp.toFloat() }
-        }
-
-        /** Подписът на екрана, поискан от `supa.reportScreen` („Най-долу“). */
-        @JavascriptInterface
-        fun screenSignature(hash: Int) {
-          main.post { currentOnScreenSignature(hash) }
-        }
-
-        /** Отговорът на `supa.measureGrid`: размерът, който влиза в мястото на терминала. */
-        @JavascriptInterface
-        fun grid(cols: Int, rows: Int) {
-          main.post { currentOnGrid(cols, rows) }
-        }
-
-        /** Отговорът на `supa.reportGrid`: мярката за нов таб. */
-        @JavascriptInterface
-        fun gridEstimate(cols: Int, rows: Int) {
-          main.post { currentOnGridEstimate(cols, rows) }
-        }
-
-        /** Байтовете на xterm.js за скрола от `supa.wheel` (mouse report или стрелки). */
-        @JavascriptInterface
-        fun input(data: String) {
-          main.post { currentOnInput(data) }
-        }
-
-        /**
-         * Тап в терминала (`supa.tap`): редът с пренесените му части и индексът на тапнатия знак.
-         * Адрес под пръста се отваря в браузъра; иначе тапът не прави нищо.
-         */
-        @JavascriptInterface
-        fun tapText(text: String, index: Int) {
-          val url = TerminalLinks.urlAt(text, index) ?: return
-          main.post { openInBrowser(context, url) }
-        }
-
-        /** Тап по OSC 8 линк (`supa.tap`): адресът от последователността, не от текста. */
-        @JavascriptInterface
-        fun tapUrl(url: String) {
-          main.post { openInBrowser(context, url) }
-        }
-      }, "SupaBridge")
-      installSelectionGesture(this)
-      loadUrl("file:///android_asset/terminal/index.html")
-    }
+  // Този екран като собственик на страницата (виж [TerminalPageView.holder]).
+  val owner = remember { Any() }
+  val screen = remember {
+    PageCallbacks(
+      onReady = { currentOnReady() },
+      onText = { currentOnText(it) },
+      onCopy = { currentOnCopy(it) },
+      onOverscroll = { currentOnOverscroll(it) },
+      onInput = { currentOnInput(it) },
+      onScreenSignature = { currentOnScreenSignature(it) },
+      onGrid = { cols, rows -> currentOnGrid(cols, rows) },
+      onGridEstimate = { cols, rows -> currentOnGridEstimate(cols, rows) },
+      onSelection = { currentOnSelection(it) },
+    )
   }
+  val webView = page.webView
+  val ready = page.ready
+  val holding = page.holder === owner
 
-  DisposableEffect(webView) {
-    onDispose {
-      onGone()
-      webView.removeJavascriptInterface("SupaBridge")
-      webView.destroy()
-    }
+  DisposableEffect(page, context) {
+    page.attachTo(context, owner, screen)
+    // Откачено, не унищожено: WebView-то живее с терминала в пула.
+    onDispose { page.detachFrom(owner) }
   }
 
   // „Размер на текста“ — и при всяко ново зареждане на страницата (ready).
-  LaunchedEffect(webView, ready, fontSize) {
-    if (ready) webView.evaluateJavascript("supa.fontSize($fontSize)", null)
+  LaunchedEffect(page, ready, fontSize, holding) {
+    if (ready && holding) webView.evaluateJavascript("supa.fontSize($fontSize)", null)
   }
 
   // Мярката за нов таб. Пауза, защото мястото се мени на кадри (клавиатурата се отваря), а
   // мярката при „По ширина“ сменя шрифта за миг: мери се само щом мястото спре да се мени.
-  LaunchedEffect(webView, ready, fontSize, areaHeight) {
-    if (!ready || areaHeight <= 0f) return@LaunchedEffect
+  LaunchedEffect(page, ready, fontSize, areaHeight, holding) {
+    if (!ready || !holding || areaHeight <= 0f) return@LaunchedEffect
     delay(GRID_ESTIMATE_DELAY_MS)
     webView.evaluateJavascript("supa.reportGrid($areaHeight)", null)
   }
 
-  LaunchedEffect(webView, ready) {
-    if (!ready) return@LaunchedEffect
+  // Каналът с командите има един читател: екранът, който държи страницата сега.
+  LaunchedEffect(page, ready, holding) {
+    if (!ready || !holding) return@LaunchedEffect
     commands.collect { cmd ->
       // Мястото знае само Compose, затова тази команда носи височината му.
       val js = if (cmd == TerminalCommand.MeasureGrid) "supa.measureGrid($areaHeight)" else cmd.toJs()
@@ -255,10 +344,10 @@ fun TerminalWebView(
   }
 
   // height е предпочитана височина: по-висок терминал взема цялото място, а страницата показва частта с курсора.
-  val size = pageHeight?.let { Modifier.height(it.dp) } ?: Modifier.fillMaxHeight()
+  val size = page.pageHeight?.let { Modifier.height(it.dp) } ?: Modifier.fillMaxHeight()
   // Отстъпът е отвън, височината отвътре: по-висок терминал се свива с двата реда, а
   // страницата вижда новата височина и показва частта с курсора в нея.
-  val pad = Modifier.padding(vertical = if (rowPadding) rowHeight.dp else 0.dp)
+  val pad = Modifier.padding(vertical = if (rowPadding) page.rowHeight.dp else 0.dp)
   val density = LocalDensity.current
   // Ограничението отвън, преди височината на WebView-то: това е мястото, което терминалът може да вземе.
   val area = Modifier.layout { measurable, constraints ->
@@ -266,7 +355,11 @@ fun TerminalWebView(
     val placeable = measurable.measure(constraints)
     layout(placeable.width, placeable.height) { placeable.place(0, 0) }
   }
-  AndroidView(factory = { webView }, modifier = modifier.then(pad).then(area).then(size))
+  // Същото WebView при всяко показване: първо се откача от предишния екран, ако още е там.
+  AndroidView(
+    factory = { webView.also { (it.parent as? ViewGroup)?.removeView(it) } },
+    modifier = modifier.then(pad).then(area).then(size),
+  )
 }
 
 private const val TAG = "TerminalWebView"

@@ -690,6 +690,26 @@ class TerminalViewModelTest {
     assertEquals(AttachPhase.Attached(120, 40), again.state.value.phase)
   }
 
+  /** ДЗ19: екранът е скрит (друг екран отгоре, завъртане) — изходът чака и идва при показване. */
+  @Test
+  fun `скрит екран не рисува, а при показване изходът идва наведнъж`() = runTest(dispatcher) {
+    link.hostCaps.value = setOf("attach.keep")
+    link.hostSession.value = 1
+    runCurrent()
+    vm.onWebReady()
+    val commands = collectCommands()
+    emit(Attached(1, "c1", 120, 40))
+    commands.clear()
+    vm.onHidden()
+    emit(Output("c1", "aGk="))
+    assertTrue(commands.isEmpty())
+    vm.onShown()
+    runCurrent()
+    assertEquals(listOf<TerminalCommand>(TerminalCommand.Write("aGk=")), commands)
+    assertEquals(1, link.sent.count { it is AttachRequest })
+    assertTrue(link.sent.none { it is DetachRequest })
+  }
+
   @Test
   fun `по подразбиране двете ленти са скрити и терминалът е на цял екран`() {
     assertEquals(TerminalBars(topBar = false, input = false), vm.state.value.bars)

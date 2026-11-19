@@ -23,6 +23,14 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+/**
+ * Страницата на таба (WebView-то с xterm.js). Пази се със сесията, за да е връщането към таба
+ * със същия екран, история и скрол (ДЗ17); унищожава се, когато пулът пусне таба.
+ */
+interface TerminalPage {
+  fun destroy()
+}
+
 /** Каквото описва терминала и оцелява при излизане от екрана: връзката, маркираното, „Пауза“. */
 data class TerminalSessionState(
   val phase: AttachPhase = AttachPhase.Waiting,
@@ -92,6 +100,16 @@ class TerminalSession internal constructor(
   var released: Boolean = false
     private set
 
+  /** Страницата на таба; екранът я създава при първото показване. Пуснат таб я унищожава веднага. */
+  var page: TerminalPage? = null
+    set(value) {
+      if (released) {
+        value?.destroy()
+        return
+      }
+      field = value
+    }
+
   private var webReady = false
   private var attachId: Int? = null
 
@@ -123,8 +141,9 @@ class TerminalSession internal constructor(
   }
 
   /**
-   * Страницата с xterm.js е заредена (първия път или наново). Старите команди са за предишната
-   * страница, затова се изхвърлят и екранът се иска наново.
+   * Страницата с xterm.js е заредена. Тя се пази със сесията, затова това е първото зареждане
+   * (или ново, ако страницата е създадена наново). Старите команди са за предишната страница,
+   * затова се изхвърлят и екранът се иска наново.
    */
   fun onWebReady() {
     webReady = true
@@ -134,10 +153,6 @@ class TerminalSession internal constructor(
     stopPauseTicker()
     update { it.copy(selection = null) }
     if (link.hostSession.value != null) attach() else markNeedsAttach()
-  }
-
-  fun onWebGone() {
-    webReady = false
   }
 
   /** Табът е пред очите: чакащото се пише наведнъж, или attach, ако Mac-ът го е забравил. */
@@ -196,6 +211,8 @@ class TerminalSession internal constructor(
     owner = null
     if (detach) link.detach(contentId, lastAttachId)
     job.cancel()
+    page?.destroy()
+    page = null
   }
 
   private fun onHostSession(session: Int?) {

@@ -1,10 +1,13 @@
 package com.idachev.supacoderemote.terminal
 
+import android.content.ComponentCallbacks2
 import com.idachev.supacoderemote.Notices
 import com.idachev.supacoderemote.protocol.Caps
 import com.idachev.supacoderemote.protocol.ListReply
 import com.idachev.supacoderemote.relay.HostLink
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.emptyFlow
@@ -32,9 +35,15 @@ class TerminalPool(
   /** Всяка нова стойност след първата (друг Mac, нов ключ) изчиства пула. */
   resets: Flow<Any?> = emptyFlow(),
   private val log: (String) -> Unit = {},
+  /** Часовникът за „дълго във фон“: замразен процес не върти таймера, но часовникът върви. */
+  private val nowMs: () -> Long = { System.nanoTime() / 1_000_000 },
 ) {
 
   private val entries = ArrayList<TerminalSession>()
+
+  /** Кога приложението е отишло във фон; `null` — пред очите е. */
+  private var backgroundedAt: Long? = null
+  private var backgroundShrink: Job? = null
 
   /** Живите терминали, първият е последно отвореният. */
   val sessions: List<TerminalSession> get() = entries.toList()
@@ -100,13 +109,30 @@ class TerminalPool(
 
   /**
    * Приложението отиде във фон (ДЗ20): скритите табове не теглят данни — `detach` и „нужен
-   * attach“; терминалите им остават и при показване тръгва нов attach.
+   * attach“; терминалите им остават и при показване тръгва нов attach. След
+   * [BACKGROUND_SHRINK_MS] във фон пулът се свива до видимия: до 4 WebView-та в паметта на
+   * приложение, което може и да не се върне, са много.
    */
   fun backgrounded() {
     entries.filter { !it.visible && !it.needsAttach }.forEach {
       link.detach(it.contentId, it.lastAttachId)
       it.markNeedsAttach()
     }
+    backgroundedAt = nowMs()
+    backgroundShrink?.cancel()
+    backgroundShrink = scope.launch {
+      delay(BACKGROUND_SHRINK_MS)
+      shrinkToVisible()
+    }
+  }
+
+  /** Обратно пред очите: таймерът спира; ако процесът е бил замразен и времето е минало — свиване. */
+  fun foregrounded() {
+    backgroundShrink?.cancel()
+    backgroundShrink = null
+    val since = backgroundedAt ?: return
+    backgroundedAt = null
+    if (nowMs() - since >= BACKGROUND_SHRINK_MS) shrinkToVisible()
   }
 
   /** Друг Mac или нов ключ (ДЗ13): нито един терминал не е от новия. */
@@ -133,5 +159,19 @@ class TerminalPool(
   companion object {
     /** Живи терминали на телефона (ЦЛ3). Mac-ът приема до 16 на връзка. */
     const val LIMIT = 4
+
+    /** След толкова време във фон пулът се свива до видимия (ДЗ20, предложение на агента). */
+    const val BACKGROUND_SHRINK_MS = 5 * 60_000L
+
+    /**
+     * `onTrimMemory`: свиване при недостиг на памет (RUNNING_LOW и по-сериозно, MODERATE и
+     * COMPLETE). UI_HIDDEN и BACKGROUND само казват, че приложението е във фон — за това е
+     * таймерът от [backgrounded].
+     */
+    @Suppress("DEPRECATION")
+    fun shrinksOnTrim(level: Int): Boolean =
+      level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW ||
+        level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL ||
+        level >= ComponentCallbacks2.TRIM_MEMORY_MODERATE
   }
 }

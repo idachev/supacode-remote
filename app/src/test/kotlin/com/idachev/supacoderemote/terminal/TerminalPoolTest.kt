@@ -1,5 +1,6 @@
 package com.idachev.supacoderemote.terminal
 
+import android.content.ComponentCallbacks2
 import com.idachev.supacoderemote.Notices
 import com.idachev.supacoderemote.protocol.AttachRequest
 import com.idachev.supacoderemote.protocol.Attached
@@ -23,6 +24,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -52,12 +54,16 @@ class TerminalPoolTest {
   private val dispatcher = StandardTestDispatcher()
   private val link = FakeLink()
   private val hostChanges = MutableStateFlow<Any?>("office")
+
+  /** Часовникът на пула; отделно от времето на dispatcher-а, за замразен процес във фон. */
+  private var now = 0L
   private val pool = TerminalPool(
     link,
     Notices(),
     CoroutineScope(SupervisorJob() + dispatcher),
     hiddenCapBytes = 1024,
     resets = hostChanges,
+    nowMs = { now },
   )
 
   private fun TestScope.emit(message: ServerMessage) {
@@ -292,6 +298,56 @@ class TerminalPoolTest {
     pool.open("A", Any())
     runCurrent()
     assertEquals(2, attaches("A").size)
+  }
+
+  @Test
+  fun `5 min във фон свиват пула`() = runTest(dispatcher) {
+    visit("A")
+    enter("B")
+    pool.backgrounded()
+    advanceTimeBy(TerminalPool.BACKGROUND_SHRINK_MS - 1)
+    runCurrent()
+    assertEquals(listOf("B", "A"), ids())
+    advanceTimeBy(2)
+    runCurrent()
+    // Видимият остава: неговото WebView е на екрана, когато приложението се върне.
+    assertEquals(listOf("B"), ids())
+  }
+
+  @Test
+  fun `връщане преди 5 min не свива пула`() = runTest(dispatcher) {
+    visit("A")
+    enter("B")
+    pool.backgrounded()
+    advanceTimeBy(TerminalPool.BACKGROUND_SHRINK_MS - 60_000)
+    now = TerminalPool.BACKGROUND_SHRINK_MS - 60_000
+    pool.foregrounded()
+    advanceTimeBy(120_000)
+    runCurrent()
+    assertEquals(listOf("B", "A"), ids())
+  }
+
+  /** Замразен във фон процес не върти таймери: часовникът решава при връщането. */
+  @Test
+  fun `след 5 min във фон по часовника пулът се свива при връщане`() = runTest(dispatcher) {
+    visit("A")
+    enter("B")
+    pool.backgrounded()
+    now = TerminalPool.BACKGROUND_SHRINK_MS + 1
+    pool.foregrounded()
+    runCurrent()
+    assertEquals(listOf("B"), ids())
+  }
+
+  @Test
+  fun `недостиг на памет свива пула, скриването на UI не`() {
+    assertTrue(TerminalPool.shrinksOnTrim(ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW))
+    assertTrue(TerminalPool.shrinksOnTrim(ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL))
+    assertTrue(TerminalPool.shrinksOnTrim(ComponentCallbacks2.TRIM_MEMORY_MODERATE))
+    assertTrue(TerminalPool.shrinksOnTrim(ComponentCallbacks2.TRIM_MEMORY_COMPLETE))
+    assertFalse(TerminalPool.shrinksOnTrim(ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE))
+    assertFalse(TerminalPool.shrinksOnTrim(ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN))
+    assertFalse(TerminalPool.shrinksOnTrim(ComponentCallbacks2.TRIM_MEMORY_BACKGROUND))
   }
 
   @Test
