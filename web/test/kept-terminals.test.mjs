@@ -171,12 +171,45 @@ test('скрит таб, изчезнал от list, получава detach', a
   // Стар Mac затваря таб без `detached`: само следващият `list` е без него (ДЗ12).
   const without = structuredClone(list);
   for (const r of without.repos) for (const w of r.worktrees) w.tabs = w.tabs.filter((tab) => tab.contentId !== 'content-idle');
+  // Два поредни списъка без таба: един може да е стар (ревю F4).
+  c.relay.emit('message', without);
   c.relay.emit('message', without);
   assert.deepEqual(c.released(), ['content-idle']);
   assert.deepEqual(c.host.kept, ['content-shell-main']);
   await waitFor(() => c.frames(from, 'detach', 'content-idle').length === 1, 'detach за скрития');
   // Видимият не се пипа, дори да липсва в списъка: за него Mac-ът праща `detached`.
   c.relay.emit('message', { ...without, repos: [] });
+  c.relay.emit('message', { ...without, repos: [] });
+  assert.deepEqual(c.host.kept, ['content-shell-main']);
+});
+
+// Ревю F4: list, поискан преди табът да съществува, може да дойде след отварянето му.
+test('един стар list без таба не го пуска, два поредни — пускат', async (t) => {
+  const c = client(t);
+  c.host.setActive(true);
+  await ready(c);
+  c.host.open('content-compact');
+  await waitFor(() => c.attachedFor('content-compact') === 1, 'attached скрития');
+  c.host.open('content-shell-main');
+  await waitFor(() => c.attachedFor('content-shell-main') === 1, 'attached видимия');
+  const list = await waitFor(() => c.host.lastList, 'list');
+  const without = structuredClone(list);
+  for (const r of without.repos) for (const w of r.worktrees) w.tabs = w.tabs.filter((tab) => tab.contentId !== 'content-compact');
+  c.relay.emit('message', without);
+  assert.deepEqual(c.released(), []);
+  // Табът се появява: броенето почва отначало.
+  c.relay.emit('message', list);
+  c.relay.emit('message', without);
+  assert.deepEqual(c.released(), []);
+  assert.deepEqual(c.host.kept, ['content-shell-main', 'content-compact']);
+  // Докато табът е видим, броенето също почва отначало.
+  c.host.open('content-compact');
+  c.relay.emit('message', without);
+  c.host.open('content-shell-main');
+  c.relay.emit('message', without);
+  assert.deepEqual(c.released(), []);
+  c.relay.emit('message', without);
+  assert.deepEqual(c.released(), ['content-compact']);
   assert.deepEqual(c.host.kept, ['content-shell-main']);
 });
 

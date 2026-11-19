@@ -18,6 +18,8 @@ import { ATTACH_LIMIT, ATTACH_SCROLLBACK, CAPS, isTerminalStream } from './proto
 
 /** Колко живи терминала държи уеб app-ът (ЦЛ3); Mac-ът приема до 16 на връзка. */
 export const KEPT_LIMIT = 8;
+/** В толкова поредни `list` трябва да липсва скрит таб, за да се пусне (ДЗ12, ревю F4). */
+const LIST_MISSES_TO_RELEASE = 2;
 
 export const TAB_NEW_TIMEOUT_MS = 12_000;
 /**
@@ -69,6 +71,8 @@ export class HostController extends EventEmitter {
     this.attachIds = new Map();
     /** Терминал → сесията, в която е дошъл неговият `attached`. */
     this.attachedIn = new Map();
+    /** Скрит терминал → в колко поредни `list` го няма (ДЗ12, ревю F4). */
+    this.missingFromList = new Map();
     /** id на последния `watch` с `on:true` и сесията му; отговор с друго id не се гледа. */
     this.watchId = null;
     this.watchSession = null;
@@ -302,6 +306,7 @@ export class HostController extends EventEmitter {
     if (attached && this.relay.state.hostSession != null) this.relay.detach(contentId, this.attachIds.get(contentId) ?? null);
     this.attachIds.delete(contentId);
     this.attachedIn.delete(contentId);
+    this.missingFromList.delete(contentId);
     this.emit('message', { t: 'released', contentId });
   }
 
@@ -430,11 +435,20 @@ export class HostController extends EventEmitter {
 
   /**
    * ДЗ12: скрит таб, който го няма в списъка (затворен на стар Mac без `detached`), излиза от
-   * набора. Видимият остава: за него Mac-ът праща `detached` и страницата казва, че е затворен.
+   * набора — чак когато го няма в два поредни `list`: един може да е стар (поискан преди табът да
+   * съществува, ревю F4). Видимият остава: за него Mac-ът праща `detached`.
    */
   #dropClosedTabs(list) {
     const present = new Set(list.repos.flatMap((r) => (r.worktrees ?? []).flatMap((w) => (w.tabs ?? []).map((t) => t.contentId))));
-    for (const contentId of [...this.kept]) if (contentId !== this.visible && !present.has(contentId)) this.#release(contentId);
+    for (const contentId of [...this.kept]) {
+      if (contentId === this.visible || present.has(contentId)) {
+        this.missingFromList.delete(contentId);
+        continue;
+      }
+      const missing = (this.missingFromList.get(contentId) ?? 0) + 1;
+      if (missing >= LIST_MISSES_TO_RELEASE) this.#release(contentId);
+      else this.missingFromList.set(contentId, missing);
+    }
   }
 
   /** Кадрите на всеки жив терминал отиват към страницата; на пуснат таб или от стар attach — не. */
