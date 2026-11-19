@@ -54,6 +54,13 @@ Navigation 3. compileSdk и targetSdk са 36 (template-ът иска 37, но p
   отговаря с грешка на всяка заявка. При всеки преход false → true: `hello`, `list` и
   нов `attach` на отворения терминал. Повторно `relay` с `hostOnline:true` (само нов
   списък `hosts`) не е преход и не праща нищо.
+- `caps` от `hello` се пазят **по сокет** (relay сокетът и LAN сесията поотделно; `hostCaps` /
+  `state.caps` са тези на текущия път, `null` до първия `hello` по него). При `hostOnline:false`
+  тези на relay сокета се трият: Mac-ът може да се върне с друга версия. `watch` и `keep` се
+  ползват само ако са в `caps` на текущия сокет; без тях — днешното поведение (3 s питане, един
+  attach). Дизайн: `docs/plans/2026-11-19-watch-and-attach-keep-design.md` (ДЗ1–ДЗ28).
+- `watch` (`on:true`) тръгва веднъж за `hostSession` с един `list`; после Mac-ът праща `list`
+  сам (`id:null`). При смяна на пътя `watch` по стария, още отворен сокет спира с `on:false`.
 
 ## Няколко Mac-а
 
@@ -78,12 +85,16 @@ Navigation 3. compileSdk и targetSdk са 36 (template-ът иска 37, но p
 - Успешна LAN връзка поема всички заявки; relay сокетът остава като резерва (само ping).
   Всяка смяна на пътя е нова `hostSession` — терминалът прави `attach` наново. Пътят се
   вижда в чипа „LAN“ / „Relay“.
-- Mac-ът държи по един `attach` на връзка, затова `TerminalStreamGate` решава кой път носи
-  потока на терминала (`attached`/`out`/`size`/`detached`). Нов `attach` по друг път сменя пътя
-  чак с неговия `attached` (redraw-а); дотогава старият поток тече, а после по стария път тръгва
-  `detach`. Кадри от друг път, от паднала връзка или от стар attach не стигат до екраните;
-  решението и `emit` са под един lock за двата читателя. Тестове: `TerminalStreamGateTest`,
-  `RelayLanTest` „при смяна на пътя…“.
+- `TerminalStreamGate` решава **по терминал** кой път носи неговия поток
+  (`attached`/`out`/`size`/`detached`): с `attach keep` по една връзка текат няколко терминала.
+  Нов `attach` по друг път сменя пътя на този терминал чак с неговия `attached` (redraw-а);
+  дотогава старият поток тече, а после по стария път тръгва `detach` за всички терминали там (и
+  за скритите — те не се местят, а правят `attach` при показване). `attach` без `keep` откача
+  другите терминали по пътя. При нова `hostSession` скритите табове получават `detach` по другите
+  живи пътища (`detachOtherPaths`) — и без видим таб. Кадри от друг път, от паднала връзка или от
+  стар attach не стигат до екраните; решението и `emit` са под един lock за двата читателя.
+  Kotlin и JS (`web/src/stream-gate.mjs`) са с еднакви правила и тестове:
+  `TerminalStreamGateTest`, `RelayLanTest` „при смяна на пътя…“, `stream-gate.test.mjs`.
 - `LanTrustTest` държи `fpMac` вектора, изчислен с Node; Mac страната ползва същия.
 - Mock-ът има LAN endpoint на 8788 с TLS 1.3 и сертификат, създаден в паметта при всяко
   пускане (`selfsigned`); `mock-lan-off` / `mock-lan-on` в таб. Не се пазят ключове и
@@ -91,6 +102,16 @@ Navigation 3. compileSdk и targetSdk са 36 (template-ът иска 37, но p
 
 ## Терминалът
 
+- **Живи терминали** (ПР3, НЧ1): последните 4 отворени таба остават закачени (`attach` с `keep`)
+  в `TerminalPool` (в `AppContainer`, LRU, ключ `contentId`; чисти се при смяна на Mac или
+  ключ). `TerminalSession` държи attach-а, „Пауза“, маркираното и страницата (`TerminalPageView`
+  с WebView-то, `MutableContextWrapper`), а екранът (`TerminalViewModel`) — само лентите, полето и
+  „Най-долу“. Връщане към жив таб е без мрежа: същият екран и скрол. Скрит таб не рисува: изходът
+  му чака в `HiddenOutput` (до 2 MB; над тях — нов `attach` при показване). Нова `hostSession`:
+  `attach` само на видимия, скритите — при показване. Във фон скритите получават `detach`; след
+  5 min във фон и при `onTrimMemory` (RUNNING_LOW и по-сериозно) пулът се свива до видимия. Без
+  `attach.keep` (стар Mac) — един таб, `detach` при излизане, както преди. Тестове:
+  `TerminalPoolTest`, `HiddenOutputTest`.
 - Размерът е **на Mac-а**. Телефонът сменя размера на таба само когато потребителят натисне
   „Размер по този екран“ (изричен `resize`, ЗД12); никога не го сменя сам, и xterm.js никога не
   се преоразмерява сам: шрифтът е „по ширина“ (колоните влизат в екрана) или фиксиран от
@@ -165,6 +186,9 @@ Navigation 3. compileSdk и targetSdk са 36 (template-ът иска 37, но p
   (`RelayClient.setKeepAlive`) и пита за `list` на 15 s във фон.
 - Известие има само при преход към `awaitingInput` (`AwaitingTracker`); пред очите на
   потребителя преходът се запомня, но известие не се пуска.
+- Пред очите списъкът идва с `watch` (`ListWatch`, ако е в `caps`; иначе питане на 3 s). Във фон
+  `ListWatch` праща `watch` `on:false`, а `AgentWatchService` пита на 15 s както преди (БТ1 → ОП3):
+  при работещ агент Mac-ът праща списъка на ~2 s и телефонът във фон не бива да се буди толкова.
 
 ## Език
 
@@ -186,7 +210,8 @@ Navigation 3. compileSdk и targetSdk са 36 (template-ът иска 37, но p
 - Mock-ът знае и съобщенията на отдалечения клиент в Supacode (branch `remote-client-host` на
   fork-а): `caps`, `attach keep` (16, `attach_limit`), `layout` (минимален модел в
   `tools/mock-layout.mjs`), `watch`, `tab.close`, `pane.split`, `pane.close`, `tab.new paneId`,
-  `resize hold` (срокът без собственик — `MOCK_HOLD_GRACE_MS`, по подразбиране 30 s). Тестове:
+  `resize hold` (срокът без собственик — `MOCK_HOLD_GRACE_MS`, по подразбиране 30 s;
+  таванът на attach-овете с `keep` — `MOCK_ATTACH_LIMIT`, по подразбиране 16). Тестове:
   `web/test/mock-remote-client.test.mjs`, `web/test/mock-hold.test.mjs`.
 - `adb shell input text` не пише кирилица: в emulator-а има добавена българска подредба на
   Gboard (БДС фонетична); кирилицата се проверява с тап по клавишите и с hex-а в лога на mock-а.
@@ -208,6 +233,12 @@ Navigation 3. compileSdk и targetSdk са 36 (template-ът иска 37, но p
   `TerminalStreamGate`, LAN пинът). Промяна в протокола минава и през `web/src/protocol.mjs`.
 - Размерът на съществуващ таб е на Mac-а; `tab.new` носи `cols`/`rows` от прозореца (ОП27), а
   `resize` тръгва само от бутона „Размер по този екран“ (ЗД12). Нищо автоматично.
+- Списъкът идва с `watch`, докато има страница (иначе таймерът). До 8 живи терминала
+  (`HostController.kept`, LRU, `KEPT_LIMIT`; видимият е отделно поле `visible`): страницата държи по
+  един `TerminalView` на терминал, скритите с `hidden`, и пише изхода и в тях. Терминал излиза от
+  набора със събитие `released` (LRU, `detached`, изчезнал от `list`, `attach_limit`). Без
+  страница всички живи терминали получават `detach` (отклонение от ДЗ24: без зрител не тече нищо).
+  Вход, `resize` и `suggest` — само към видимия. Тестове: `kept-terminals.test.mjs` и e2e.
 - xterm.js не отговаря на въпросите на програмата (parser hooks в `public/terminal.js`): отговаря
   Ghostty на Mac-а.
 - Линковете (http/https и OSC 8) се отварят с клик в нов таб: link provider в `public/terminal.js`,
