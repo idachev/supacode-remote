@@ -284,3 +284,130 @@ test('размер по екрана: само за отворения таб, h
   }
 });
 
+
+// ---- caps по сокет и watch на стария път (ДЗ8a, ДЗ8b) ----
+//
+// mock-ът праща едни и същи `caps` по relay-а и по LAN, затова тук LAN сесията е подставена в
+// `relay.lanPath`: така двата сокета носят различни `caps` и се вижда чии са в `state.caps`.
+// Relay сокетът е истински (mock без LAN), за да се види в лога му какво е стигнало до Mac-а.
+
+const MOCK_CAPS = ['attach.keep', 'watch', 'layout', 'tab.close', 'pane.split', 'pane.close', 'resize.hold'];
+
+function fakeLan() {
+  const lan = {
+    address: 'fake-lan', closed: false, sent: [],
+    send(text) {
+      if (lan.closed) return false;
+      lan.sent.push(text);
+      return true;
+    },
+    close() { lan.closed = true; },
+    cancel() { lan.closed = true; },
+  };
+  return lan;
+}
+
+/** Както `LanPath.#adopt`: сесията става текуща, после `opened`. */
+function openFakeLan(relay, lan) {
+  relay.lanPath.session = lan;
+  relay.lanPath.events.opened(lan);
+}
+
+/** Както `LanPath.#onClosed`: сесията изчезва, после `closed`. */
+function closeFakeLan(relay, lan) {
+  lan.closed = true;
+  relay.lanPath.session = null;
+  relay.lanPath.events.closed(lan);
+}
+
+const lanHello = (caps) => JSON.stringify({ t: 'hello', v: 1, host: 'Mock Mac', hostId: '0f1ce0ff1ce0ff1c', caps });
+
+async function relayWithCaps(t) {
+  const plain = await startMock({ lan: false });
+  const relay = new RelayClient();
+  const states = [];
+  relay.on('state', (s) => states.push(s));
+  t.after(async () => {
+    relay.stop();
+    await plain.stop();
+  });
+  relay.configure(plain.settings);
+  await waitFor(() => relay.state.path === 'relay' && relay.state.caps, 'caps по relay-а');
+  return { plain, relay, states };
+}
+
+test('caps идват от hello на текущия път', async (t) => {
+  const { relay } = await relayWithCaps(t);
+  assert.deepEqual(relay.state.caps, MOCK_CAPS);
+  const lan = fakeLan();
+  openFakeLan(relay, lan);
+  relay.lanPath.events.text(lan, lanHello(['watch', 'attach.keep']));
+  assert.equal(relay.state.path, 'lan');
+  assert.deepEqual(relay.state.caps, ['watch', 'attach.keep']);
+  // hello по relay-а, докато LAN е текущ (нов опит за LAN), сменя само caps на relay сокета.
+  let relayHello = false;
+  relay.on('message', (m) => { if (m.t === 'hello') relayHello = true; });
+  relay.lanPath.events.askHello();
+  await waitFor(() => relayHello, 'hello по relay-а');
+  assert.deepEqual(relay.state.caps, ['watch', 'attach.keep']);
+});
+
+test('caps на relay сокета остават след падане на LAN', async (t) => {
+  const { relay, states } = await relayWithCaps(t);
+  const lan = fakeLan();
+  openFakeLan(relay, lan);
+  relay.lanPath.events.text(lan, lanHello(['attach.keep']));
+  const mark = states.length;
+  closeFakeLan(relay, lan);
+  // Нов hello по relay-а не е тръгнал: caps са пазените от първия hello на сокета.
+  assert.equal(relay.state.path, 'relay');
+  assert.deepEqual(relay.state.caps, MOCK_CAPS);
+  // Новата сесия идва в едно събитие с caps на своя път, не с тези на стария.
+  const switched = states.slice(mark).find((s) => s.path === 'relay');
+  assert.deepEqual(switched.caps, MOCK_CAPS);
+});
+
+test('нов LAN сокет без hello — caps са null', async (t) => {
+  const { relay, states } = await relayWithCaps(t);
+  const mark = states.length;
+  const lan = fakeLan();
+  openFakeLan(relay, lan);
+  const switched = states.slice(mark).find((s) => s.path === 'lan');
+  assert.ok(switched.hostSession != null);
+  assert.equal(switched.caps, null);
+  assert.equal(relay.state.caps, null);
+  relay.lanPath.events.text(lan, lanHello([]));
+  assert.deepEqual(relay.state.caps, []);
+});
+
+test('watch по relay-а се спира там при преминаване на LAN', async (t) => {
+  const { plain, relay } = await relayWithCaps(t);
+  const watchFrames = (on) => plain.log().split('\n')
+    .filter((l) => l.includes('message received, endpoint: client, type: watch') && l.includes(`"on":${on}`));
+  assert.equal(relay.send({ t: 'watch', id: relay.nextId(), on: true }), true);
+  await waitFor(() => watchFrames(true).length === 1, 'watch on по relay-а');
+  const lan = fakeLan();
+  openFakeLan(relay, lan);
+  await waitFor(() => watchFrames(false).length === 1, 'watch off по relay-а');
+  assert.equal(lan.sent.some((text) => text.includes('"watch"')), false);
+  // Обратно на relay-а: watch-ът там вече е спрян, нищо не тръгва само.
+  closeFakeLan(relay, lan);
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(watchFrames(false).length, 1);
+  assert.equal(watchFrames(true).length, 1);
+});
+
+test('Mac-ът изчезва от relay-а — caps на сокета чакат новия hello', async (t) => {
+  const { relay } = await relayWithCaps(t);
+  const host = new HostController(relay, { listIntervalMs: 60_000 });
+  host.setActive(true);
+  t.after(() => host.setActive(false));
+  host.open('content-codex');
+  await waitFor(() => host.attachedSession != null, 'attached');
+  host.input(Buffer.from('mock-offline\r').toString('base64'), 'content-codex');
+  await waitFor(() => !relay.state.hostOnline, 'офлайн');
+  assert.equal(relay.state.caps, null);
+  await waitFor(() => relay.state.hostOnline, 'пак онлайн', 10_000);
+  await waitFor(() => relay.state.caps, 'caps от новия hello');
+  assert.deepEqual(relay.state.caps, MOCK_CAPS);
+});
