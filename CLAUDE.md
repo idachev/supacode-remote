@@ -58,7 +58,7 @@ Navigation 3. compileSdk и targetSdk са 36 (template-ът иска 37, но p
   `state.caps` са тези на текущия път, `null` до първия `hello` по него). При `hostOnline:false`
   тези на relay сокета се трият: Mac-ът може да се върне с друга версия. `watch` и `keep` се
   ползват само ако са в `caps` на текущия сокет; без тях — днешното поведение (3 s питане, един
-  attach). Дизайн: `docs/plans/2026-11-19-watch-and-attach-keep-design.md` (ДЗ1–ДЗ28).
+  attach). Дизайн: `docs/plans/done/2026-11-19-watch-and-attach-keep-design.md` (ДЗ1–ДЗ28).
 - `watch` (`on:true`) тръгва веднъж за `hostSession` с един `list`; после Mac-ът праща `list`
   сам (`id:null`). При смяна на пътя `watch` по стария, още отворен сокет спира с `on:false`.
 
