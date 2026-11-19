@@ -100,7 +100,7 @@ function pageUpgrade({ wss, guard, link, log }) {
 /** Клиентът към Mac-а: relay връзката, логиката на табовете и връзката със страницата. */
 function createClient({ configDir, relayTiming, log }) {
   const relay = new RelayClient({ timing: relayTiming, log });
-  const host = new HostController(relay);
+  const host = new HostController(relay, { log });
   const link = new BrowserLink({ relay, host, config: new ConfigStore(configDir), log });
   return { relay, host, link };
 }

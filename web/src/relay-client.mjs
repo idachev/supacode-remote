@@ -11,6 +11,11 @@
 // `attach`-а по другия път, затова терминалът го прави наново. Кой път носи потока на терминала,
 // решава `TerminalStreamGate`.
 //
+// `caps` са на сокета, не на приложението (ДЗ8b): relay сокетът и LAN сесията имат всеки своя
+// последен `hello`. `state.caps` са тези на текущия път; `null` — пътят е нов и `hello` по него
+// още не е дошъл. `watch` живее на сокета, по който е тръгнал: при смяна на пътя relay сокетът
+// остава отворен, затова там тръгва `watch` с `on:false` (ДЗ8a).
+//
 // Node е на една нишка, затова тук няма lock-ове: всяко решение и `emit` стават в реда на
 // пристигане на кадрите.
 
@@ -39,6 +44,8 @@ function initialState() {
     connection: 'idle', retryInMs: 0, reason: null,
     hostOnline: false, hostName: null, hostId: null, hostApp: null,
     path: 'none', hostSession: null,
+    // `caps` от `hello` на сокета на текущия път; `null` — няма път или `hello` по него още няма.
+    caps: null,
     // multi-host: `null` — стар relay без списък; `[]` — нов relay, който не знае Mac.
     hosts: null, boundHost: null,
   };
@@ -70,6 +77,10 @@ export class RelayClient extends EventEmitter {
     this.socket = null;
     this.hostSessionCounter = 0;
     this.gate = new TerminalStreamGate();
+    /** Сокет (relay WebSocket или LAN сесия) → `caps` от последния му `hello`. */
+    this.socketCaps = new Map();
+    /** Сокетът, по който последно тръгна `watch` с `on:true`; `null` — никой не гледа. */
+    this.watchVia = null;
     this.state = initialState();
     this.lanPath = new LanPath({ timing: this.timing, log, events: this.#lanEvents() });
   }
@@ -107,10 +118,11 @@ export class RelayClient extends EventEmitter {
   /** По LAN, ако е горе, иначе по relay-а. `false`, ако съобщението не е тръгнало. */
   send(message) {
     const text = encode(message);
+    if (message.t === 'watch') return this.#sendWatch(message, text);
     if (message.t !== 'attach' && message.t !== 'detach') return this.#sendText(text);
     const via = this.#sendVia(text);
     if (!via) return false;
-    if (message.t === 'attach') this.gate.attachSent(via, message.id, message.contentId);
+    if (message.t === 'attach') this.gate.attachSent(via, message.id, message.contentId, message.keep === true);
     else this.#sendDetaches(this.gate.detachSent(via, message.contentId));
     return true;
   }
@@ -119,6 +131,16 @@ export class RelayClient extends EventEmitter {
   detach(contentId, lastAttachId) {
     if (this.gate.isStaleDetach(contentId, lastAttachId)) return true;
     return this.send({ t: 'detach', contentId });
+  }
+
+  /**
+   * ДЗ8a: скрит таб след смяна на пътя — `detach` по другите пътища, по които Mac-ът още го държи
+   * (relay сокетът при преминаване на LAN). Видимият не минава оттук: неговият стар поток тече до
+   * `attached` по новия път (`TerminalStreamGate`).
+   */
+  detachOtherPaths(contentId) {
+    const current = this.#socketOf(this.state.path);
+    if (current) this.#sendDetaches(this.gate.takeOtherPaths(contentId, current));
   }
 
   // ---- състояние и изпращане ----
@@ -148,6 +170,43 @@ export class RelayClient extends EventEmitter {
     return this.#sendVia(text) != null;
   }
 
+  /** `watch` помни сокета си: при смяна на пътя там тръгва `on:false` (ДЗ8a). */
+  #sendWatch(message, text) {
+    const via = this.#sendVia(text);
+    if (!via) return false;
+    if (message.on) this.watchVia = via;
+    else if (this.watchVia === via) this.watchVia = null;
+    return true;
+  }
+
+  /**
+   * Спира `watch` на сокета, който вече не е текущ. Отворен остава само relay сокетът при
+   * преминаване на LAN; паднал сокет е забравил watch-а сам. Към офлайн host не се праща нищо:
+   * relay-ят отговаря с грешка, а Mac-ът и без това е забравил връзката.
+   */
+  #stopWatchOn(nextSocket) {
+    const via = this.watchVia;
+    if (!via || via === nextSocket) return;
+    this.watchVia = null;
+    const text = encode({ t: 'watch', id: this.nextId(), on: false });
+    if (via instanceof WebSocket) {
+      if (via === this.socket && this.state.hostOnline) socketSend(via, text);
+    } else {
+      via.send(text);
+    }
+  }
+
+  /** Сокетът, който носи заявките по `route`. */
+  #socketOf(route) {
+    if (route === 'lan') return this.lan;
+    return route === 'relay' ? this.socket : null;
+  }
+
+  #capsOf(route) {
+    const socket = this.#socketOf(route);
+    return (socket && this.socketCaps.get(socket)) ?? null;
+  }
+
   #sendDetaches(targets) {
     for (const [source, contentId] of targets) {
       const text = encode({ t: 'detach', contentId });
@@ -166,12 +225,16 @@ export class RelayClient extends EventEmitter {
   #updateRoute() {
     const route = this.lan ? 'lan' : this.state.hostOnline ? 'relay' : 'none';
     if (route === this.state.path) return;
+    // Преди новата сесия: слушателите ѝ може веднага да пратят `watch` по новия път.
+    this.#stopWatchOn(this.#socketOf(route));
+    // `caps` в същото събитие като новата сесия: иначе тя би се видяла с caps на стария път.
+    const caps = this.#capsOf(route);
     if (route === 'none') {
-      this.#set({ path: route, hostSession: null });
+      this.#set({ path: route, hostSession: null, caps });
       return;
     }
     this.hostSessionCounter += 1;
-    this.#set({ path: route, hostSession: this.hostSessionCounter });
+    this.#set({ path: route, hostSession: this.hostSessionCounter, caps });
   }
 
   // ---- relay сокетът ----
@@ -191,6 +254,8 @@ export class RelayClient extends EventEmitter {
   #dropConnections() {
     const old = this.socket;
     this.socket = null;
+    this.socketCaps.clear();
+    this.watchVia = null;
     if (old) {
       this.gate.closed(old);
       old.terminate();
@@ -304,7 +369,7 @@ export class RelayClient extends EventEmitter {
     const message = decode(text);
     if (!message) return;
     if (message.t === 'relay') this.#onRelayStatus(conn.ws, message);
-    else if (message.t === 'hello') this.#onRelayHello(message);
+    else if (message.t === 'hello') this.#onRelayHello(conn.ws, message);
     this.#deliver(conn.ws, message);
   }
 
@@ -324,6 +389,7 @@ export class RelayClient extends EventEmitter {
     const { ws } = conn;
     if (this.socket === ws) this.socket = null;
     this.gate.closed(ws);
+    this.socketCaps.delete(ws);
     // LAN връзката остава (както в Android): тя не зависи от relay сокета.
     if (conn.attempt === this.attempt) {
       this.#set({ hostOnline: false });
@@ -336,12 +402,16 @@ export class RelayClient extends EventEmitter {
   #onRelayStatus(ws, message) {
     // Само ръбът false → true значи нов host; повторен `true` носи само списъка на Mac-овете.
     if (message.hostOnline && !this.state.hostOnline) socketSend(ws, HELLO);
+    // Офлайн Mac е забравил връзката; върне ли се, може да е друга версия — caps чакат новия hello.
+    if (!message.hostOnline) this.socketCaps.delete(ws);
     this.#set({ hostOnline: message.hostOnline, hosts: message.hosts, boundHost: message.host });
     this.#updateRoute();
   }
 
-  #onRelayHello(hello) {
-    this.#set({ hostName: hello.host, hostId: hello.hostId, hostApp: hello.app });
+  #onRelayHello(ws, hello) {
+    this.socketCaps.set(ws, hello.caps);
+    // При текущ LAN това сменя само caps на relay сокета: `state.caps` остават тези на LAN.
+    this.#set({ hostName: hello.host, hostId: hello.hostId, hostApp: hello.app, caps: this.#capsOf(this.state.path) });
     this.lanPath.offer(hello, { apiKey: this.settings?.apiKey, boundHostId: this.hostId });
   }
 
@@ -353,6 +423,7 @@ export class RelayClient extends EventEmitter {
       text: (session, text) => this.#lanText(session, text),
       closed: (session) => {
         this.gate.closed(session);
+        this.socketCaps.delete(session);
         this.#updateRoute();
       },
       askHello: () => {
@@ -365,7 +436,10 @@ export class RelayClient extends EventEmitter {
     const message = decode(text);
     if (!message) return;
     // `lan` в hello по самия LAN не значи нищо ново.
-    if (message.t === 'hello') this.#set({ hostName: message.host, hostId: message.hostId, hostApp: message.app });
+    if (message.t === 'hello') {
+      this.socketCaps.set(session, message.caps);
+      this.#set({ hostName: message.host, hostId: message.hostId, hostApp: message.app, caps: this.#capsOf(this.state.path) });
+    }
     this.#deliver(session, message);
   }
 }

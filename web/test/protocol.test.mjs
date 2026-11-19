@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  clientUrl, decode, encode, formatConnectionKey, parseConnectionKey, relayLabel,
+  ATTACH_LIMIT, CAPS, clientUrl, decode, encode, formatConnectionKey, parseConnectionKey, relayLabel,
 } from '../src/protocol.mjs';
 
 test('https става wss и http става ws', () => {
@@ -135,5 +135,34 @@ test('новите полета и съобщения на отдалечени�
   assert.equal(list.repos[0].worktrees[0].tabs[0].contentId, 'c1');
   const error = decode('{"t":"error","id":2,"code":"attach_limit","contentId":"c9","message":"too many attached terminals"}');
   assert.deepEqual([error.id, error.code, error.contentId], [2, 'attach_limit', 'c9']);
-  for (const t of ['watch', 'tab.close', 'pane.split', 'pane.close']) assert.equal(decode(JSON.stringify({ t, id: 1 })), null);
+  for (const t of ['tab.close', 'pane.split', 'pane.close']) assert.equal(decode(JSON.stringify({ t, id: 1 })), null);
+});
+
+// ПР3: `watch` и `attach keep` се ползват само ако са в `caps` на сокета (ДЗ1).
+test('hello носи caps, без тях е празен списък', () => {
+  assert.deepEqual(decode('{"t":"hello","v":1,"host":"Mac","caps":["attach.keep","watch","layout"]}').caps, ['attach.keep', 'watch', 'layout']);
+  assert.deepEqual(decode('{"t":"hello","v":1,"host":"Mac"}').caps, []);
+  // Стойност от друг тип не чупи hello: непознатото се пренебрегва, както изисква протоколът.
+  assert.deepEqual(decode('{"t":"hello","v":1,"caps":["watch",7]}').caps, ['watch']);
+  assert.deepEqual(decode('{"t":"hello","v":1,"caps":"watch"}').caps, []);
+  assert.deepEqual(CAPS, { WATCH: 'watch', ATTACH_KEEP: 'attach.keep' });
+});
+
+test('watch заявка и отговор', () => {
+  assert.equal(encode({ t: 'watch', id: 5, on: true }), '{"t":"watch","id":5,"on":true}');
+  assert.deepEqual(decode('{"t":"watch","id":5,"on":true}'), { t: 'watch', id: 5, on: true });
+  assert.deepEqual(decode('{"t":"watch","id":6,"on":false}'), { t: 'watch', id: 6, on: false });
+  assert.deepEqual(decode('{"t":"watch"}'), { t: 'watch', id: null, on: false });
+});
+
+test('attach с keep и без него', () => {
+  assert.equal(encode({ t: 'attach', id: 2, contentId: 'c', scrollback: 500, keep: true }), '{"t":"attach","id":2,"contentId":"c","scrollback":500,"keep":true}');
+  assert.equal(encode({ t: 'attach', id: 2, contentId: 'c', scrollback: 500 }), '{"t":"attach","id":2,"contentId":"c","scrollback":500}');
+});
+
+test('attach_limit е грешка с contentId', () => {
+  const e = decode('{"t":"error","id":2,"code":"attach_limit","contentId":"c","message":"too many"}');
+  assert.equal(e.code, ATTACH_LIMIT);
+  assert.equal(ATTACH_LIMIT, 'attach_limit');
+  assert.equal(e.contentId, 'c');
 });
