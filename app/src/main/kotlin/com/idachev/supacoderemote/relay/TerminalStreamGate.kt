@@ -74,6 +74,14 @@ internal class TerminalStreamGate {
   }
 
   /**
+   * ДЗ8a: скрит терминал при нова сесия по [current] — Mac-ът още го държи по другите живи
+   * пътища (relay сокетът при преминаване на LAN), а там той вече не бива да тече. Маха двойките
+   * и ги връща за `detach`; паднал път ([closed]) вече го няма тук, затова по него нищо не тръгва.
+   */
+  fun takeOtherPaths(contentId: String, current: Any): List<Pair<Any, String>> =
+    takeAttached { path, terminal -> terminal == contentId && path !== current }
+
+  /**
    * `detach` от екран, чийто последен attach е [attachId], е остарял: след него друг екран
    * е закачил същия терминал (бързо A→B→A), и той би спрял потока на новия екран.
    */

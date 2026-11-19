@@ -68,6 +68,19 @@ class TerminalPool(
   init {
     scope.launch { resets.drop(1).collect { clear() } }
     scope.launch { link.messages.filterIsInstance<ListReply>().collect(::onList) }
+    scope.launch { link.hostSession.collect(::onHostSession) }
+  }
+
+  /**
+   * Нова сесия с host-а (reconnect, смяна на пътя): видимият таб прави attach веднага, скритите
+   * стават „нужен attach“ (ДЗ8). После скритите получават `detach` по стария път, ако той още е
+   * жив (relay сокетът при LAN, ДЗ8a) — и без видим таб, иначе текат там до следващия attached.
+   */
+  private fun onHostSession(session: Int?) {
+    val (shown, hidden) = entries.toList().partition { it.visible }
+    shown.forEach { it.onHostSession(session) }
+    hidden.forEach { it.onHostSession(session) }
+    if (session != null) hidden.forEach { link.detachOtherPaths(it.contentId) }
   }
 
   /**

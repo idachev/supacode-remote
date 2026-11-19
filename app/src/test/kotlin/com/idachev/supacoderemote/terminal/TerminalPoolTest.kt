@@ -41,11 +41,19 @@ class TerminalPoolTest {
     override val hostSession = MutableStateFlow<Int?>(1)
     override val hostCaps = MutableStateFlow<Set<String>?>(setOf("watch", "attach.keep"))
     val sent = mutableListOf<ClientMessage>()
+
+    /** Редът на attach-овете и на detach-овете по другите пътища (ПБ1). */
+    val order = mutableListOf<String>()
     private var id = 0
 
     override fun send(message: ClientMessage): Boolean {
       sent += message
+      if (message is AttachRequest) order += "attach ${message.contentId}"
       return true
+    }
+
+    override fun detachOtherPaths(contentId: String) {
+      order += "other $contentId"
     }
 
     override fun nextId(): Int = ++id
@@ -129,6 +137,31 @@ class TerminalPoolTest {
     runCurrent()
     assertEquals(2, attaches("B").size)
     assertEquals(1, attaches("A").size)
+  }
+
+  /** ПБ1 (ДЗ8a): relay → LAN без видим таб — скритите не текат по relay-а до следващия attached. */
+  @Test
+  fun `нова сесия без видим таб пуска скритите по другите пътища`() = runTest(dispatcher) {
+    visit("A")
+    visit("B")
+    link.order.clear()
+    link.hostSession.value = 2
+    runCurrent()
+    assertEquals(listOf("other B", "other A"), link.order)
+    pool.open("A", Any())
+    runCurrent()
+    assertEquals(listOf("other B", "other A", "attach A"), link.order)
+  }
+
+  /** Видимият първо прави attach по новия път; неговият стар път спира gate-ът (АЦ2), не тук. */
+  @Test
+  fun `нова сесия - attach на видимия, после detach на скритите`() = runTest(dispatcher) {
+    visit("A")
+    enter("B")
+    link.order.clear()
+    link.hostSession.value = 2
+    runCurrent()
+    assertEquals(listOf("attach B", "other A"), link.order)
   }
 
   @Test

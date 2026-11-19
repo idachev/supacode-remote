@@ -240,6 +240,26 @@ class TerminalStreamGateTest {
     assertTrue(gate.isAttached("A"))
   }
 
+  /**
+   * ПБ1 (ДЗ8a): нова сесия по LAN — скритият B получава detach по relay-а веднага, а видимият A
+   * тече по relay-а до своя attached по LAN (АЦ2).
+   */
+  @Test
+  fun `detach на скрит по другите пътища не пипа текущия път`() {
+    twoKeptOnRelay()
+    gate.attachSent(lan, 3, "A", keep = true)
+    assertEquals(listOf(relay to "B"), gate.takeOtherPaths("B", current = lan))
+    assertFalse(deliver(relay, Output("B", "hidden-late")))
+    assertFalse(gate.isAttached("B"))
+    assertTrue(deliver(relay, Output("A", "gap")))
+    assertEquals(listOf(relay to "A"), gate.accept(lan, attachedFor(3, "A")).detach)
+    // По текущия път нищо не се маха: hostOnline false → true на същия сокет.
+    gate.attachSent(lan, 4, "C", keep = true)
+    assertTrue(deliver(lan, attachedFor(4, "C")))
+    assertEquals(emptyList<Pair<Any, String>>(), gate.takeOtherPaths("C", current = lan))
+    assertTrue(deliver(lan, Output("C", "c")))
+  }
+
   /** Както днес с един чакащ attach: attach без keep отменя чакащия attach на друг терминал по пътя. */
   @Test
   fun `attach без keep отменя чакащия attach на друг терминал по същия път`() {

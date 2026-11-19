@@ -75,6 +75,14 @@ interface HostLink {
    */
   fun detach(contentId: String, lastAttachId: Int?): Boolean = send(DetachRequest(contentId))
 
+  /**
+   * ДЗ8a: скрит таб след нова сесия — `detach` по пътищата, по които Mac-ът още го държи, освен
+   * текущия (relay сокетът при преминаване на LAN). Видимият не минава оттук: неговият стар поток
+   * тече до `attached` по новия път ([TerminalStreamGate], АЦ2). По подразбиране нищо — за
+   * fake-овете в тестовете, които имат един път.
+   */
+  fun detachOtherPaths(contentId: String) {}
+
   /** Id за заявка, която чака отговор със същото `id`. */
   fun nextId(): Int
 
@@ -338,6 +346,13 @@ class RelayClient(
       // host-ът е забравил attach-а, а нова връзка не бива да праща нищо преди hostOnline:true.
       if (_hostSession.value == null || !gate.isAttached(contentId)) return true
       return send(DetachRequest(contentId))
+    }
+  }
+
+  override fun detachOtherPaths(contentId: String) {
+    synchronized(streamLock) {
+      val current = socketFor(_path.value) ?: return
+      sendDetaches(gate.takeOtherPaths(contentId, current))
     }
   }
 

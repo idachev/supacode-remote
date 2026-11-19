@@ -469,6 +469,28 @@ class RelayLanTest {
     withTimeout(5_000) { relay.hostCaps.first { it == setOf("attach.keep") } }
   }
 
+  /** ПБ1 (ДЗ8a): скрит таб след преминаване на LAN — detach по relay-а, по LAN нищо. */
+  @Test
+  fun `detach по другите пътища тръгва по relay-а, а не по текущия LAN`() = runBlocking<Unit> {
+    relayServer.enqueue(relayHostWithAttach(lanJson(lanServer.port)))
+    lanServer.enqueue(MockResponse.Builder().code(404).build())
+    lanServer.enqueue(lanHostWithAttach())
+    val relay = RelayClient(OkHttpClient(), scope, timing.copy(lanRetryFirstMs = 1_500)).also { clients += it }
+    relay.configure(RelaySettings("http://${relayServer.hostName}:${relayServer.port}", key))
+    relay.setForeground(true)
+    withTimeout(5_000) { relay.path.first { it == LinkPath.RELAY } }
+    relay.send(AttachRequest(id = 1, contentId = "b", keep = true))
+    nextMatching(fromClientOnRelay) { it.contains("\"t\":\"attach\"") }
+    withTimeout(5_000) { relay.path.first { it == LinkPath.LAN } }
+    relay.detachOtherPaths("b")
+    assertEquals("""{"t":"detach","contentId":"b"}""", nextMatching(fromClientOnRelay) { it.contains("detach") })
+    // Вторият път няма какво да спре: gate-ът вече не държи b никъде.
+    relay.detachOtherPaths("b")
+    Thread.sleep(300)
+    assertFalse(fromClientOnRelay.any { it.contains("detach") })
+    assertFalse(fromClientOnLan.any { it.contains("detach") })
+  }
+
   private val officeStatus =
     """{"t":"relay","hostOnline":true,"host":"office","hosts":[{"id":"office","name":"Office Mac","online":true}]}"""
 

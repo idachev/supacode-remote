@@ -132,7 +132,6 @@ class TerminalSession internal constructor(
 
   init {
     scope.launch { link.messages.collect(::onMessage) }
-    scope.launch { link.hostSession.collect(::onHostSession) }
   }
 
   /** Команда към страницата от екрана (скрол, мярка, текст). */
@@ -215,8 +214,9 @@ class TerminalSession internal constructor(
     page = null
   }
 
-  private fun onHostSession(session: Int?) {
-    // Първата стойност на StateFlow-а е сесията, в която табът е отворен — не е нова.
+  /** Пулът подава сесията с host-а — първо на видимите табове, после на скритите (ПБ1). */
+  internal fun onHostSession(session: Int?) {
+    // Сесията, в която табът е отворен, не е нова.
     if (session == seenHostSession) return
     seenHostSession = session
     if (session == null) {
