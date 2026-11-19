@@ -124,3 +124,106 @@ test('detach по другия път спира и текущия път', () =
   assert.deepEqual(gate.detachSent(lan, 'c1'), [[relay, 'c1']]);
   assert.equal(deliver(relay, out('relay-late')), false);
 });
+
+// ---- по терминал (attach keep, ДЗ14–ДЗ16) ----
+//
+// С `keep` Mac-ът държи няколко терминала на една връзка. Правилото на gate-а е същото, но за
+// всеки терминал поотделно. Случаите и имената са същите като в Kotlin `TerminalStreamGateTest`.
+
+/** A и B закачени с keep по relay-а; A е видимият. */
+function twoOnRelay() {
+  const s = setup();
+  const { relay, gate, deliver } = s;
+  gate.attachSent(relay, 1, 'A', true);
+  assert.equal(deliver(relay, attached(1, 'A')), true);
+  gate.attachSent(relay, 2, 'B', true);
+  assert.equal(deliver(relay, attached(2, 'B')), true);
+  return s;
+}
+
+/** Двойките `[път, терминал]` в реда, в който тръгват `detach`-овете. */
+const pairs = (list) => list.map(([via, c]) => `${via.name}:${c}`);
+
+test('два терминала с keep на един път текат заедно', () => {
+  const { relay, gate, deliver } = twoOnRelay();
+  assert.equal(deliver(relay, out('a', 'A')), true);
+  assert.equal(deliver(relay, out('b', 'B')), true);
+  assert.equal(gate.isAttached('A'), true);
+  assert.equal(gate.isAttached('B'), true);
+});
+
+test('attach без keep на пътя спира другите терминали там', () => {
+  const { relay, gate, deliver } = twoOnRelay();
+  gate.attachSent(relay, 3, 'C');
+  assert.equal(deliver(relay, out('a', 'A')), false);
+  assert.equal(deliver(relay, out('b', 'B')), false);
+  assert.equal(gate.isAttached('A'), false);
+  assert.equal(deliver(relay, attached(3, 'C')), true);
+  assert.equal(deliver(relay, out('c', 'C')), true);
+});
+
+test('след LAN attached на видимия скритите на relay-а получават detach', () => {
+  const { relay, lan, gate, deliver } = twoOnRelay();
+  gate.attachSent(lan, 3, 'A', true);
+  const handoff = gate.accept(lan, attached(3, 'A'));
+  assert.equal(handoff.deliver, true);
+  assert.deepEqual(pairs(handoff.detach), ['relay:A', 'relay:B']);
+  assert.equal(deliver(relay, out('b-late', 'B')), false);
+  assert.equal(deliver(relay, out('a-late', 'A')), false);
+  assert.equal(deliver(lan, out('a-live', 'A')), true);
+  assert.equal(gate.isAttached('B'), false);
+});
+
+test('изходът на видимия по relay тече до LAN attached', () => {
+  const { relay, lan, gate, deliver } = twoOnRelay();
+  gate.attachSent(lan, 3, 'A', true);
+  assert.equal(deliver(relay, out('a-gap', 'A')), true);
+  assert.equal(deliver(relay, out('b-gap', 'B')), true);
+  // Кадър от LAN преди неговия attached (не би трябвало да дойде) не минава.
+  assert.equal(deliver(lan, out('a-early', 'A')), false);
+});
+
+test('closed на пътя маха всички терминали по него', () => {
+  const { relay, gate, deliver } = twoOnRelay();
+  gate.closed(relay);
+  assert.equal(gate.isAttached('A'), false);
+  assert.equal(gate.isAttached('B'), false);
+  assert.equal(deliver(relay, out('a', 'A')), false);
+  assert.equal(deliver(relay, out('b', 'B')), false);
+});
+
+test('закъснял detach на скрит не спира видимия', () => {
+  const { relay, gate, deliver } = twoOnRelay();
+  assert.deepEqual(gate.detachSent(relay, 'B'), []);
+  assert.equal(deliver(relay, out('a', 'A')), true);
+  assert.equal(deliver(relay, out('b', 'B')), false);
+  assert.equal(gate.isAttached('A'), true);
+  assert.equal(gate.isAttached('B'), false);
+});
+
+// Скритият B е тръгнал с attach по relay-а, но още без отговор, когато видимият A мине на LAN.
+// detach-ът по relay-а отменя и него: закъснелият му `attached` там не бива да стане текущ.
+test('detach при смяна на пътя отменя и чакащия attach там', () => {
+  const { relay, lan, gate, deliver } = setup();
+  gate.attachSent(relay, 1, 'A', true);
+  assert.equal(deliver(relay, attached(1, 'A')), true);
+  gate.attachSent(relay, 2, 'B', true);
+  gate.attachSent(lan, 3, 'A', true);
+  assert.deepEqual(pairs(gate.accept(lan, attached(3, 'A')).detach), ['relay:A', 'relay:B']);
+  const late = gate.accept(relay, attached(2, 'B'));
+  assert.equal(late.deliver, false);
+  assert.deepEqual(late.detach, []);
+  assert.equal(deliver(lan, out('lan-live', 'A')), true);
+  assert.equal(gate.isAttached('A'), true);
+});
+
+// Както преди `keep` с един чакащ attach: attach без keep отменя чакащия attach на друг терминал.
+test('attach без keep отменя чакащия attach на друг терминал по същия път', () => {
+  const { relay, gate, deliver } = setup();
+  gate.attachSent(relay, 1, 'A', true);
+  gate.attachSent(relay, 2, 'B');
+  assert.equal(gate.isAttached('A'), false);
+  assert.equal(deliver(relay, attached(1, 'A')), false);
+  assert.equal(deliver(relay, attached(2, 'B')), true);
+  assert.equal(deliver(relay, out('b', 'B')), true);
+});

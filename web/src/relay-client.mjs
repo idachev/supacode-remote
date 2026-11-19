@@ -122,7 +122,7 @@ export class RelayClient extends EventEmitter {
     if (message.t !== 'attach' && message.t !== 'detach') return this.#sendText(text);
     const via = this.#sendVia(text);
     if (!via) return false;
-    if (message.t === 'attach') this.gate.attachSent(via, message.id, message.contentId);
+    if (message.t === 'attach') this.gate.attachSent(via, message.id, message.contentId, message.keep === true);
     else this.#sendDetaches(this.gate.detachSent(via, message.contentId));
     return true;
   }
