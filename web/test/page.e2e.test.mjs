@@ -366,6 +366,24 @@ test('A → B → A връща същия екран без нов attach', asyn
   assert.equal(await page.locator('.term-view').count() >= 3, true, 'празният и двата таба');
 });
 
+test('A → B → A пази скрола в историята', async (t) => {
+  if (!browser) return t.skip('няма Google Chrome');
+  const firstRow = () => page.evaluate(() => document.querySelector('.term-view:not([hidden]) .xterm-rows > div')?.textContent.trim());
+  await typeInTerminal('clear; seq 1 300');
+  await waitFor(async () => /^300$/m.test(await screenText()), 'seq до края');
+  const bottom = await firstRow();
+  const area = await page.locator('#term-area').boundingBox();
+  await page.mouse.move(area.x + area.width / 2, area.y + area.height / 2);
+  await page.mouse.wheel(0, -1200);
+  await waitFor(async () => (await firstRow()) !== bottom, 'скрол нагоре');
+  await new Promise((r) => setTimeout(r, 200));
+  const scrolled = await firstRow();
+  await page.locator('.tab', { hasText: 'codex review' }).click();
+  await waitLive();
+  await page.locator('.tab', { hasText: 'claude' }).click();
+  await waitFor(async () => (await firstRow()) === scrolled, `същият скрол (${scrolled})`, 1_000);
+});
+
 test('изходът на скрит таб стига до него', async (t) => {
   if (!browser) return t.skip('няма Google Chrome');
   await typeInTerminal("clear; sleep 1; printf 'късно-%s\\n' A");

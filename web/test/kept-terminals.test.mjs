@@ -15,8 +15,8 @@ after(async () => { await mock?.stop(); });
 
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 
-function client(t, target = mock, { hostId = null, ...options } = {}) {
-  const relay = new RelayClient();
+function client(t, target = mock, { hostId = null, timing = {}, ...options } = {}) {
+  const relay = new RelayClient({ timing });
   const sent = [];
   const send = relay.send.bind(relay);
   relay.send = (message) => {
@@ -33,8 +33,8 @@ function client(t, target = mock, { hostId = null, ...options } = {}) {
   relay.configure(target.settings, hostId);
   const mark = () => target.log().length;
   /** Кадрите от този тип в лога на mock-а след `from`, по желание само за един терминал. */
-  const frames = (from, type, contentId = null) => target.log().slice(from).split('\n')
-    .filter((l) => l.includes('message received, endpoint: client, type: ' + type + ',') &&
+  const frames = (from, type, contentId = null, endpoint = 'client') => target.log().slice(from).split('\n')
+    .filter((l) => l.includes(`message received, endpoint: ${endpoint}, type: ${type},`) &&
       (contentId == null || l.includes(`"contentId":"${contentId}"`)));
   const released = () => messages.filter((m) => m.t === 'released').map((m) => m.contentId);
   const attachedFor = (contentId) => messages.filter((m) => m.t === 'attached' && m.contentId === contentId).length;
@@ -233,4 +233,47 @@ test('attach_limit свива набора до видимия и закача �
   assert.equal(c.frames(from, 'attach', 'content-idle').length, 2);
   // Грешката е обработена тук: страницата не я вижда.
   assert.equal(c.messages.some((m) => m.t === 'error'), false);
+});
+
+// RF1: Task 2 (watch по сокет), Task 4 (gate по терминал) и Task 5 (набора) заедно при relay → LAN.
+test('relay → LAN при живи табове: по relay-а detach за всички и watch off, по LAN attach само на видимия', async (t) => {
+  const lanMock = await startMock();
+  t.after(() => lanMock.stop());
+  const c = client(t, lanMock, { timing: { lanRetryFirstMs: 300, lanRetryMaxMs: 600 } });
+  c.host.setActive(true);
+  await waitFor(() => c.relay.state.path === 'lan' && c.relay.state.caps, 'LAN с caps');
+  c.host.open('content-shell-main');
+  await waitFor(() => c.attachedFor('content-shell-main') === 1, 'attached по LAN');
+  const watches = () => c.sent.filter((m) => m.t === 'watch' && m.on).length;
+  const watchesOnLan = watches();
+  c.host.input(b64('mock-lan-off\r'), 'content-shell-main');
+  await waitFor(() => c.relay.state.path === 'relay' && c.relay.state.caps, 'relay с caps');
+  await waitFor(() => c.attachedFor('content-shell-main') === 2, 'attached по relay-а');
+  await waitFor(() => watches() === watchesOnLan + 1, 'watch по relay-а');
+  for (const id of ['content-compact', 'content-idle', 'content-codex']) {
+    c.host.open(id);
+    await waitFor(() => c.attachedFor(id) === 1, `attached ${id}`);
+  }
+  const from = c.mark();
+  c.host.input(b64('mock-lan-on\r'), 'content-codex');
+  await waitFor(() => c.relay.state.path === 'lan', 'пак LAN', 10_000);
+  await waitFor(() => c.attachedFor('content-codex') === 2, 'attached на видимия по LAN');
+  const relayDetaches = ['content-codex', 'content-idle', 'content-compact', 'content-shell-main'];
+  await waitFor(() => relayDetaches.every((id) => c.frames(from, 'detach', id).length === 1), 'detach по relay-а за всички');
+  assert.equal(c.frames(from, 'watch').filter((l) => l.includes('"on":false')).length, 1);
+  const lanAttaches = c.frames(from, 'attach', null, 'lan');
+  assert.equal(lanAttaches.length, 1, lanAttaches.join('\n'));
+  assert.ok(lanAttaches[0].includes('"contentId":"content-codex"'));
+  assert.equal(c.frames(from, 'detach', null, 'lan').length, 0);
+  // Изходът на видимия тече по LAN, нищо не е изгубено.
+  c.host.input(b64('echo lan-$((5*5))\r'), 'content-codex');
+  await waitFor(() => text(c, 'content-codex').includes('lan-25'), 'ехото по LAN');
+  // Скрит таб при връщане: един attach по LAN, с keep (caps на LAN сокета вече са дошли).
+  await waitFor(() => c.relay.state.caps, 'caps по LAN');
+  c.host.open('content-idle');
+  await waitFor(() => c.attachedFor('content-idle') === 2, 'attached на скрития по LAN');
+  const idle = c.frames(from, 'attach', 'content-idle', 'lan');
+  assert.equal(idle.length, 1);
+  assert.ok(idle[0].includes('"keep":true'));
+  assert.deepEqual(c.released(), []);
 });
