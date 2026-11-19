@@ -55,7 +55,9 @@ class ListWatch(
         refresh()
       }
     } else if (!wanted && watchedSession != null) {
-      link.send(WatchRequest(link.nextId(), on = false))
+      // Неизвестни caps: сокетът се сменя (caps идват преди новата сесия). Watch-ът на стария
+      // го спира RelayClient, а `on:false` оттук би тръгнал по новия, където watch няма.
+      if (caps != null) link.send(WatchRequest(link.nextId(), on = false))
       watchedSession = null
     }
     _watching.value = watchedSession != null

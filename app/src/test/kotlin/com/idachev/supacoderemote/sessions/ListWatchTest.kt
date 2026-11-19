@@ -103,6 +103,25 @@ class ListWatchTest {
     assertEquals(listOf(true, true, true), watches())
   }
 
+  /**
+   * RelayClient сменя caps преди сесията: при смяна на пътя за миг се вижда старата сесия с
+   * още неизвестни caps на новия сокет. Watch-ът на стария сокет го спира RelayClient; тук
+   * `on:false` би отишъл по новия сокет, където watch няма.
+   */
+  @Test
+  fun `неизвестни caps не пращат watch off`() = runTest {
+    val watch = listWatch()
+    link.hostCaps.value = null
+    runCurrent()
+    assertEquals(listOf(true), watches())
+    assertFalse(watch.watching.value)
+    link.hostSession.value = 2
+    link.hostCaps.value = setOf("watch")
+    runCurrent()
+    assertEquals(listOf(true, true), watches())
+    assertTrue(watch.watching.value)
+  }
+
   @Test
   fun `caps идват след hostSession — watch тръгва тогава`() = runTest {
     link.hostCaps.value = null
