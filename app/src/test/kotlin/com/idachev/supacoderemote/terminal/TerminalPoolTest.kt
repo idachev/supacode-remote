@@ -205,7 +205,8 @@ class TerminalPoolTest {
     visit("A")
     visit("C")
     enter("B")
-    // Видимият B също липсва (стар list преди новия таб) — той остава.
+    // Видимият B също липсва (стар list преди новия таб) — той остава. A липсва в два поредни.
+    emit(listWith("C"))
     emit(listWith("C"))
     assertEquals(listOf("A"), detaches())
     assertEquals(listOf("B", "C"), ids())
@@ -213,7 +214,24 @@ class TerminalPoolTest {
     link.hostSession.value = null
     runCurrent()
     emit(listWith())
+    emit(listWith())
     assertEquals(listOf("B", "C"), ids())
+  }
+
+  /** F4: list, поискан преди таба да съществува, може да дойде след отварянето му. */
+  @Test
+  fun `един стар list без таба не го пуска, два поредни — пускат`() = runTest(dispatcher) {
+    visit("A")
+    enter("B")
+    emit(listWith("B"))
+    assertEquals(listOf("B", "A"), ids())
+    // Табът се появява — броячът се нулира.
+    emit(listWith("A", "B"))
+    emit(listWith("B"))
+    assertEquals(listOf("B", "A"), ids())
+    emit(listWith("B"))
+    assertEquals(listOf("A"), detaches())
+    assertEquals(listOf("B"), ids())
   }
 
   @Test
