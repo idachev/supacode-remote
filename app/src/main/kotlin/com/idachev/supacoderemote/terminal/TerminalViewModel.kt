@@ -192,6 +192,8 @@ class TerminalViewModel(
    * както преди). Скритият таб не рисува, изходът му чака в [HiddenOutput].
    */
   fun onHidden() {
+    // С keep фазата остава Attached, а скролът към програмата е само за видимия таб (АЦ1).
+    cancelJump()
     pool.leave(contentId, this)
   }
 
