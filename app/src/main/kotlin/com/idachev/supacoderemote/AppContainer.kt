@@ -4,6 +4,7 @@ import android.content.Context
 import com.idachev.supacoderemote.alerts.AgentAlerts
 import com.idachev.supacoderemote.protocol.ErrorReply
 import com.idachev.supacoderemote.relay.RelayClient
+import com.idachev.supacoderemote.sessions.ListWatch
 import com.idachev.supacoderemote.sessions.SessionsRepository
 import com.idachev.supacoderemote.sessions.WorktreeActions
 import com.idachev.supacoderemote.settings.KeystoreSettingsStore
@@ -56,6 +57,9 @@ class AppContainer(context: Context) {
 
   /** Дали приложението се вижда. Пише го [SupacodeRemoteApp] от ProcessLifecycleOwner. */
   val appInForeground: MutableStateFlow<Boolean> = MutableStateFlow(false)
+
+  /** Списъкът с `watch`, докато приложението е пред очите и Mac-ът го може; иначе питане (ДЗ3). */
+  val listWatch: ListWatch = ListWatch(relay, appInForeground, refresh = { sessions.refresh() }, scope = appScope)
 
   /** Известията „агент чака“; включват се от „Настройка“. */
   val agentAlerts: AgentAlerts = AgentAlerts(context, sessions.repos, relay.boundHostId, appInForeground, appScope)
