@@ -5,6 +5,15 @@
 export const PROTOCOL_VERSION = 1;
 export const ATTACH_SCROLLBACK = 500;
 
+/**
+ * Стойностите в `hello.caps`, които клиентът ползва. Host без `caps` (стар Mac) не знае нито
+ * една от тях, затова всяка се проверява по сокета, преди съобщението да тръгне (ДЗ1, ДЗ8b).
+ */
+export const CAPS = Object.freeze({ WATCH: 'watch', ATTACH_KEEP: 'attach.keep' });
+
+/** Кодът на грешката за 17-ия `attach` на една връзка (таванът на Mac-а е 16). */
+export const ATTACH_LIMIT = 'attach_limit';
+
 /** Keepalive-ът е голият текст, не JSON. */
 export const PING = 'ping';
 export const PONG = 'pong';
@@ -102,7 +111,11 @@ const DECODERS = {
     // Версията на Supacode („Supacode 0.11.5 (154)“); стар host я изпуска.
     app: isStr(o.app) && o.app ? o.app : null,
     lan: lanInfo(o.lan),
+    // Стар host изпуска `caps`: празен списък значи „нищо отгоре на основните съобщения“.
+    caps: strList(o.caps),
   }),
+  // Отговорът на `watch`; `on` казва дали връзката още гледа.
+  watch: (o) => ({ t: 'watch', id: optId(o.id), on: o.on === true }),
   // Списъкът минава до екрана почти както е: там непознати стойности се търпят поотделно.
   list: (o) => ({ ...o, id: optId(o.id), repos: Array.isArray(o.repos) ? o.repos : [], sections: Array.isArray(o.sections) ? o.sections : [] }),
   attached: (o) => (terminalSize(o) ? { t: 'attached', id: optId(o.id), contentId: o.contentId, cols: o.cols, rows: o.rows } : null),
