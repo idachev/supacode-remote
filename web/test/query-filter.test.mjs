@@ -48,3 +48,10 @@ test('CSI, прекъснат от въпрос, се затваря с CAN', ()
 test('CAN прекъсва OSC и текстът след него минава', () => assert.equal(run('\x1b]11;?\x18hello\x07'), '\x1b]11;?\x18hello\x07'));
 test('SUB прекъсва DCS', () => assert.equal(run('\x1bP$q\x1ahi'), '\x1bP$q\x1ahi'));
 test('CAN прекъсва CSI', () => assert.equal(run('\x1b[6\x18n'), '\x1b[6\x18n'));
+test('маха се четенето на clipboard-а с OSC 52, записът минава', () => {
+  assert.equal(run('\x1b]52;c;?\x07a\x1b]52;;?\x1b\\b'), 'ab');
+  assert.equal(run('\x1b]52;c;aGk=\x07'), '\x1b]52;c;aGk=\x07');
+});
+test('маха се DECID (ESC Z), back-tab минава', () => assert.equal(run('a\x1bZb\x1b[Z'), 'ab\x1b[Z'));
+test('въпрос след двоен ESC се маха', () => assert.equal(run('a\x1b\x1b[cb'), 'ab'));
+test('двоен ESC пред обикновена последователност я пуска с един ESC', () => assert.equal(run('\x1b\x1b[31m'), '\x1b[31m'));

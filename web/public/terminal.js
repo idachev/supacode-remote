@@ -209,6 +209,7 @@ export class TerminalView {
     p.registerCsiHandler({ prefix: '>', final: 'q' }, swallow); // XTVERSION
     p.registerCsiHandler({ final: 't' }, swallow); // отчети за прозореца
     p.registerDcsHandler({ intermediates: '$', final: 'q' }, swallow); // DECRQSS
+    p.registerEscHandler({ final: 'Z' }, swallow); // DECID; четенето с OSC 52 спира #wireClipboard
     for (const osc of [4, 10, 11, 12]) p.registerOscHandler(osc, (data) => data.includes('?'));
   }
 

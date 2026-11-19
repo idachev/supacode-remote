@@ -1,4 +1,5 @@
-// Филтър на изхода на Mac-а за `attach`: маха въпросите към терминала (DA, DSR, DECRQM, …).
+// Филтър на изхода на Mac-а за `attach`: маха въпросите към терминала (DA, DSR, DECRQM, DECID,
+// четене на clipboard-а, …).
 //
 // Ghostty на Mac-а вече е отговорил на всеки въпрос в PTY-то. Ако въпросът стигне и до
 // локалния Ghostty, той също ще отговори, отговорът ще влезе в stdin на `attach` и оттам като
@@ -35,9 +36,18 @@ function isCsiQuery(body) {
   }
 }
 
-/** OSC 4/10/11/12 с `?` пита за цвят; със стойност го задава и минава. */
+/**
+ * OSC 4/10/11/12 с `?` пита за цвят; със стойност го задава и минава. OSC 52 с данни `?` (след
+ * втория `;`) чете clipboard-а — локалният терминал би дал своя clipboard на програмата на Mac-а;
+ * с base64 данни го задава и минава.
+ */
 function isOscQuery(body) {
   const semi = body.indexOf(';');
+  if (semi < 0) return false;
+  if (body.slice(0, semi) === '52') {
+    const dataSemi = body.indexOf(';', semi + 1);
+    return dataSemi > 0 && body.slice(dataSemi + 1) === '?';
+  }
   return semi > 0 && OSC_QUERIES.has(body.slice(0, semi)) && body.includes('?', semi);
 }
 
@@ -93,10 +103,14 @@ export class QueryFilter {
   }
 
   #afterEsc(byte, out) {
+    // Втори ESC почва последователността наново и в терминала, затова първият не прави нищо: той
+    // отпада, а новият се чете както обикновено (`ESC ESC [ c` е DA1).
+    if (byte === ESC) return this.#begin(byte);
     this.pending.push(byte);
     if (byte === 0x5b) this.state = 'csi'; // [
     else if (byte === 0x5d) this.state = 'osc'; // ]
     else if (byte === 0x50) this.state = 'dcs'; // P
+    else if (byte === 0x5a) this.#end(out, true); // Z: DECID пита кой е терминалът
     else this.#flush(out); // ESC 7, ESC ( B …: не са въпроси
   }
 
