@@ -7,7 +7,8 @@
 // `attach` по друг път не го сменя веднага: старият поток тече, докато не дойде `attached` на
 // новия (той носи екрана наново), и чак тогава пътят се сменя, а attach-овете по другите пътища
 // се спират с `detach` — и на скритите терминали: те не се местят между пътищата, а получават нов
-// attach, когато се покажат (ДЗ8a). Кадри по път, който не е текущ за своя терминал (закъснели,
+// attach, когато се покажат (ДЗ8a). Терминал, който сам чака `attached` по същия нов път, не се
+// спира с чуждия `attached`: той сменя пътя със своя. Кадри по път, който не е текущ за своя терминал (закъснели,
 // от паднала връзка, от стар attach), се изхвърлят.
 
 import { isTerminalStream } from './protocol.mjs';
@@ -95,7 +96,10 @@ export class TerminalStreamGate {
       this.pending.delete(contentId);
       this.current.set(contentId, source);
       this.#terminalsOn(source).add(contentId);
-      return { deliver: true, detach: this.#takeAttached((path) => path !== source) };
+      // По другите пътища спират този терминал и скритите; терминал, който също сменя пътя към
+      // `source` (чака свой attached там), тече по стария път до своя attached (ДЗ14, АЦ2).
+      const switching = (terminal) => terminal !== contentId && this.pending.get(terminal)?.via === source;
+      return { deliver: true, detach: this.#takeAttached((path, terminal) => path !== source && !switching(terminal)) };
     }
     if (this.current.get(contentId) !== source) return { deliver: false, detach: [] };
     if (message.t === 'detached') this.attachedOn.get(source)?.delete(contentId);

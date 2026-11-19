@@ -241,3 +241,19 @@ test('detach на скрит по другите пътища не пипа те
   assert.deepEqual(pairs(gate.accept(lan, attached(3, 'A')).detach), ['relay:A']);
   assert.equal(deliver(lan, out('a-live', 'A')), true);
 });
+
+// Ревю F1: A и B сменят пътя заедно; attached на B по LAN идва първи. A още чака своя attached
+// там, затова по relay-а тече до него (ДЗ14: detach само за терминала, чийто attached е дошъл).
+test('attached на друг терминал не откача терминал, който сменя пътя', () => {
+  const { relay, lan, gate, deliver } = twoOnRelay();
+  gate.attachSent(lan, 3, 'A', true);
+  gate.attachSent(lan, 4, 'B', true);
+  const b = gate.accept(lan, attached(4, 'B'));
+  assert.equal(b.deliver, true);
+  assert.deepEqual(pairs(b.detach), ['relay:B']);
+  assert.equal(deliver(relay, out('a-gap', 'A')), true);
+  assert.equal(deliver(relay, out('b-late', 'B')), false);
+  assert.deepEqual(pairs(gate.accept(lan, attached(3, 'A')).detach), ['relay:A']);
+  assert.equal(deliver(relay, out('a-late', 'A')), false);
+  assert.equal(deliver(lan, out('a-live', 'A')), true);
+});
