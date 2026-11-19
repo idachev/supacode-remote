@@ -1,14 +1,23 @@
 // Логиката на екраните от Android (`SessionsRepository`, `TerminalViewModel`, `NewTabViewModel`),
 // пренесена в Node, за да е на едно място и да се тества срещу mock-а. Браузърът само показва.
 //
-// - `list` на 3 s, докато има активна страница и онлайн host.
-// - Един отворен терминал. При всяка нова `hostSession` (reconnect, смяна LAN ↔ Relay) —
-//   `list` и нов `attach`: host-ът е забравил стария заедно със старата връзка.
+// - Списъкът, докато има активна страница и онлайн host: `watch` (Mac-ът праща `list` сам при
+//   промяна), ако го има в `caps` на текущия път, иначе `list` на 3 s (ДЗ5).
+// - Набор от живи терминали (ДЗ7, ДЗ22): до 8, най-скоро гледаният първи (LRU), първият е
+//   видимият. С `attach.keep` в `caps` всеки остава закачен и връщането към него е без мрежа;
+//   изходът на всички стига до страницата. Над тавана най-отдавна видяният получава `detach`, а
+//   страницата — `released`. Без `attach.keep` (стар Mac) — един терминал, както преди.
+// - При всяка нова `hostSession` (reconnect, смяна LAN ↔ Relay) — `list` и `attach` само на
+//   видимия: host-ът е забравил всички attach-ове. Скритите се закачат, когато се покажат (ДЗ8).
 // - Заявките със `id` (`suggest`, `tab.new`, `worktree.new`) получават `ref` от страницата, за да знае тя кой
 //   отговор е неин.
 
 import { EventEmitter } from 'node:events';
-import { ATTACH_SCROLLBACK, isTerminalStream } from './protocol.mjs';
+import { silentLogger } from './log.mjs';
+import { ATTACH_LIMIT, ATTACH_SCROLLBACK, CAPS, isTerminalStream } from './protocol.mjs';
+
+/** Колко живи терминала държи уеб app-ът (ЦЛ3); Mac-ът приема до 16 на връзка. */
+export const KEPT_LIMIT = 8;
 
 export const TAB_NEW_TIMEOUT_MS = 12_000;
 /**
@@ -32,7 +41,7 @@ export class HostController extends EventEmitter {
   constructor(relay, {
     listIntervalMs = 3_000, tabNewTimeoutMs = TAB_NEW_TIMEOUT_MS, worktreeNewTimeoutMs = WORKTREE_NEW_TIMEOUT_MS,
     worktreeDeleteTimeoutMs = WORKTREE_DELETE_TIMEOUT_MS, worktreesRefreshTimeoutMs = WORKTREES_REFRESH_TIMEOUT_MS,
-    lineEnterDelayMs = LINE_ENTER_DELAY_MS,
+    lineEnterDelayMs = LINE_ENTER_DELAY_MS, keptLimit = KEPT_LIMIT, log = silentLogger,
   } = {}) {
     super();
     this.timeouts = {
@@ -42,13 +51,29 @@ export class HostController extends EventEmitter {
     };
     this.lineEnterDelayMs = lineEnterDelayMs;
     this.relay = relay;
+    this.log = log;
     this.listIntervalMs = listIntervalMs;
     this.tabNewTimeoutMs = tabNewTimeoutMs;
+    this.keptLimit = keptLimit;
     this.active = false;
-    this.openContentId = null;
-    this.lastAttachId = null;
-    /** Сесията, в която е дошъл `attached` на отворения таб; `null`, докато не е дошъл. */
-    this.attachedSession = null;
+    /** Живите терминали, най-скоро гледаният първи (LRU). */
+    this.kept = [];
+    /**
+     * Видимият терминал — към него само вървят вход, `resize` и `suggest` (АЦ1). Ако не е
+     * `null`, е `kept[0]`; `null` — страницата не показва таб, а скритите още живеят.
+     */
+    this.visible = null;
+    /** Терминали от набора, които Mac-ът не държи по текущата сесия: при показване — `attach`. */
+    this.needsAttach = new Set();
+    /** Терминал → id на последния му `attach`: закъснял `attached` и остарял `detach` се познават по него. */
+    this.attachIds = new Map();
+    /** Терминал → сесията, в която е дошъл неговият `attached`. */
+    this.attachedIn = new Map();
+    /** id на последния `watch` с `on:true` и сесията му; отговор с друго id не се гледа. */
+    this.watchId = null;
+    this.watchSession = null;
+    /** Сесията, в която Mac-ът отказа `watch`: в нея остава таймерът. */
+    this.watchRefused = null;
     this.lastList = null;
     this.hostSession = relay.state.hostSession;
     this.pollTimer = null;
@@ -58,33 +83,58 @@ export class HostController extends EventEmitter {
     relay.on('message', (message) => this.#onMessage(message));
   }
 
-  /** Има ли страница, която гледа. Без нея няма `list` и няма отворен терминал. */
+  /** Видимият таб (името е от времето с един терминал; ползват го страницата и `attach.mjs`). */
+  get openContentId() {
+    return this.visible;
+  }
+
+  /** id на последния `attach` на видимия таб. */
+  get lastAttachId() {
+    return this.visible ? this.attachIds.get(this.visible) ?? null : null;
+  }
+
+  /** Сесията, в която е дошъл `attached` на видимия таб; `null`, докато не е дошъл. */
+  get attachedSession() {
+    return this.visible ? this.attachedIn.get(this.visible) ?? null : null;
+  }
+
+  /**
+   * Има ли страница, която гледа. Без нея няма `list`, `watch` и живи терминали: новата
+   * страница започва без терминали (ДЗ24) и отваря своя таб с нов `attach`.
+   */
   setActive(active) {
     if (this.active === active) return;
     this.active = active;
     if (active) {
-      this.refresh();
-      this.#schedulePoll();
+      this.#startListing();
     } else {
-      clearInterval(this.pollTimer);
-      this.pollTimer = null;
-      this.close();
+      this.#stopWatch();
+      this.#syncPoll();
+      this.releaseAll();
     }
   }
 
-  /** Показва този таб: `detach` на стария и `attach` на новия. */
+  /**
+   * Показва този таб (ДЗ7): жив терминал от набора — само става видим, без мрежа; иначе
+   * `attach`. Без `attach.keep` старият таб получава `detach`, както преди.
+   */
   open(contentId) {
-    if (this.openContentId && this.openContentId !== contentId) this.close();
-    this.openContentId = contentId;
-    this.#attach();
+    if (this.#keepMode() === 'single' && this.visible && this.visible !== contentId) this.close();
+    if (!this.kept.includes(contentId)) this.needsAttach.add(contentId);
+    this.kept = [contentId, ...this.kept.filter((c) => c !== contentId)];
+    this.visible = contentId;
+    if (this.needsAttach.has(contentId)) this.#attach(contentId);
+    while (this.kept.length > this.keptLimit) this.#release(this.kept.at(-1));
   }
 
+  /** Страницата затвори видимия таб (изтрит worktree): той излиза от набора. */
   close() {
-    const old = this.openContentId;
-    this.openContentId = null;
-    this.attachedSession = null;
-    if (old && this.relay.state.hostSession != null) this.relay.detach(old, this.lastAttachId);
-    this.lastAttachId = null;
+    if (this.visible) this.#release(this.visible);
+  }
+
+  /** Всички живи терминали излизат от набора: смяна на страницата, на ключа или на Mac-а. */
+  releaseAll() {
+    for (const contentId of [...this.kept]) this.#release(contentId);
   }
 
   /**
@@ -169,9 +219,9 @@ export class HostController extends EventEmitter {
     return this.#request({ t: 'worktrees.refresh' }, { kind: 'worktrees.refresh', ref });
   }
 
-  /** Нов ключ за връзка: старият таб и списъкът са на стария relay. */
+  /** Нов ключ за връзка: старите табове и списъкът са на стария relay. */
   reset() {
-    this.close();
+    this.releaseAll();
     this.lastList = null;
   }
 
@@ -217,38 +267,156 @@ export class HostController extends EventEmitter {
     }
   }
 
-  #attach() {
-    this.attachedSession = null;
-    if (!this.openContentId || this.relay.state.hostSession == null) return;
+  /** `caps` на текущия път: `keep` — с `attach.keep`; `single` — без него; `unknown` — `hello` още няма. */
+  #keepMode() {
+    const caps = this.relay.state.caps;
+    if (!Array.isArray(caps)) return 'unknown';
+    return caps.includes(CAPS.ATTACH_KEEP) ? 'keep' : 'single';
+  }
+
+  /**
+   * `attach` с `keep`, щом пътят го може. Без него (стар Mac или `hello` по новия сокет още не
+   * е дошъл, ДЗ8b) Mac-ът откача другите терминали на връзката, затова те чакат нов attach.
+   */
+  #attach(contentId) {
+    if (this.relay.state.hostSession == null) return;
+    const keep = this.#keepMode() === 'keep';
     const id = this.relay.nextId();
-    if (this.relay.send({ t: 'attach', id, contentId: this.openContentId, scrollback: ATTACH_SCROLLBACK })) {
-      this.lastAttachId = id;
+    const message = { t: 'attach', id, contentId, scrollback: ATTACH_SCROLLBACK, ...(keep ? { keep: true } : {}) };
+    if (!this.relay.send(message)) return;
+    this.attachIds.set(contentId, id);
+    this.attachedIn.delete(contentId);
+    this.needsAttach.delete(contentId);
+    if (!keep) for (const other of this.kept) if (other !== contentId) this.needsAttach.add(other);
+  }
+
+  /**
+   * Терминалът излиза от набора: `detach`, ако Mac-ът още го държи по тази сесия, и `released`
+   * към страницата, за да махне своя терминал.
+   */
+  #release(contentId) {
+    const attached = !this.needsAttach.has(contentId);
+    this.kept = this.kept.filter((c) => c !== contentId);
+    if (this.visible === contentId) this.visible = null;
+    this.needsAttach.delete(contentId);
+    if (attached && this.relay.state.hostSession != null) this.relay.detach(contentId, this.attachIds.get(contentId) ?? null);
+    this.attachIds.delete(contentId);
+    this.attachedIn.delete(contentId);
+    this.emit('message', { t: 'released', contentId });
+  }
+
+  /** Без `attach.keep` наборът е само видимият (АЦ3). */
+  #shrinkToVisible() {
+    for (const contentId of [...this.kept]) if (contentId !== this.visible) this.#release(contentId);
+  }
+
+  /** ДЗ10: не би трябвало да стане (8 < 16); ако стане — само видимият и пак `attach`. */
+  #onAttachLimit(message) {
+    this.log.warn('terminal.attach_limit', { kept: this.kept.length });
+    this.#shrinkToVisible();
+    if (!this.visible) return;
+    this.needsAttach.add(this.visible);
+    this.#attach(this.visible);
+  }
+
+  // ---- списъкът: watch или таймер ----
+
+  /** `list` веднага, после `watch` или таймерът. */
+  #startListing() {
+    this.refresh();
+    this.#syncWatch();
+  }
+
+  #watching() {
+    return this.watchSession != null && this.watchSession === this.relay.state.hostSession;
+  }
+
+  /** `watch` веднъж за сесия, щом страницата гледа и пътят го може; връща дали е тръгнал сега. */
+  #syncWatch() {
+    const session = this.relay.state.hostSession;
+    const caps = this.relay.state.caps;
+    const can = this.active && session != null && Array.isArray(caps) && caps.includes(CAPS.WATCH);
+    let started = false;
+    if (can && !this.#watching() && this.watchRefused !== session) {
+      const id = this.relay.nextId();
+      if (this.relay.send({ t: 'watch', id, on: true })) {
+        this.watchId = id;
+        this.watchSession = session;
+        started = true;
+      }
+    }
+    this.#syncPoll();
+    return started;
+  }
+
+  /** Таймерът върви само докато има страница и няма `watch`. */
+  #syncPoll() {
+    const poll = this.active && !this.#watching();
+    if (poll && !this.pollTimer) this.pollTimer = setInterval(() => this.refresh(), this.listIntervalMs);
+    if (!poll && this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
     }
   }
 
-  #schedulePoll() {
-    clearInterval(this.pollTimer);
-    this.pollTimer = setInterval(() => this.refresh(), this.listIntervalMs);
+  #stopWatch() {
+    if (this.#watching()) this.relay.send({ t: 'watch', id: this.relay.nextId(), on: false });
+    this.watchId = null;
+    this.watchSession = null;
+  }
+
+  /**
+   * Само отговорът на последния `watch` с `on:true` значи нещо: `on:false` (или грешка) — Mac-ът
+   * не гледа, остава таймерът. Отговорът на `on:false` от стария път се пренебрегва.
+   */
+  #onWatchReply(message) {
+    if (message.id == null || message.id !== this.watchId) return;
+    if (message.t === 'watch' && message.on) return;
+    this.log.warn('list.watch_refused', { reason: message.t === 'error' ? message.message : 'off' });
+    this.watchRefused = this.watchSession;
+    this.watchId = null;
+    this.watchSession = null;
+    this.#syncPoll();
   }
 
   #onState(state) {
-    if (state.hostSession === this.hostSession) return;
+    if (state.hostSession === this.hostSession) {
+      this.#onCaps();
+      return;
+    }
     this.hostSession = state.hostSession;
     this.#dropWorktreeWaits(state.hostSession);
-    if (state.hostSession == null) return;
-    // Нова сесия с host-а: той е забравил attach-а и не е виждал списъка ни.
-    this.refresh();
-    this.#attach();
+    // Нова сесия (или никаква): host-ът е забравил всички attach-ове и watch-а.
+    for (const contentId of this.kept) this.needsAttach.add(contentId);
+    this.attachedIn.clear();
+    if (state.hostSession == null) {
+      this.#syncPoll();
+      return;
+    }
+    // Той не е виждал и списъка ни; видимият таб се закача веднага, скритите — при показване.
+    this.#startListing();
+    if (this.visible) this.#attach(this.visible);
+    this.#onCaps();
+  }
+
+  /** `caps` на пътя може да дойдат след сесията (`hello` по нов сокет, ДЗ8b). */
+  #onCaps() {
+    if (this.#syncWatch()) this.refresh();
+    if (this.#keepMode() === 'single') this.#shrinkToVisible();
   }
 
   #onMessage(message) {
     if (message.t === 'list') this.#onList(message);
+    else if (message.t === 'watch') this.#onWatchReply(message);
     else if (isTerminalStream(message)) this.#onTerminal(message);
+    else if (message.t === 'error' && message.id != null && message.id === this.watchId) this.#onWatchReply(message);
+    else if (message.t === 'error' && message.code === ATTACH_LIMIT) this.#onAttachLimit(message);
     else if (REPLIES.includes(message.t)) this.#onReply(message);
   }
 
   #onList(message) {
     this.lastList = { ...message, id: null };
+    this.#dropClosedTabs(message);
     this.emit('message', this.lastList);
     // Отговорът на „Опресни“ е `list` със същото id (ЗД13): страницата спира да чака.
     const request = message.id != null ? this.pending.get(message.id) : null;
@@ -258,12 +426,32 @@ export class HostController extends EventEmitter {
     this.emit('message', { t: 'worktrees.refresh', ref: request.ref, kind: request.kind });
   }
 
-  /** Закъснели кадри от предишния таб или от стар attach не стигат до екрана. */
+  /**
+   * ДЗ12: скрит таб, който го няма в списъка (затворен на стар Mac без `detached`), излиза от
+   * набора. Видимият остава: за него Mac-ът праща `detached` и страницата казва, че е затворен.
+   */
+  #dropClosedTabs(list) {
+    const present = new Set(list.repos.flatMap((r) => (r.worktrees ?? []).flatMap((w) => (w.tabs ?? []).map((t) => t.contentId))));
+    for (const contentId of [...this.kept]) if (contentId !== this.visible && !present.has(contentId)) this.#release(contentId);
+  }
+
+  /** Кадрите на всеки жив терминал отиват към страницата; на пуснат таб или от стар attach — не. */
   #onTerminal(message) {
-    if (message.contentId !== this.openContentId) return;
-    if (message.t === 'attached' && message.id != null && message.id !== this.lastAttachId) return;
-    if (message.t === 'attached') this.attachedSession = this.relay.state.hostSession;
-    if (message.t === 'detached') this.attachedSession = null;
+    const { contentId } = message;
+    if (!this.kept.includes(contentId)) return;
+    if (message.t === 'attached') {
+      if (message.id != null && message.id !== this.attachIds.get(contentId)) return;
+      this.attachedIn.set(contentId, this.relay.state.hostSession);
+    }
+    if (message.t === 'detached') {
+      // Mac-ът вече не го държи: без `detach` при пускане, а видимият — „Свържи отново“ (ДЗ9).
+      this.attachedIn.delete(contentId);
+      this.needsAttach.add(contentId);
+      if (contentId !== this.visible) {
+        this.#release(contentId);
+        return;
+      }
+    }
     this.emit('message', message);
   }
 

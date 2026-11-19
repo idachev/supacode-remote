@@ -10,7 +10,9 @@
 //           MOCK_OLD_RELAY=1 за стар relay — един Mac, `relay` без `hosts` и `host`,
 //           MOCK_LEGACY=1 за още един онлайн Mac `default` без име — стар Supacode,
 //           MOCK_SINGLE_HOST=1 за един Mac „Mock Mac“ с repo-тата и LAN-а на Office Mac —
-//           тестовете на web/ тръгват направо към списъка)
+//           тестовете на web/ тръгват направо към списъка,
+//           MOCK_ATTACH_LIMIT=<N> за друг таван на attach-овете с `keep` (16 като на Mac-а) —
+//           тестовете стигат `attach_limit` с няколко таба)
 //
 // Няколко Mac-а (раздел „Multiple hosts“ в протокола): „Office Mac“ (repo-тата по-долу и LAN),
 // „Home Mac“ (свои repo-та и contentId-та) и „Mac mini“ (извън линия). `/client?host=<id>`
@@ -89,8 +91,8 @@ let lanOn = process.env.LAN !== '0';
 const COLS = 120;
 const ROWS = 40;
 const SCREEN_BUFFER_BYTES = 64 * 1024;
-/** Най-много толкова закачени таба на връзка (`attach` с `keep`). */
-const ATTACH_LIMIT = 16;
+/** Най-много толкова закачени таба на връзка (`attach` с `keep`); 16 като на Mac-а. */
+const ATTACH_LIMIT = Number(process.env.MOCK_ATTACH_LIMIT ?? 16);
 /** Какво знае host-ът отгоре на основните съобщения (`hello.caps`). */
 const CAPS = ['attach.keep', 'watch', 'layout', 'tab.close', 'pane.split', 'pane.close', 'resize.hold'];
 /** Колко дълго задържан размер остава без собственик след паднала връзка. */

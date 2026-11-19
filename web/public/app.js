@@ -38,13 +38,60 @@ function render() {
 
 const link = new LocalLink({ onUp: linkUp, onDown: linkDown, onMessage: (m) => MESSAGES[m.t]?.(m) });
 
-const terminal = new TerminalView($('term'), $('term-area'), {
-  onInput: (b64) => {
-    if (ui.phase === 'live') link.send({ t: 'input', b64, contentId: ui.openContentId });
-  },
-  // УА4: маркираното в Claude Code (OSC 52) идва тук, не само в clipboard-а на Mac-а.
-  onClipboard: (text) => copyText(text),
-});
+// ---- живите терминали (ДЗ23) ----
+//
+// По един `TerminalView` за всеки терминал от набора на Node: скритите са в същия контейнер и пак
+// пишат изхода си, затова връщането към таба е без мрежа и със същия скрол. Node казва с
+// `released`, кога терминал излиза от набора. `blank` е празният терминал без отворен таб: по него
+// се мери мястото за нов таб.
+
+/** contentId → `{view, phase, endReason}`; `phase` е като `ui.phase`, но за този терминал. */
+const terminals = new Map();
+
+function makeView(contentId) {
+  const box = document.createElement('div');
+  box.className = 'term-view';
+  $('term').append(box);
+  return new TerminalView(box, $('term-area'), {
+    // Вход само от видимия таб (АЦ1): скрит терминал не бива да пише в своя PTY.
+    onInput: (b64) => {
+      if (contentId && contentId === ui.openContentId && ui.phase === 'live') link.send({ t: 'input', b64, contentId });
+    },
+    // УА4: маркираното в Claude Code (OSC 52) идва тук, не само в clipboard-а на Mac-а; от скрит таб — не.
+    onClipboard: (text) => {
+      if (contentId === ui.openContentId) copyText(text);
+    },
+  });
+}
+
+const blank = makeView(null);
+
+/** Терминалът пред очите: на отворения таб или празният. */
+function currentTerminal() {
+  return terminals.get(ui.openContentId)?.view ?? blank;
+}
+
+function showOnly(view) {
+  blank.show(blank === view);
+  for (const entry of terminals.values()) entry.view.show(entry.view === view);
+}
+
+/** `ui.phase` е фазата на видимия терминал. */
+function syncPhase() {
+  const entry = terminals.get(ui.openContentId);
+  ui.phase = entry ? entry.phase : 'none';
+  ui.endReason = entry?.endReason ?? null;
+}
+
+function disposeTerminals() {
+  for (const entry of terminals.values()) entry.view.dispose();
+  terminals.clear();
+  blank.clear();
+  showOnly(blank);
+}
+
+/** Делегат за модулите, които само фокусират терминала. */
+const terminalFocus = { focus: () => currentTerminal().focus() };
 
 function linkUp() {
   ui.linkUp = true;
@@ -56,8 +103,11 @@ function linkUp() {
 
 function linkDown() {
   ui.linkUp = false;
-  // Отговорите на чакащите заявки няма да дойдат: Node е рестартиран.
+  // Отговорите на чакащите заявки няма да дойдат: Node е рестартиран. Живите терминали Node
+  // пуска без страница; табът от адреса се отваря наново при `linkUp`.
   dropRequests();
+  disposeTerminals();
+  syncPhase();
   render();
 }
 
@@ -70,10 +120,10 @@ function onState(m) {
     return;
   }
   const pickBefore = ui.state?.hostPick === true;
+  const sessionBefore = ui.state?.hostSession;
   ui.state = m;
   followHostPick(pickBefore, m.hostPick === true);
-  // Връзката с Mac-а падна: Node ще закачи таба наново, щом се върне.
-  if (m.hostSession == null && ui.phase === 'live') ui.phase = 'opening';
+  if (m.hostSession !== sessionBefore) markReattach(m.hostSession);
   if (m.connection === 'unauthorized' || !m.configured) showSetup();
   render();
   renderWorktreeDialog();
@@ -97,11 +147,32 @@ function onList(m) {
   renderTerminalBar();
 }
 
-function onAttached(m) {
-  ui.phase = 'live';
-  terminal.init(m.cols, m.rows);
+/**
+ * Нова сесия с Mac-а: той е забравил attach-овете. Node закача видимия веднага (без сесия —
+ * щом се върне), а скритите — когато се покажат; дотогава те не са „на живо“.
+ */
+function markReattach(hostSession) {
+  for (const [contentId, entry] of terminals) {
+    const visible = contentId === ui.openContentId;
+    if (entry.phase === 'live' && (!visible || hostSession == null)) entry.phase = 'opening';
+  }
+  syncPhase();
+}
+
+/** Кадрите на терминала стигат до своя `TerminalView`; за пуснат терминал — до никого. */
+const forTerminal = (handler) => (m) => {
+  const entry = terminals.get(m.contentId);
+  if (entry) handler(entry, m, m.contentId === ui.openContentId);
+};
+
+function onAttached(entry, m, visible) {
+  entry.phase = 'live';
+  entry.endReason = null;
+  entry.view.init(m.cols, m.rows);
+  if (!visible) return;
+  syncPhase();
   renderTerminalStatus();
-  terminal.focus();
+  entry.view.focus();
 }
 
 /**
@@ -109,19 +180,33 @@ function onAttached(m) {
  * екран“ (ОП36). Вписаният шрифт излиза малко над този от „Настройка“, но без задържан шрифт
  * няма състояние, което да се разминава с размера, който Mac-ът наистина държи.
  */
-function onSize(m) {
+function onSize(entry, m) {
   const asked = ui.resizeAsk;
   if (asked?.contentId === m.contentId) {
     cancelResizeAsk();
     toastWithApp(resizeReplyText(asked, m));
   }
-  terminal.resize(m.cols, m.rows);
+  entry.view.resize(m.cols, m.rows);
 }
 
-function onDetached(m) {
-  ui.phase = 'ended';
-  ui.endReason = m.reason || 'табът е затворен';
+function onDetached(entry, m, visible) {
+  entry.phase = 'ended';
+  entry.endReason = m.reason || 'табът е затворен';
+  if (!visible) return;
+  syncPhase();
   renderTerminalStatus();
+}
+
+/** Node пусна терминала (LRU, затворен таб, друга страница): xterm.js му се маха. */
+function onReleased(m) {
+  const entry = terminals.get(m.contentId);
+  if (!entry) return;
+  entry.view.dispose();
+  terminals.delete(m.contentId);
+  if (m.contentId !== ui.openContentId) return;
+  showOnly(blank);
+  syncPhase();
+  render();
 }
 
 function onTabNew(m) {
@@ -236,8 +321,9 @@ function renderRefresh() {
 
 function closeOpenTab() {
   ui.openContentId = null;
-  ui.phase = 'none';
-  terminal.clear();
+  // Терминалът му се маха с `released` от Node.
+  showOnly(blank);
+  syncPhase();
   history.replaceState(null, '', location.pathname);
   link.send({ t: 'close' });
   render();
@@ -296,28 +382,24 @@ function onReset() {
   ui.list = null;
   ui.listText = '';
   ui.openContentId = null;
-  ui.phase = 'none';
   cancelResizeAsk();
   resetAwaiting();
-  terminal.clear();
+  disposeTerminals();
+  syncPhase();
   history.replaceState(null, '', location.pathname);
   dropRequests();
   closeWorktreeDialog();
   render();
 }
 
-/** Кадрите на терминала стигат само за отворения таб. */
-const forOpenTab = (handler) => (m) => {
-  if (m.contentId === ui.openContentId) handler(m);
-};
-
 const MESSAGES = {
   state: onState,
   list: onList,
-  attached: forOpenTab(onAttached),
-  out: forOpenTab((m) => terminal.write(m.b64)),
-  size: forOpenTab(onSize),
-  detached: forOpenTab(onDetached),
+  attached: forTerminal(onAttached),
+  out: forTerminal((entry, m) => entry.view.write(m.b64)),
+  size: forTerminal(onSize),
+  detached: forTerminal(onDetached),
+  released: onReleased,
   'tab.new': onTabNew,
   'worktree.new': onWorktreeNew,
   'worktree.delete': onWorktreeDelete,
@@ -331,25 +413,37 @@ const MESSAGES = {
 
 // ---- табове ----
 
+/**
+ * Жив терминал само се показва (Node не праща нищо към Mac-а); нов — `attach` и екранът наново.
+ * Затворен (`detached`) таб тръгва отначало: „Свържи отново“.
+ */
 function openTab(contentId) {
   if (!contentId) return;
   closeSuggestions();
   ui.openContentId = contentId;
-  ui.phase = 'opening';
-  ui.endReason = null;
   cancelResizeAsk();
-  terminal.clear();
+  let entry = terminals.get(contentId);
+  if (!entry) {
+    entry = { view: makeView(contentId), phase: 'opening', endReason: null };
+    terminals.set(contentId, entry);
+  } else if (entry.phase === 'ended') {
+    entry.phase = 'opening';
+    entry.endReason = null;
+  }
+  showOnly(entry.view);
+  syncPhase();
   history.replaceState(null, '', `#c=${encodeURIComponent(contentId)}`);
   const found = findTab(ui.list, contentId);
   if (found) ui.expanded.add(found.worktree.id);
   link.send({ t: 'open', contentId });
   render();
+  if (ui.phase === 'live') entry.view.focus();
 }
 
 function newTab(worktreeId) {
   if (!worktreeId || ui.newTabRef) return;
   // Началният размер: колкото влиза в мястото при шрифта за нови табове (ОП27).
-  const grid = terminal.gridAt(newTabFont());
+  const grid = currentTerminal().gridAt(newTabFont());
   ui.newTabRef = nextRef();
   ui.newTabWorktreeId = worktreeId;
   link.send({ t: 'tab.new', worktreeId, cols: grid?.cols, rows: grid?.rows, ref: ui.newTabRef });
@@ -359,7 +453,7 @@ function newTab(worktreeId) {
 /** ЗД11: `cols`/`rows` на първия таб — както при „Нов таб“ (ОП27); Mac-ът после взима своя размер. */
 function newWorktree(d) {
   if (d.ref) return;
-  const grid = terminal.gridAt(newTabFont());
+  const grid = currentTerminal().gridAt(newTabFont());
   const ref = nextRef();
   if (!link.send({ t: 'worktree.new', repositoryId: d.repositoryId, name: d.name.trim(), cols: grid?.cols, rows: grid?.rows, ref })) {
     d.error = 'Няма връзка — не е изпратено';
@@ -404,9 +498,9 @@ function moveWorktree(step) {
 
 /** ЗД12: таба на Mac-а с толкова колони и редове, колкото влизат тук при шрифта от „Настройка“. */
 function resizeToScreen() {
-  const grid = terminal.gridAt(newTabFont());
+  const grid = currentTerminal().gridAt(newTabFont());
   if (ui.phase !== 'live' || !grid) return;
-  const ask = resizeAskText(grid, terminal.size());
+  const ask = resizeAskText(grid, currentTerminal().size());
   toast(ask.text);
   if (!ask.send) return;
   cancelResizeAsk();
@@ -476,7 +570,7 @@ function onKeyCapture(e) {
 // ---- бутони и полета ----
 
 function copyAll() {
-  return copyText(terminal.allText());
+  return copyText(currentTerminal().allText());
 }
 
 async function copyText(text) {
@@ -493,7 +587,7 @@ function onSearchKey(e) {
   e.target.value = '';
   ui.query = '';
   renderSessions();
-  terminal.focus();
+  terminalFocus.focus();
 }
 
 function takeOver() {
@@ -504,7 +598,7 @@ function takeOver() {
 
 function closeDialog(id) {
   $(id).hidden = true;
-  terminal.focus();
+  terminalFocus.focus();
 }
 
 function wireControls() {
@@ -514,7 +608,7 @@ function wireControls() {
   on('term-retry', 'click', () => openTab(ui.openContentId));
   on('takeover', 'click', takeOver);
   on('host-name', 'click', showHosts);
-  on('hosts-close', 'click', () => { hideHosts(); terminal.focus(); });
+  on('hosts-close', 'click', () => { hideHosts(); terminalFocus.focus(); });
   on('help-button', 'click', () => { $('help').hidden = false; });
   on('help-close', 'click', () => closeDialog('help'));
   on('suggest-button', 'click', requestSuggestions);
@@ -522,7 +616,7 @@ function wireControls() {
   on('copy-all-button', 'click', copyAll);
   on('fit-button', 'click', resizeToScreen);
   on('refresh-button', 'click', refreshWorktrees);
-  on('confirm-delete-cancel', 'click', () => { closeConfirmDelete(); terminal.focus(); });
+  on('confirm-delete-cancel', 'click', () => { closeConfirmDelete(); terminalFocus.focus(); });
   on('confirm-delete-ok', 'click', confirmDeleteWorktree);
   on('confirm-delete', 'keydown', (e) => { if (e.key === 'Escape') closeConfirmDelete(); });
   on('toggle-sessions', 'click', () => toggleSidebar());
@@ -535,8 +629,8 @@ initSessionsView({ openTab, newTab, newWorktree: openWorktreeDialog, deleteWorkt
 initWorktreeDialog(newWorktree);
 initNotifyView({ onOpen: openTab });
 initHostsView((id) => link.send({ t: 'host.select', id }));
-initSetupView({ onSave: (connectionKey) => link.send({ t: 'setup', connectionKey }), onClosed: () => terminal.focus() });
-initSuggestions({ link, terminal });
+initSetupView({ onSave: (connectionKey) => link.send({ t: 'setup', connectionKey }), onClosed: () => terminalFocus.focus() });
+initSuggestions({ link, terminal: terminalFocus });
 wireControls();
 toggleSidebar(readJson(SIDEBAR_KEY, false) === true);
 render();

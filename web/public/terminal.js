@@ -1,4 +1,5 @@
-// xterm.js за един таб на Mac-а.
+// xterm.js за един таб на Mac-а. Страницата държи по един за всеки жив терминал (ДЗ23): скритите
+// са в същия контейнер с `hidden` и пак получават изхода, за да е връщането без мрежа.
 //
 // Размерът е винаги на Mac-а (`attached` и `size`): страницата никога не сменя колоните и
 // редовете, а избира шрифта така, че те да влязат в мястото. Само новият таб тръгва с размер от
@@ -82,6 +83,7 @@ function binaryToB64(data) {
 
 export class TerminalView {
   constructor(container, area, { onInput, onClipboard }) {
+    this.container = container;
     this.area = area;
     this.onInput = onInput;
     this.onClipboard = onClipboard;
@@ -91,7 +93,27 @@ export class TerminalView {
     this.#wireClipboard();
     this.#wireInput();
     this.#wireLinks();
-    new ResizeObserver(() => this.fit()).observe(area);
+    // Скрит терминал няма размер и `fit()` го прескача; вписва се при `show(true)`.
+    this.observer = new ResizeObserver(() => this.fit());
+    this.observer.observe(area);
+  }
+
+  /**
+   * Показва или скрива терминала. Показаният се вписва наново (мястото може да се е сменило) и се
+   * рисува в следващия кадър: докато е скрит, xterm.js не рисува изхода му.
+   */
+  show(visible) {
+    this.container.hidden = !visible;
+    if (!visible) return;
+    this.fit();
+    this.term.refresh(0, this.term.rows - 1);
+  }
+
+  /** Терминалът е пуснат (LRU, затворен таб, нов ключ): xterm.js и елементът му се махат. */
+  dispose() {
+    this.observer.disconnect();
+    this.term.dispose();
+    this.container.remove();
   }
 
   #wireInput() {

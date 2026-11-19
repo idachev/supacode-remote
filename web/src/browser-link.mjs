@@ -132,8 +132,8 @@ export class BrowserLink {
     if (old && old !== ws) {
       this.#send(old, { t: 'replaced' });
       this.log.info('page.replaced', {});
-      // Терминалът на старата страница не е на новата: тя ще отвори своя.
-      this.host.close();
+      // Терминалите на старата страница не са на новата: тя ще отвори своя с нов attach.
+      this.host.releaseAll();
     }
     this.active = ws;
     this.host.setActive(true);

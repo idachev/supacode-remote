@@ -109,6 +109,8 @@ button.danger { color: var(--error); }
 .term-area { position: relative; flex: 1; min-height: 0; overflow: hidden; display: flex;
   align-items: center; justify-content: center; padding: 6px; }
 .term { flex: none; }
+/* Скритите живи терминали (ДЗ23) не заемат място. */
+.term-view[hidden] { display: none; }
 .term-status { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 10px;
   align-items: center; justify-content: center; color: var(--muted); background: var(--term-bg); }
 .term-status.overlay-light { background: rgba(30, 30, 30, .75); }

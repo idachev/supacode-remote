@@ -44,10 +44,10 @@ function inputsSince(from, contentId) {
     .map((l) => /hex: ([0-9a-f]*)/.exec(l)[1]);
 }
 
-const screenText = () => page.evaluate(() => [...document.querySelectorAll('.xterm-rows > div')].map((d) => d.textContent).join('\n'));
+const screenText = () => page.evaluate(() => [...document.querySelectorAll('.term-view:not([hidden]) .xterm-rows > div')].map((d) => d.textContent).join('\n'));
 
 async function typeInTerminal(text) {
-  await page.locator('.xterm-helper-textarea').focus();
+  await page.locator('.term-view:not([hidden]) .xterm-helper-textarea').focus();
   await page.keyboard.type(text);
   await page.keyboard.press('Enter');
 }
@@ -104,7 +104,7 @@ test('„Предложи“ само пълни полето, Esc не стиг
 
 test('Ctrl+⌘+↓ сменя таба, нов таб тръгва с размера на прозореца', async (t) => {
   if (!browser) return t.skip('няма Google Chrome');
-  await page.locator('.xterm-helper-textarea').focus();
+  await page.locator('.term-view:not([hidden]) .xterm-helper-textarea').focus();
   await page.keyboard.press('Control+Meta+ArrowDown');
   await waitFor(() => page.url().endsWith('#c=content-codex'), 'таб codex');
   await waitLive();
@@ -124,7 +124,7 @@ test('„Размер по този екран“ сменя таба на Mac-�
   // Табът codex е с размера на Mac-а (120 × 40): шрифтът е вписан, не 14 px.
   await page.locator('.tab', { hasText: 'codex review' }).click();
   await waitLive();
-  const fontPx = () => page.evaluate(() => parseFloat(getComputedStyle(document.querySelector('.xterm-rows')).fontSize));
+  const fontPx = () => page.evaluate(() => parseFloat(getComputedStyle(document.querySelector('.term-view:not([hidden]) .xterm-rows')).fontSize));
   assert.ok(Math.abs((await fontPx()) - 14) >= 0.5, `шрифт ${await fontPx()}`);
   const from = mock.log().length;
   await page.locator('#fit-button').click();
@@ -138,12 +138,12 @@ test('„Размер по този екран“ сменя таба на Mac-�
   await waitFor(async () => (await toastText()) === `Mac-ът смени таба на ${cols} × ${rows} · Supacode 0.0.0-mock (1)`, 'съобщение за отговора');
   assert.equal(await page.locator('#host-name').getAttribute('title'), 'Supacode 0.0.0-mock (1)');
   // Мрежата е сметната при 14 px; дошлият `size` вписва шрифта наново (ОП36): малко над 14 px.
-  const rowCount = () => page.evaluate(() => document.querySelectorAll('.xterm-rows > div').length);
+  const rowCount = () => page.evaluate(() => document.querySelectorAll('.term-view:not([hidden]) .xterm-rows > div').length);
   await waitFor(async () => (await rowCount()) === Number(rows), 'редовете на страницата са поисканите');
   await waitFor(async () => { const f = await fontPx(); return f >= 14 && f < 15; }, 'шрифтът е между 14 и 15 px');
   // Целият терминал влиза в мястото.
   const fits = await page.evaluate(() => {
-    const screen = document.querySelector('.xterm-screen').getBoundingClientRect();
+    const screen = document.querySelector('.term-view:not([hidden]) .xterm-screen').getBoundingClientRect();
     const area = document.getElementById('term-area').getBoundingClientRect();
     return screen.width <= area.width && screen.height <= area.height;
   });
@@ -161,7 +161,7 @@ test('„Размер по този екран“ сменя таба на Mac-�
 test('„Размер по този екран“: отказ от Mac-а се казва веднага, без „не отговори“ после', async (t) => {
   if (!browser) return t.skip('няма Google Chrome');
   // След предишния тест табът е 100 × 30 (mock-resize), а при 14 px тук влиза друг размер.
-  await waitFor(async () => (await page.evaluate(() => document.querySelectorAll('.xterm-rows > div').length)) === 30, 'табът е 100 × 30');
+  await waitFor(async () => (await page.evaluate(() => document.querySelectorAll('.term-view:not([hidden]) .xterm-rows > div').length)) === 30, 'табът е 100 × 30');
   const toastText = () => page.locator('#toast').textContent();
   const sent = mock.log().length;
   await typeInTerminal('mock-resize-fail');
@@ -199,7 +199,7 @@ test('OSC 52 от програмата копира в clipboard-а на бра�
 
 /** Средата на знака `offset` от първото срещане на `needle` в показаните редове на терминала. */
 const pointOf = (needle, offset) => page.evaluate(({ needle, offset }) => {
-  for (const row of document.querySelectorAll('.xterm-rows > div')) {
+  for (const row of document.querySelectorAll('.term-view:not([hidden]) .xterm-rows > div')) {
     let at = row.textContent.indexOf(needle);
     if (at < 0) continue;
     at += offset;
@@ -303,7 +303,7 @@ test('програма, която следи мишката: обикновен
   await page.keyboard.up('Meta');
   await waitFor(async () => (await page.evaluate(() => window.opened.length)) === 1, '⌘+клик');
   assert.equal(await page.evaluate(() => window.opened[0][0]), 'https://relay.example.com/mouse');
-  await page.locator('.xterm-helper-textarea').focus();
+  await page.locator('.term-view:not([hidden]) .xterm-helper-textarea').focus();
   await page.keyboard.press('Control+c');
   await typeInTerminal("printf '\\033[?1006l\\033[?1000l'; clear");
 });
@@ -338,6 +338,54 @@ test('„агент чака“: известие при преход, кога�
   await waitFor(() => page.url().endsWith('#c=content-codex'), 'табът от известието');
   await waitLive();
   await typeInTerminal('mock-busy');
+});
+
+// ---- живи терминали (ДЗ23): смяната на таб е без мрежа ----
+
+/** Има ли в лога на mock-а след `from` attach за този таб (по relay-а или по LAN). */
+const attachSince = (from, contentId) => new RegExp(`type: attach,.*"contentId":"${contentId}"`).test(mock.log().slice(from));
+
+test('A → B → A връща същия екран без нов attach', async (t) => {
+  if (!browser) return t.skip('няма Google Chrome');
+  await page.locator('.tab', { hasText: 'claude' }).click();
+  await waitLive();
+  // `%s`: редът на командата не съдържа маркера, само изходът.
+  await typeInTerminal("clear; printf 'маркер-%s\\n' A");
+  await waitFor(async () => (await screenText()).includes('маркер-A'), 'маркерът в A');
+  await page.locator('.tab', { hasText: 'codex review' }).click();
+  await waitLive();
+  assert.ok(!(await screenText()).includes('маркер-A'), 'B показва своя екран');
+  const from = mock.log().length;
+  await page.locator('.tab', { hasText: 'claude' }).click();
+  // Веднага, без чакане на `attached`: терминалът на A е същият, xterm.js само го рисува в
+  // следващия кадър.
+  assert.equal(await page.locator('#term-status').isHidden(), true);
+  await waitFor(async () => (await screenText()).includes('маркер-A'), 'екранът на A', 500);
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(attachSince(from, 'content-claude'), false);
+  assert.equal(await page.locator('.term-view').count() >= 3, true, 'празният и двата таба');
+});
+
+test('изходът на скрит таб стига до него', async (t) => {
+  if (!browser) return t.skip('няма Google Chrome');
+  await typeInTerminal("clear; sleep 1; printf 'късно-%s\\n' A");
+  await page.locator('.tab', { hasText: 'codex review' }).click();
+  await waitLive();
+  await new Promise((r) => setTimeout(r, 2_000));
+  assert.ok(!(await screenText()).includes('късно-A'));
+  await page.locator('.tab', { hasText: 'claude' }).click();
+  await waitFor(async () => (await screenText()).includes('късно-A'), 'изходът на A, докато беше скрит', 1_000);
+});
+
+test('вход отива само във видимия таб', async (t) => {
+  if (!browser) return t.skip('няма Google Chrome');
+  await page.locator('.tab', { hasText: 'codex review' }).click();
+  await waitLive();
+  const from = mock.log().length;
+  await typeInTerminal('echo samo-$((2*4))');
+  await waitFor(async () => (await screenText()).includes('samo-8'), 'ехото в B');
+  assert.ok(inputsSince(from, 'content-codex').length > 0);
+  assert.deepEqual(inputsSince(from, 'content-claude'), []);
 });
 
 test('презареждане отваря същия таб наново', async (t) => {
