@@ -151,7 +151,9 @@ class TerminalSession internal constructor(
     pause.end()
     stopPauseTicker()
     update { it.copy(selection = null) }
-    if (link.hostSession.value != null) attach() else markNeedsAttach()
+    // Скрит таб (страницата се е заредила след излизане от екрана): attach-ът тръгва при
+    // показване — оттук при неизвестни caps или стар Mac би бил без keep и би спрял видимия.
+    if (visible && link.hostSession.value != null) attach() else markNeedsAttach()
   }
 
   /** Табът е пред очите: чакащото се пише наведнъж, или attach, ако Mac-ът го е забравил. */

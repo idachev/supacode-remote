@@ -15,7 +15,8 @@ import com.idachev.supacoderemote.protocol.SizeChanged
  * `attach` по друг път не го сменя веднага: старият поток тече, докато не дойде `attached` на
  * новия (той носи екрана наново), и чак тогава пътят се сменя, а attach-овете по другите пътища
  * се спират с `detach` ([Decision.detach]) — и на скритите терминали: те не се местят между
- * пътищата, а получават нов attach, когато се покажат (ДЗ8a). Кадри по път, който не е текущ за
+ * пътищата, а получават нов attach, когато се покажат (ДЗ8a). Терминал, който също чака
+ * `attached` по новия път, не се спира: той сменя пътя със своя `attached`. Кадри по път, който не е текущ за
  * своя терминал (закъснели, от паднала връзка, от стар attach), се изхвърлят.
  *
  * Не е thread-safe: [RelayClient] го пази с lock и пита [accept] в реда на доставка.
@@ -108,7 +109,12 @@ internal class TerminalStreamGate {
       pending.remove(contentId)
       current[contentId] = source
       attachedOn.getOrPut(source) { LinkedHashSet() }.add(contentId)
-      return Decision(deliver = true, detach = takeAttached { path, _ -> path !== source })
+      // По другите пътища спира самият терминал и скритите; терминал, който също чака attached по
+      // този път, тече по стария си път до своя attached (ДЗ14).
+      val detach = takeAttached { path, terminal ->
+        path !== source && (terminal == contentId || pending[terminal]?.via !== source)
+      }
+      return Decision(deliver = true, detach = detach)
     }
     if (current[contentId] !== source) return Decision(deliver = false)
     if (message is Detached) attachedOn[source]?.remove(contentId)

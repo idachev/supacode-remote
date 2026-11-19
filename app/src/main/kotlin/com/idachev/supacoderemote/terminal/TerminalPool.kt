@@ -41,6 +41,9 @@ class TerminalPool(
 
   private val entries = ArrayList<TerminalSession>()
 
+  /** Колко поредни списъка нямат скрития таб (ДЗ12, F4). */
+  private val listMisses = HashMap<String, Int>()
+
   /** Кога приложението е отишло във фон; `null` — пред очите е. */
   private var backgroundedAt: Long? = null
   private var backgroundShrink: Job? = null
@@ -154,24 +157,38 @@ class TerminalPool(
   }
 
   /**
-   * Скрит таб, изчезнал от списъка (затворен на Mac-а без `detached`, ДЗ12), излиза от пула.
-   * Видимият остава: списък, поискан преди нов таб, още не го знае. Без сесия с host-а списъкът
-   * е закъснял от стария Mac.
+   * Скрит таб, изчезнал от списъка (затворен на Mac-а без `detached`, ДЗ12), излиза от пула —
+   * чак когато го няма в [LIST_MISSES_TO_RELEASE] поредни списъка: списък, поискан преди табът
+   * да съществува, може да дойде след отварянето му (F4). Видимият остава. Без сесия с host-а
+   * списъкът е закъснял от стария Mac.
    */
   private fun onList(list: ListReply) {
     if (link.hostSession.value == null) return
     val alive = list.repos.flatMap { repo -> repo.worktrees.flatMap { wt -> wt.tabs.map { it.contentId } } }.toSet()
-    entries.filter { !it.visible && it.contentId !in alive }.forEach { release(it) }
+    for (session in entries.toList()) {
+      if (session.visible || session.contentId in alive) {
+        listMisses.remove(session.contentId)
+        continue
+      }
+      val misses = (listMisses[session.contentId] ?: 0) + 1
+      listMisses[session.contentId] = misses
+      if (misses >= LIST_MISSES_TO_RELEASE) release(session)
+    }
   }
 
   private fun release(session: TerminalSession, detach: Boolean = true) {
     entries.remove(session)
+    // Таб, отворен наново след това, почва с чист брояч.
+    listMisses.remove(session.contentId)
     session.release(detach)
   }
 
   companion object {
     /** Живи терминали на телефона (ЦЛ3). Mac-ът приема до 16 на връзка. */
     const val LIMIT = 4
+
+    /** Толкова поредни списъка без скрития таб го пускат (F4): един може да е стар. */
+    const val LIST_MISSES_TO_RELEASE = 2
 
     /** След толкова време във фон пулът се свива до видимия (ДЗ20, предложение на агента). */
     const val BACKGROUND_SHRINK_MS = 5 * 60_000L
