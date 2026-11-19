@@ -27,9 +27,18 @@ data class HelloRequest(val v: Int = PROTOCOL_VERSION) : ClientMessage
 @SerialName("list")
 data class ListRequest(val id: Int) : ClientMessage
 
+/**
+ * [keep] — `true`: другите attach-ове на връзката остават (живи терминали, `attach.keep` в `caps`);
+ * `null` се изпуска, и тогава Mac-ът откача всички други, както при стар host.
+ */
 @Serializable
 @SerialName("attach")
-data class AttachRequest(val id: Int, val contentId: String, val scrollback: Int = ATTACH_SCROLLBACK) : ClientMessage
+data class AttachRequest(
+  val id: Int,
+  val contentId: String,
+  val scrollback: Int = ATTACH_SCROLLBACK,
+  val keep: Boolean? = null,
+) : ClientMessage
 
 @Serializable
 @SerialName("detach")
@@ -42,6 +51,14 @@ data class InputRequest(val contentId: String, val b64: String) : ClientMessage
 @Serializable
 @SerialName("suggest")
 data class SuggestRequest(val id: Int, val contentId: String) : ClientMessage
+
+/**
+ * Mac-ът да праща `list` сам при промяна ([on] `true`) или да спре ([on] `false`). Само при `watch`
+ * в `caps`; свършва и с връзката, затова всяка нова сесия с host-а го праща наново.
+ */
+@Serializable
+@SerialName("watch")
+data class WatchRequest(val id: Int, val on: Boolean) : ClientMessage
 
 /**
  * „Размер по този екран“: host-ът прави таба [cols] × [rows] (сам ги ограничава) и праща `size` на
@@ -122,7 +139,25 @@ data class HelloReply(
   val hostId: String? = null,
   /** Версията на Supacode на Mac-а, напр. „Supacode 0.11.5 (154)“; стар host я изпуска. */
   val app: String? = null,
+  /**
+   * Какво разбира Mac-ът извън основните съобщения ([Caps]). Стар host го изпуска — значи нищо;
+   * непознатите стойности се пазят, но не се ползват.
+   */
+  val caps: List<String> = emptyList(),
 ) : ServerMessage
+
+/** Стойностите от `caps` в `hello`, които телефонът ползва. */
+object Caps {
+  /** Съобщението `watch`: Mac-ът праща `list` сам при промяна. */
+  const val WATCH = "watch"
+
+  /** `attach` с `keep`: няколко живи терминала на една връзка. */
+  const val ATTACH_KEEP = "attach.keep"
+}
+
+/** Отговорът на `watch` — потвърждение, че Mac-ът праща (или вече не праща) списъка сам. */
+@Serializable
+data class WatchReply(val id: Int? = null, val on: Boolean = false) : ServerMessage
 
 /**
  * Отговорът на `list`. [sections] е sidebar-ът на Supacode по ред (Active, Pinned, групи,
@@ -234,6 +269,9 @@ data class ErrorReply(
 
     /** `worktrees.refresh` не е свършил до 60 s. */
     const val REFRESH_TIMEOUT = "refresh_timeout"
+
+    /** Връзката вече има 16 attach-а; Mac-ът не е сменил нищо, [contentId] е отказаният терминал. */
+    const val ATTACH_LIMIT = "attach_limit"
   }
 }
 
@@ -335,8 +373,8 @@ object ProtocolCodec {
 
   /**
    * Връща `null` за `pong`, за непознат тип и за счупен JSON: нищо от relay-а не бива
-   * да спира връзката. Типът се чете ръчно, защото `list`, `suggest` и `tab.new` имат едно и също
-   * `t` в двете посоки.
+   * да спира връзката. Типът се чете ръчно, защото `list`, `watch`, `suggest` и `tab.new` имат едно
+   * и също `t` в двете посоки.
    */
   fun decode(text: String): ServerMessage? {
     if (text == PONG || text == PING) return null
@@ -346,6 +384,7 @@ object ProtocolCodec {
         "relay" -> RelayStatus.serializer()
         "hello" -> HelloReply.serializer()
         "list" -> ListReply.serializer()
+        "watch" -> WatchReply.serializer()
         "attached" -> Attached.serializer()
         "out" -> Output.serializer()
         "size" -> SizeChanged.serializer()

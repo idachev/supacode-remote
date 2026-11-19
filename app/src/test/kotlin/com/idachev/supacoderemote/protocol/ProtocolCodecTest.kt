@@ -152,12 +152,14 @@ class ProtocolCodecTest {
 
   /**
    * Отдалеченият клиент в Supacode (branch `remote-client-host`) добави `caps`, `layout`, нови
-   * съобщения и кодове. Телефонът още не ги ползва: те не бива да чупят нищо.
+   * съобщения и кодове. Телефонът ползва само `caps`, `watch` и `attach keep`: останалите не бива
+   * да чупят нищо.
    */
   @Test
   fun `новите полета и съобщения на отдалечения клиент не чупят decoder-а`() {
+    val caps = listOf("attach.keep", "watch", "layout", "tab.close", "pane.split", "pane.close", "resize.hold")
     assertEquals(
-      HelloReply(1, "Mac mini"),
+      HelloReply(1, "Mac mini", caps = caps),
       ProtocolCodec.decode("""{"t":"hello","v":1,"host":"Mac mini","caps":["attach.keep","watch","layout","tab.close","pane.split","pane.close","resize.hold"]}"""),
     )
     val list = """
@@ -173,10 +175,38 @@ class ProtocolCodecTest {
       ErrorReply(2, "too many attached terminals", "attach_limit", "c9"),
       ProtocolCodec.decode("""{"t":"error","id":2,"code":"attach_limit","contentId":"c9","message":"too many attached terminals"}"""),
     )
-    assertNull(ProtocolCodec.decode("""{"t":"watch","id":5,"on":true}"""))
     assertNull(ProtocolCodec.decode("""{"t":"tab.close","id":6,"tabId":"t","worktreeId":"w"}"""))
     assertNull(ProtocolCodec.decode("""{"t":"pane.split","id":7,"worktreeId":"w","paneId":"p","tabId":"t","contentId":"c"}"""))
     assertNull(ProtocolCodec.decode("""{"t":"pane.close","id":8,"paneId":"p","worktreeId":"w"}"""))
+  }
+
+  @Test
+  fun `hello носи caps, без тях е празен списък`() {
+    val hello = ProtocolCodec.decode("""{"t":"hello","v":1,"host":"Mac","caps":["attach.keep","watch","layout"]}""") as HelloReply
+    assertEquals(listOf("attach.keep", "watch", "layout"), hello.caps)
+    assertEquals(emptyList<String>(), (ProtocolCodec.decode("""{"t":"hello","v":1,"host":"Mac"}""") as HelloReply).caps)
+  }
+
+  @Test
+  fun `watch заявка и отговор`() {
+    assertEquals("""{"t":"watch","id":5,"on":true}""", ProtocolCodec.encode(WatchRequest(5, true)))
+    assertEquals(WatchReply(5, true), ProtocolCodec.decode("""{"t":"watch","id":5,"on":true}"""))
+  }
+
+  @Test
+  fun `attach с keep и без него`() {
+    assertEquals(
+      """{"t":"attach","id":2,"contentId":"c","scrollback":500,"keep":true}""",
+      ProtocolCodec.encode(AttachRequest(2, "c", keep = true)),
+    )
+    assertEquals("""{"t":"attach","id":2,"contentId":"c","scrollback":500}""", ProtocolCodec.encode(AttachRequest(2, "c")))
+  }
+
+  @Test
+  fun `attach_limit е грешка с contentId`() {
+    val e = ProtocolCodec.decode("""{"t":"error","id":2,"code":"attach_limit","contentId":"c","message":"too many"}""") as ErrorReply
+    assertEquals(ErrorReply.ATTACH_LIMIT, e.code)
+    assertEquals("c", e.contentId)
   }
 
   @Test
