@@ -241,6 +241,22 @@ class TerminalStreamGateTest {
   }
 
   /**
+   * ДЗ14: detach по стария път е само за терминала, чийто attached е дошъл. A също сменя пътя
+   * (чака attached по LAN) и тече по relay-а дотогава; attached на B не бива да го откачи там.
+   */
+  @Test
+  fun `attached на друг терминал не откача терминал, който сменя пътя`() {
+    twoKeptOnRelay()
+    gate.attachSent(lan, 3, "A", keep = true)
+    gate.attachSent(lan, 4, "B", keep = true)
+    assertEquals(listOf(relay to "B"), gate.accept(lan, attachedFor(4, "B")).detach)
+    assertTrue(deliver(relay, Output("A", "gap")))
+    assertEquals(listOf(relay to "A"), gate.accept(lan, attachedFor(3, "A")).detach)
+    assertFalse(deliver(relay, Output("A", "late")))
+    assertTrue(deliver(lan, Output("A", "lan-live")))
+  }
+
+  /**
    * ПБ1 (ДЗ8a): нова сесия по LAN — скритият B получава detach по relay-а веднага, а видимият A
    * тече по relay-а до своя attached по LAN (АЦ2).
    */
