@@ -126,57 +126,66 @@ const SECTION = {
 const LOAD_FAILURE = { required: { repositoryId: isStr }, optional: { message: isStr } };
 const LIST_ARRAYS = { repos: REPOSITORY, sections: SECTION, loadFailures: LOAD_FAILURE };
 
-/** Поле, което трябва да е масив, а не е: собственикът му не се чете. */
-class NotAnArray extends Error {}
-
-/** Копие на `obj`, в което масивите от `arrays` държат само елементите, които се четат. */
-function readableArrays(obj, arrays, path, onSkip) {
-  const out = { ...obj };
-  for (const [key, kind] of Object.entries(arrays)) {
-    const value = obj[key];
-    if (value == null) continue;
-    if (!Array.isArray(value)) throw new NotAnArray(key);
-    const arrayPath = path ? `${path}.${key}` : key;
-    out[key] = value.map((item, index) => readable(item, kind, `${arrayPath}[${index}]`, onSkip)).filter((item) => item !== SKIP);
-  }
-  return out;
-}
-
 const SKIP = Symbol('skip');
 
+/** Отговаря ли елементът на скаларния вид или на задължителните и незадължителните полета на `kind`. */
+function fitsKind(item, kind) {
+  if (kind.scalar) return kind.scalar(item);
+  if (!isPlainObject(item)) return false;
+  const required = Object.entries(kind.required ?? {}).every(([key, check]) => check(item[key]));
+  return required && Object.entries(kind.optional ?? {}).every(([key, check]) => item[key] == null || check(item[key]));
+}
+
 /**
- * Елементът с прочетените вътрешни масиви или `SKIP`. В `onSkip` отиват само имената на полетата
- * и индексите, никога стойност. Пропуснатото вътре в лош елемент не се докладва: пропуска се целият.
+ * Четенето елемент по елемент. `onSkip` е в обекта, защото минава през всяко ниво; вътрешен елемент
+ * получава свой читател, за да се докладва пропуснатото в него само ако самият той се чете.
  */
-function readable(item, kind, path, onSkip) {
-  const skip = () => {
-    onSkip(path);
-    return SKIP;
-  };
-  if (kind.scalar) return kind.scalar(item) ? item : skip();
-  if (!isPlainObject(item)) return skip();
-  for (const [key, check] of Object.entries(kind.required ?? {})) if (!check(item[key])) return skip();
-  for (const [key, check] of Object.entries(kind.optional ?? {})) if (item[key] != null && !check(item[key])) return skip();
-  const inner = [];
-  let clean;
-  try {
-    clean = readableArrays(item, kind.arrays ?? {}, path, (p) => inner.push(p));
-  } catch (e) {
-    if (e instanceof NotAnArray) return skip();
-    throw e;
+class LossyReader {
+  #onSkip;
+
+  constructor(onSkip) {
+    this.#onSkip = onSkip;
   }
-  inner.forEach(onSkip);
-  return clean;
+
+  /**
+   * Копие на `obj`, в което масивите от `arrays` държат само елементите, които се четат; `null`,
+   * ако някое от тези полета изобщо не е масив — тогава собственикът му не се чете.
+   */
+  readableArrays(obj, arrays, path) {
+    const out = { ...obj };
+    for (const [key, kind] of Object.entries(arrays)) {
+      const value = obj[key];
+      if (value == null) continue;
+      if (!Array.isArray(value)) return null;
+      const arrayPath = path ? `${path}.${key}` : key;
+      out[key] = value.map((item, index) => this.#readable(item, kind, `${arrayPath}[${index}]`)).filter((item) => item !== SKIP);
+    }
+    return out;
+  }
+
+  /**
+   * Елементът с прочетените вътрешни масиви или `SKIP`. В `onSkip` отиват само имената на полетата
+   * и индексите, никога стойност. Пропуснатото вътре в лош елемент не се докладва: пропуска се целият.
+   */
+  #readable(item, kind, path) {
+    if (!fitsKind(item, kind)) return this.#skip(path);
+    if (kind.scalar) return item;
+    const inner = [];
+    const clean = new LossyReader((p) => inner.push(p)).readableArrays(item, kind.arrays ?? {}, path);
+    if (clean == null) return this.#skip(path);
+    inner.forEach(this.#onSkip);
+    return clean;
+  }
+
+  #skip(path) {
+    this.#onSkip(path);
+    return SKIP;
+  }
 }
 
 function decodeList(o, onSkip) {
-  let clean;
-  try {
-    clean = readableArrays(o, LIST_ARRAYS, '', onSkip);
-  } catch (e) {
-    if (e instanceof NotAnArray) return null;
-    throw e;
-  }
+  const clean = new LossyReader(onSkip).readableArrays(o, LIST_ARRAYS, '');
+  if (clean == null) return null;
   return { ...clean, id: optId(o.id), repos: clean.repos ?? [], sections: clean.sections ?? [] };
 }
 
