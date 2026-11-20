@@ -169,6 +169,12 @@ const officeHost = hosts.get('0f1ce0ff1ce0ff1c');
  * ЗД13: какво може новият host — изтриване на всеки worktree освен основния и такива, които се
  * трият сега, „Опресни“ и repository-тата, които „не се четат“. Старият host (`default`) не праща нищо.
  */
+function withDeleteFlags(host, repo) {
+  if (host.id === 'default') return repo;
+  const deletable = (w) => repo.canCreateWorktree === true && w.status !== 'main' && !host.deletingWorktrees?.has(w.id);
+  return { ...repo, worktrees: repo.worktrees.map((w) => ({ ...w, canDeleteWorktree: deletable(w) })) };
+}
+
 /**
  * `busy` на всеки таб (КЛ13, 974aeeb1 във fork-а): затварянето би прекъснало програма. Mock-ът не
  * следи процесите в shell-а: зает е таб с агент или `working`, чист shell — не. Старият host го изпуска.
@@ -177,12 +183,6 @@ function withBusyTabs(host, repo) {
   if (host.id === 'default') return repo;
   const busy = (tab) => tab.agents.length > 0 || tab.working === true;
   return { ...repo, worktrees: repo.worktrees.map((w) => ({ ...w, tabs: w.tabs.map((tab) => ({ ...tab, busy: busy(tab) })) })) };
-}
-
-function withDeleteFlags(host, repo) {
-  if (host.id === 'default') return repo;
-  const deletable = (w) => repo.canCreateWorktree === true && w.status !== 'main' && !host.deletingWorktrees?.has(w.id);
-  return { ...repo, worktrees: repo.worktrees.map((w) => ({ ...w, canDeleteWorktree: deletable(w) })) };
 }
 
 /** Състоянието на split-овете на worktree-то, съгласувано с табовете му (или `null` без табове). */
