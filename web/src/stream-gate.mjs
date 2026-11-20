@@ -35,12 +35,8 @@ export class TerminalStreamGate {
    */
   attachSent(via, id, contentId, keep = false) {
     if (!keep) {
-      for (const other of [...(this.attachedOn.get(via) ?? [])]) {
-        if (other !== contentId) this.#forget(via, other);
-      }
-      for (const [other, wait] of [...this.pending]) {
-        if (other !== contentId && wait.via === via) this.pending.delete(other);
-      }
+      [...(this.attachedOn.get(via) ?? [])].filter((other) => other !== contentId).forEach((other) => this.#forget(via, other));
+      [...this.pending].filter(([other, wait]) => other !== contentId && wait.via === via).forEach(([other]) => this.pending.delete(other));
     }
     this.pending.set(contentId, { via, id });
     this.latestAttachId.set(contentId, id);
@@ -133,10 +129,7 @@ export class TerminalStreamGate {
 
   /** Маха двойките `[път, терминал]`, за които `match` е вярно, и ги връща за `detach`. */
   #takeAttached(match) {
-    const taken = [];
-    for (const [path, terminals] of this.attachedOn) {
-      for (const terminal of terminals) if (match(path, terminal)) taken.push([path, terminal]);
-    }
+    const taken = [...this.attachedOn].flatMap(([path, terminals]) => [...terminals].filter((terminal) => match(path, terminal)).map((terminal) => [path, terminal]));
     for (const [path, terminal] of taken) this.#forget(path, terminal);
     for (const [path, terminals] of [...this.attachedOn]) if (terminals.size === 0) this.attachedOn.delete(path);
     return taken;
