@@ -1,6 +1,6 @@
 // „Нов worktree“ (ЗД11): бутонът „+“ на repository-то отваря този диалог, както бутонът на всяко
-// repository в Supacode. Заявката и отговорът са в app.js; тук са полето, подсказките и
-// състоянието „Създавам…“.
+// repository в Supacode. Заявката и отговорът са в worktree-requests.js; тук са полето,
+// подсказките и състоянието „Създавам…“.
 
 import { $ } from './dom.js';
 import { ui } from './ui-state.js';
