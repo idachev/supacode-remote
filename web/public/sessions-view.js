@@ -95,9 +95,15 @@ function worktreeHeader(row, open) {
   if (wt.branch && wt.branch !== wt.name) node.append(el('span', 'branch', wt.branch));
   node.title = wt.branch ? `${label} — ${wt.branch}` : label;
   node.addEventListener('click', () => toggleExpanded(wt.id));
-  if (ui.deleting.has(wt.id)) node.append(el('span', 'deleting', 'Изтривам…'));
-  else if (wt.canDeleteWorktree === true) node.append(deleteButton(row));
+  const deleteControl = deleteControlFor(row);
+  if (deleteControl) node.append(deleteControl);
   return node;
+}
+
+/** „Изтривам…“, докато Mac-ът трие, иначе бутонът за изтриване; `null`, ако Mac-ът не може. */
+function deleteControlFor(row) {
+  if (ui.deleting.has(row.worktree.id)) return el('span', 'deleting', 'Изтривам…');
+  return row.worktree.canDeleteWorktree === true ? deleteButton(row) : null;
 }
 
 /** ЗД13: само щом Mac-ът каже `canDeleteWorktree`; стар host не го праща. */

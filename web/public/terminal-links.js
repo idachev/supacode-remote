@@ -63,25 +63,44 @@ export function findUrls(text) {
  * интервал би разделил адреса.
  */
 export function wrappedLine(buffer, row) {
-  if (!buffer.getLine(row)) return { text: '', cells: [] };
-  let first = row;
-  while (first > 0 && buffer.getLine(first)?.isWrapped) first--;
-  let text = '';
-  const cells = [];
+  const result = { text: '', cells: [] };
+  if (!buffer.getLine(row)) return result;
+  const first = firstRowOf(buffer, row);
   for (let y = first; y < buffer.length; y++) {
     const line = buffer.getLine(y);
     if (!line || (y > first && !line.isWrapped)) break;
-    let end = line.length;
-    if (buffer.getLine(y + 1)?.isWrapped) {
-      while (end > 0 && isUnwritten(line.getCell(end - 1))) end--;
-    }
-    for (let x = 0; x < end; x++) {
-      const cell = line.getCell(x);
-      if (!cell || cell.getWidth() === 0) continue;
-      const chars = cell.getChars() || ' ';
-      text += chars;
-      for (let i = 0; i < chars.length; i++) cells.push({ x, y });
-    }
+    const part = rowText(line, y, writtenEnd(buffer, line, y));
+    result.text += part.text;
+    result.cells.push(...part.cells);
+  }
+  return result;
+}
+
+/** Първият ред на буфера, от който е пренесен редът `row`. */
+function firstRowOf(buffer, row) {
+  let first = row;
+  while (first > 0 && buffer.getLine(first)?.isWrapped) first--;
+  return first;
+}
+
+/** Докъде се чете редът `y`: пред пренесен ред празните клетки в края се пропускат. */
+function writtenEnd(buffer, line, y) {
+  let end = line.length;
+  if (!buffer.getLine(y + 1)?.isWrapped) return end;
+  while (end > 0 && isUnwritten(line.getCell(end - 1))) end--;
+  return end;
+}
+
+/** Знаците на реда `y` до клетка `end` и клетката на всеки code unit. */
+function rowText(line, y, end) {
+  let text = '';
+  const cells = [];
+  for (let x = 0; x < end; x++) {
+    const cell = line.getCell(x);
+    if (!cell || cell.getWidth() === 0) continue;
+    const chars = cell.getChars() || ' ';
+    text += chars;
+    for (let i = 0; i < chars.length; i++) cells.push({ x, y });
   }
   return { text, cells };
 }
