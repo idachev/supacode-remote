@@ -359,3 +359,25 @@ test('relay → LAN без видим таб: скритите получава�
   assert.equal(c.frames(back, 'detach').length, 0);
   assert.equal(c.frames(back, 'detach', null, 'lan').length, 0);
 });
+
+// КЛ2 (R23 на Mac клиента): по новия път входът чака собствения `attached` — иначе Enter или `y`
+// стигат до prompt, който потребителят още не вижда. Без опашка: изпуснатото не тръгва после.
+test('след смяна на пътя входът не тръгва преди attached на таба', async (t) => {
+  const lanMock = await startMock();
+  t.after(() => lanMock.stop());
+  const c = client(t, lanMock);
+  c.host.setActive(true);
+  await waitFor(() => c.relay.state.path === 'lan' && c.relay.state.caps, 'LAN с caps');
+  c.host.open('content-shell-main');
+  await waitFor(() => c.attachedFor('content-shell-main') === 1, 'attached по LAN');
+  const early = [];
+  c.relay.on('state', (state) => {
+    if (state.path !== 'relay' || state.hostSession == null || early.length) return;
+    early.push(c.host.input(b64('x'), 'content-shell-main'), c.host.line('y', 'content-shell-main'));
+  });
+  c.host.input(b64('mock-lan-off\r'), 'content-shell-main');
+  await waitFor(() => early.length === 2, 'вход веднага след смяната');
+  assert.deepEqual(early, [false, false]);
+  await waitFor(() => c.attachedFor('content-shell-main') === 2, 'attached по relay-а');
+  assert.equal(c.host.input(b64(' '), 'content-shell-main'), true);
+});

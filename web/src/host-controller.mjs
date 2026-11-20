@@ -147,8 +147,18 @@ export class HostController extends EventEmitter {
    */
   input(b64, contentId) {
     if (!this.openContentId || contentId !== this.openContentId) return false;
-    if (this.relay.state.hostSession == null) return false;
+    if (!this.#attachedNow(contentId)) return false;
     return this.relay.send({ t: 'input', contentId: this.openContentId, b64 });
+  }
+
+  /**
+   * Дошъл ли е `attached` на таба в текущата сесия. Вход и `resize` тръгват само тогава: по нов път
+   * (LAN ↔ relay) host-ът още не знае таба, а Enter или `y` биха стигнали до prompt, който
+   * потребителят още не вижда (КЛ4, R23 на Mac клиента). Изпуснатото не се праща после.
+   */
+  #attachedNow(contentId) {
+    const session = this.relay.state.hostSession;
+    return session != null && this.attachedIn.get(contentId) === session;
   }
 
   /**
@@ -159,8 +169,8 @@ export class HostController extends EventEmitter {
    */
   line(text, contentId) {
     if (!this.openContentId || contentId !== this.openContentId) return false;
+    if (!this.#attachedNow(contentId)) return false;
     const session = this.relay.state.hostSession;
-    if (session == null) return false;
     if (text && !this.relay.send({ t: 'input', contentId, b64: Buffer.from(text, 'utf8').toString('base64') })) return false;
     const enter = () => {
       if (this.openContentId !== contentId || this.relay.state.hostSession !== session) return;
@@ -178,8 +188,7 @@ export class HostController extends EventEmitter {
   resize({ contentId, cols, rows }) {
     if (!this.openContentId || contentId !== this.openContentId) return false;
     if (!Number.isInteger(cols) || !Number.isInteger(rows)) return false;
-    // Само след `attached` в текущата сесия: по нов път (LAN ↔ relay) host-ът още не знае таба.
-    if (this.attachedSession == null || this.attachedSession !== this.relay.state.hostSession) return false;
+    if (!this.#attachedNow(contentId)) return false;
     return this.relay.send({ t: 'resize', contentId, cols, rows });
   }
 
