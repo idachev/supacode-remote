@@ -253,7 +253,7 @@ class TerminalSession internal constructor(
           showSize(message.cols, message.rows)
         } else {
           // Заглавието знае размера веднага; страницата — при показване.
-          update { it.copy(phase = AttachPhase.Attached(message.cols, message.rows)) }
+          update { it.copy(phase = it.phase.resized(message.cols, message.rows)) }
           if (!needsAttach) hidden.size(message.cols, message.rows)
         }
       }
@@ -296,9 +296,18 @@ class TerminalSession internal constructor(
 
   private fun showSize(cols: Int, rows: Int) {
     endPause(OutputPause.EndReason.Resize)
-    update { it.copy(phase = AttachPhase.Attached(cols, rows)) }
+    update { it.copy(phase = it.phase.resized(cols, rows)) }
     command(TerminalCommand.Resize(cols, rows))
   }
+
+  /**
+   * `size` сменя само размера на вече закачен терминал. Преди собствения `attached` (нов път, нова
+   * сесия, след `detached`) фазата остава: иначе входът би тръгнал към prompt, който потребителят
+   * още не вижда (КЛ2, R23 на Mac клиента). Страницата пак получава размера — старият поток рисува
+   * до новия `attached`.
+   */
+  private fun AttachPhase.resized(cols: Int, rows: Int): AttachPhase =
+    if (this is AttachPhase.Attached) AttachPhase.Attached(cols, rows) else this
 
   /**
    * Страницата докладва маркираното (след дълго натискане и плъзгане). `null` — маркираното

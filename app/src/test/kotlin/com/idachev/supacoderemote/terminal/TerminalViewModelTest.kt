@@ -168,6 +168,35 @@ class TerminalViewModelTest {
     assertEquals(2, link.sent.filterIsInstance<AttachRequest>().size)
   }
 
+  /** КЛ2 (R23 на Mac клиента): вход тръгва чак след собствения `attached`, не след чужд `size`. */
+  @Test
+  fun `size преди attached по новия път не пуска вход`() = runTest(dispatcher) {
+    link.hostSession.value = 1
+    runCurrent()
+    vm.onWebReady()
+    emit(Attached(1, "c1", 120, 40))
+    link.hostSession.value = 2
+    runCurrent()
+    emit(SizeChanged("c1", 100, 30))
+    assertEquals(AttachPhase.Attaching, vm.state.value.phase)
+    vm.sendKey("y")
+    assertEquals(emptyList<String>(), inputs())
+    emit(Attached(2, "c1", 100, 30))
+    vm.sendKey("y")
+    assertEquals(listOf("y"), inputs())
+  }
+
+  @Test
+  fun `size след detached не връща терминала на живо`() = runTest(dispatcher) {
+    link.hostSession.value = 1
+    runCurrent()
+    vm.onWebReady()
+    emit(Attached(1, "c1", 120, 40))
+    emit(Detached("c1", "session ended"))
+    emit(SizeChanged("c1", 100, 30))
+    assertEquals(AttachPhase.Detached("session ended"), vm.state.value.phase)
+  }
+
   @Test
   fun `detached показва причината и „Свържи отново“ прави нов attach`() = runTest(dispatcher) {
     link.hostSession.value = 1

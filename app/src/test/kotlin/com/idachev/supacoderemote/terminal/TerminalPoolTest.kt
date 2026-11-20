@@ -165,6 +165,17 @@ class TerminalPoolTest {
   }
 
   @Test
+  fun `size на скрит таб без attach не го прави свързан`() = runTest(dispatcher) {
+    visit("A")
+    val session = pool.sessions.single()
+    link.hostSession.value = 2
+    runCurrent()
+    assertEquals(AttachPhase.Waiting, session.state.value.phase)
+    emit(SizeChanged("A", 100, 30))
+    assertEquals(AttachPhase.Waiting, session.state.value.phase)
+  }
+
+  @Test
   fun `скрит таб при връщане след нова сесия прави attach`() = runTest(dispatcher) {
     visit("A")
     enter("B")
