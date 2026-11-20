@@ -56,9 +56,14 @@
   term.textarea.setAttribute('readonly', 'readonly');
   term.textarea.setAttribute('inputmode', 'none');
 
+  /** Елементът, в който xterm.js рисува клетките; няма го до първото рисуване. */
+  function screenElement() {
+    return term.element.querySelector('.xterm-screen');
+  }
+
   // ---- Шрифтът, при който cols колони влизат точно в ширината ----
   function screenWidth() {
-    var screen = term.element.querySelector('.xterm-screen');
+    var screen = screenElement();
     return screen ? screen.getBoundingClientRect().width : 0;
   }
 
@@ -103,7 +108,11 @@
       return;
     }
     var avail = document.documentElement.clientWidth;
-    if (!avail) return;
+    if (avail) fitToWidth(avail);
+  }
+
+  /** Шрифтът, при който колоните на терминала влизат в [avail] CSS px. */
+  function fitToWidth(avail) {
     var size = term.options.fontSize;
     for (var i = 0; i < 4; i++) {
       var w = screenWidth();
@@ -127,7 +136,7 @@
 
   /** Ширина и височина на клетка (CSS px) при сегашния шрифт; `null` преди първото рисуване. */
   function cellSize() {
-    var screen = term.element.querySelector('.xterm-screen');
+    var screen = screenElement();
     if (!screen || !term.cols || !term.rows) return null;
     var rect = screen.getBoundingClientRect();
     return rect.width ? { w: rect.width / term.cols, h: rect.height / term.rows } : null;
@@ -189,6 +198,17 @@
     return size;
   }
 
+  /**
+   * „Размер по този екран“: колко колони влизат в ширината и колко реда в [height] (dp, цялото
+   * място за терминала) при сегашния шрифт; null преди първото рисуване или без място.
+   */
+  function measuredGrid(height) {
+    if (!cellSize() || !height) return null;
+    var grid = fixedFont > 0 ? gridAtFont(height) : gridAtPhoneCols(height);
+    if (!grid || grid.cols < 1 || grid.rows < 1) return null;
+    return grid;
+  }
+
   function decode(b64) {
     var bin = atob(b64);
     var bytes = new Uint8Array(bin.length);
@@ -238,14 +258,10 @@
       releasePan();
       term.scrollToBottom();
     },
-    /**
-     * „Размер по този екран“: колко колони влизат в ширината и колко реда в [height] (dp, цялото
-     * място за терминала) при сегашния шрифт. Отговорът е SupaBridge.grid(cols, rows).
-     */
+    /** „Размер по този екран“ (виж measuredGrid). Отговорът е SupaBridge.grid(cols, rows). */
     measureGrid: function (height) {
-      if (!cellSize() || !height) return;
-      var grid = fixedFont > 0 ? gridAtFont(height) : gridAtPhoneCols(height);
-      if (!grid || grid.cols < 1 || grid.rows < 1) return;
+      var grid = measuredGrid(height);
+      if (!grid) return;
       pendingGrid = grid;
       if (bridge.grid) bridge.grid(grid.cols, grid.rows);
     },
@@ -255,9 +271,8 @@
      */
     reportGrid: function (height) {
       term.write('', function () {
-        if (!cellSize() || !height) return;
-        var grid = fixedFont > 0 ? gridAtFont(height) : gridAtPhoneCols(height);
-        if (!grid || grid.cols < 1 || grid.rows < 1) return;
+        var grid = measuredGrid(height);
+        if (!grid) return;
         if (bridge.gridEstimate) bridge.gridEstimate(grid.cols, grid.rows);
       });
     },
@@ -324,7 +339,7 @@
 
   /** Клетката под пръста: колона и ред в буфера (с историята над екрана). */
   function cellAt(x, y) {
-    var screen = term.element.querySelector('.xterm-screen');
+    var screen = screenElement();
     var rect = screen.getBoundingClientRect();
     var col = Math.floor((x - rect.left) / (rect.width / term.cols));
     var row = Math.floor((y - rect.top) / (rect.height / term.rows));
@@ -344,9 +359,14 @@
   // са с еднакъв размер. Страницата само показва диапазона и казва какъв е.
   var reported = null; // последно докладваното на Kotlin, за да не се праща същото
 
+  /** Диапазонът [a]–[b] с размера на буфера, както се докладва на Kotlin. */
+  function selectionKey(a, b) {
+    return [a.col, a.row, b.col, b.row, term.cols, term.buffer.active.length].join(',');
+  }
+
   function reportSelection(a, b) {
     var length = term.buffer.active.length;
-    reported = [a.col, a.row, b.col, b.row, term.cols, length].join(',');
+    reported = selectionKey(a, b);
     if (bridge.selection) bridge.selection(a.col, a.row, b.col, b.row, term.cols, length);
   }
 
@@ -376,8 +396,7 @@
     // Краят от xterm.js е изключителен (x е от 1 до cols): последната клетка е x − 1.
     var start = { col: pos.start.x, row: pos.start.y };
     var end = { col: pos.end.x - 1, row: pos.end.y };
-    var next = [start.col, start.row, end.col, end.row, term.cols, term.buffer.active.length].join(',');
-    if (next !== reported) reportSelection(start, end);
+    if (selectionKey(start, end) !== reported) reportSelection(start, end);
   }
 
   // Маркирането идва от Android: дългото натискане се хваща там (GestureDetector), защото
@@ -413,9 +432,11 @@
   };
   /** Точният диапазон от лентата за маркиране (краищата включително, вече подредени). */
   window.supa.selectRange = function (startCol, startRow, endCol, endRow) {
-    selectBetween({ col: startCol, row: startRow }, { col: endCol, row: endRow });
+    var start = { col: startCol, row: startRow };
+    var end = { col: endCol, row: endRow };
+    selectBetween(start, end);
     // Kotlin вече знае този диапазон; запомня се, за да не се връща обратно като промяна.
-    reported = [startCol, startRow, endCol, endRow, term.cols, term.buffer.active.length].join(',');
+    reported = selectionKey(start, end);
   };
   /** „Копирай“: точно показаното, после маркираното се маха. */
   window.supa.copySelection = function () {
@@ -445,33 +466,49 @@
    */
   function wrappedLineAt(cell) {
     var buffer = term.buffer.active;
-    var first = cell.row;
-    while (first > 0 && buffer.getLine(first) && buffer.getLine(first).isWrapped) first--;
-    var text = '';
-    var index = -1;
+    var first = wrapStart(cell.row);
+    var found = { text: '', index: -1 };
     for (var y = first; y < buffer.length; y++) {
       var line = buffer.getLine(y);
       if (!line || (y > first && !line.isWrapped)) break;
-      var end = line.length;
-      var next = buffer.getLine(y + 1);
-      if (next && next.isWrapped) {
-        while (end > 0 && isUnwritten(line.getCell(end - 1))) end--;
-      }
-      var start = 0;
-      for (var x = 0; x < end; x++) {
-        var c = line.getCell(x);
-        if (!c) continue;
-        // Втората половина на широк знак е празна клетка с ширина 0: тап там е тап по знака.
-        if (c.getWidth() === 0) {
-          if (y === cell.row && x === cell.col) index = start;
-          continue;
-        }
-        start = text.length;
-        if (y === cell.row && x === cell.col) index = start;
-        text += c.getChars() || ' ';
-      }
+      appendCells(found, writtenCells(line, buffer.getLine(y + 1)), y === cell.row ? cell.col : -1);
     }
-    return { text: text, index: index };
+    return found;
+  }
+
+  /** Първият ред на пренесения ред, в който е [row]. */
+  function wrapStart(row) {
+    var buffer = term.buffer.active;
+    while (row > 0 && buffer.getLine(row) && buffer.getLine(row).isWrapped) row--;
+    return row;
+  }
+
+  /** Клетките на [line], които се четат: пред пренесен ред [next] неписаните в края не са интервали. */
+  function writtenCells(line, next) {
+    var end = line.length;
+    if (next && next.isWrapped) {
+      while (end > 0 && isUnwritten(line.getCell(end - 1))) end--;
+    }
+    var cells = [];
+    for (var x = 0; x < end; x++) cells.push(line.getCell(x));
+    return cells;
+  }
+
+  /**
+   * Знаците от [cells] (един ред) към found.text. Ако тапът е на този ред ([tapCol] не е -1),
+   * found.index става индексът на тапнатия знак.
+   */
+  function appendCells(found, cells, tapCol) {
+    var start = 0;
+    for (var x = 0; x < cells.length; x++) {
+      var c = cells[x];
+      if (!c) continue;
+      // Втората половина на широк знак е празна клетка с ширина 0: тап там е тап по знака пред нея.
+      var secondHalf = c.getWidth() === 0;
+      if (!secondHalf) start = found.text.length;
+      if (x === tapCol) found.index = start;
+      if (!secondHalf) found.text += c.getChars() || ' ';
+    }
   }
 
   function isUnwritten(c) {
@@ -488,16 +525,21 @@
     var found = null;
     try {
       var providers = term._core._linkProviderService.linkProviders;
-      for (var i = 0; i < providers.length && found === null; i++) {
-        providers[i].provideLinks(cell.row + 1, function (links) {
-          (links || []).forEach(function (link) {
-            if (found === null && rangeHas(link.range, cell)) found = link.text;
-          });
-        });
-      }
+      for (var i = 0; i < providers.length && found === null; i++) found = providerUrlAt(providers[i], cell);
     } catch (e) {
       return null;
     }
+    return found;
+  }
+
+  /** Адресът на [cell] от един provider на xterm.js, ако той отговори веднага; иначе null. */
+  function providerUrlAt(provider, cell) {
+    var found = null;
+    provider.provideLinks(cell.row + 1, function (links) {
+      (links || []).forEach(function (link) {
+        if (found === null && rangeHas(link.range, cell)) found = link.text;
+      });
+    });
     return found;
   }
 
@@ -536,17 +578,28 @@
    * клавишите.
    */
   function trackOverscroll(dy) {
+    pushOverscroll(touch, edgeDir(dy > 0, dy < 0), Math.abs(dy));
+  }
+
+  /** 'up' при скрол нагоре от най-стария ред, 'down' надолу от живия край, иначе null. */
+  function edgeDir(up, down) {
     var buffer = term.buffer.active;
-    var atTop = buffer.viewportY <= 0;
-    var atBottom = buffer.viewportY >= buffer.baseY;
-    var dir = null;
-    if (dy > 0 && atTop) dir = 'up';
-    else if (dy < 0 && atBottom) dir = 'down';
-    if (!dir) { touch.over = 0; touch.overDir = null; return; }
-    if (dir !== touch.overDir) { touch.overDir = dir; touch.over = 0; }
-    touch.over += Math.abs(dy);
+    if (up && buffer.viewportY <= 0) return 'up';
+    if (down && buffer.viewportY >= buffer.baseY) return 'down';
+    return null;
+  }
+
+  /**
+   * Натрупва [amount] px скрол към ръба [dir] (null — не е към ръба, броенето почва отначало) в
+   * [edge] ({ over, overDir }) и след мъртвата зона праща скрол до програмата, най-много веднъж
+   * на OVERSCROLL_EVERY_MS. Пръстът и колелото броят поотделно, а паузата е обща.
+   */
+  function pushOverscroll(edge, dir, amount) {
+    if (!dir) { edge.over = 0; edge.overDir = null; return; }
+    if (dir !== edge.overDir) { edge.overDir = dir; edge.over = 0; }
+    edge.over += amount;
     var now = Date.now();
-    if (touch.over >= OVERSCROLL_DEAD_PX && now - lastOverscroll >= OVERSCROLL_EVERY_MS) {
+    if (edge.over >= OVERSCROLL_DEAD_PX && now - lastOverscroll >= OVERSCROLL_EVERY_MS) {
       lastOverscroll = now;
       if (bridge.overscroll) bridge.overscroll(dir);
     }
@@ -605,21 +658,10 @@
   document.addEventListener('touchcancel', endTouch, { capture: true, passive: true });
 
   // Колелото на мишката (emulator, таблет с мишка): същото правило, натрупано по deltaY.
-  var wheelOver = 0, wheelDir = null;
+  var wheelEdge = { over: 0, overDir: null };
   term.element.addEventListener('wheel', function (e) {
     if (wheeling) return; // скролът от бутоните не е скрол до ръба
-    var buffer = term.buffer.active;
-    var dir = null;
-    if (e.deltaY < 0 && buffer.viewportY <= 0) dir = 'up';
-    else if (e.deltaY > 0 && buffer.viewportY >= buffer.baseY) dir = 'down';
-    if (!dir) { wheelOver = 0; wheelDir = null; return; }
-    if (dir !== wheelDir) { wheelDir = dir; wheelOver = 0; }
-    wheelOver += Math.abs(e.deltaY);
-    var now = Date.now();
-    if (wheelOver >= OVERSCROLL_DEAD_PX && now - lastOverscroll >= OVERSCROLL_EVERY_MS) {
-      lastOverscroll = now;
-      if (bridge.overscroll) bridge.overscroll(dir);
-    }
+    pushOverscroll(wheelEdge, edgeDir(e.deltaY < 0, e.deltaY > 0), Math.abs(e.deltaY));
   }, { capture: true, passive: true });
 
   // ---- Скрол като от колелото (плаващите бутони) ----
@@ -635,7 +677,7 @@
   // По едно събитие на ред: при mouse tracking xterm.js дава един report на събитие,
   // каквото и да е deltaY, а програмата (Claude Code) брои report-ите като редове.
   function wheel(dir, lines) {
-    var screen = term.element.querySelector('.xterm-screen');
+    var screen = screenElement();
     var rect = screen.getBoundingClientRect();
     wheeling = true;
     try {
@@ -725,21 +767,20 @@
     return { height: height, total: total };
   }
 
+  /** Отместването отгоре на показаната част в [box]: ръчното местене или частта с курсора. */
+  function topToShow(screen, box) {
+    if (panTop !== null) return Math.max(0, Math.min(box.total - box.height, panTop));
+    var rowH = screen.getBoundingClientRect().height / term.rows;
+    var buffer = term.buffer.active;
+    var cursor = buffer.baseY + buffer.cursorY - buffer.viewportY;
+    if (cursor < 0 || cursor >= term.rows) cursor = -1;
+    return visibleTop(term.rows, rowH, box.height, lastContentRow(), cursor);
+  }
+
   function follow() {
-    var screen = term.element.querySelector('.xterm-screen');
+    var screen = screenElement();
     var box = overflow();
-    var top = 0;
-    if (screen && box) {
-      if (panTop !== null) {
-        top = Math.max(0, Math.min(box.total - box.height, panTop));
-      } else {
-        var rowH = screen.getBoundingClientRect().height / term.rows;
-        var buffer = term.buffer.active;
-        var cursor = buffer.baseY + buffer.cursorY - buffer.viewportY;
-        if (cursor < 0 || cursor >= term.rows) cursor = -1;
-        top = visibleTop(term.rows, rowH, box.height, lastContentRow(), cursor);
-      }
-    }
+    var top = screen && box ? topToShow(screen, box) : 0;
     shownTop = top;
     // Долният край на терминала е долу в #frame; показано е [total − height, total].
     var next = box ? Math.round(box.total - box.height - top) : 0;
@@ -804,7 +845,7 @@
   // долу, за да не режат заобленият екран и камерата буквите. Само страницата я знае: при
   // „по ширина“ шрифтът идва от fit(), а и при фиксиран клетката се мери от xterm.js.
   function reportRowHeight() {
-    var screen = term.element.querySelector('.xterm-screen');
+    var screen = screenElement();
     if (!screen || !term.rows) return;
     var row = Math.round(screen.getBoundingClientRect().height / term.rows * 10) / 10;
     if (!row || row === reportedRow) return;
