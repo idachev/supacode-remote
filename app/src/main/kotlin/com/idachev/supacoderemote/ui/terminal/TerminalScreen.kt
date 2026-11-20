@@ -4,96 +4,77 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.os.Build
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.ui.platform.LocalContext
-import com.idachev.supacoderemote.Notices
-import androidx.compose.foundation.border
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.Icon
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.material3.FilledTonalIconButton
-import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.statusBars
-import androidx.compose.runtime.MutableState
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.withFrameNanos
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.semantics.Role
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.remember
-import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.viewinterop.AndroidView
-import com.idachev.supacoderemote.terminal.LiveKeys
-import com.idachev.supacoderemote.terminal.OutputPause
-import androidx.compose.material3.Surface
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SuggestionChip
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.TextRange
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.idachev.supacoderemote.Notices
 import com.idachev.supacoderemote.TerminalKey
-import com.idachev.supacoderemote.protocol.TerminalKeys
 import com.idachev.supacoderemote.terminal.AttachPhase
+import com.idachev.supacoderemote.terminal.OutputPause
+import com.idachev.supacoderemote.terminal.TerminalUiState
 import com.idachev.supacoderemote.terminal.TerminalViewModel
-import com.idachev.supacoderemote.terminal.TextDiff
 import com.idachev.supacoderemote.ui.ConnectionBanner
-import com.idachev.supacoderemote.ui.PathChip
 import com.idachev.supacoderemote.ui.LocalAppContainer
+import com.idachev.supacoderemote.ui.PathChip
 
 /** „Терминал“: живият таб от Mac-а, полето за писане, клавишите и „Предложи“. */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -149,41 +130,7 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
   Scaffold(
     // Тъмен фон и под камерата (display cutout): на цял екран там иначе стои светла ивица.
     containerColor = TerminalBackground,
-    topBar = {
-      // Скрита горна лента: банерът за връзката остава, под status bar-а.
-      val insets = if (state.bars.topBar) Modifier else Modifier.windowInsetsPadding(WindowInsets.statusBars)
-      Column(insets) {
-        if (state.bars.topBar) TopAppBar(
-          title = {
-            Column {
-              val attached = state.phase as? AttachPhase.Attached
-              Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(key.title, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-                attached?.let { Text("  ${it.cols} × ${it.rows}", style = MaterialTheme.typography.labelMedium, maxLines = 1) }
-              }
-              // Само по натискане: телефонът иначе никога не сменя размера на таба на Mac-а.
-              if (attached != null) Text(
-                "Размер по този екран",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.primary,
-                maxLines = 1,
-                modifier = Modifier.clickable(onClick = vm::fitToScreen).testTag("terminal-fit-screen"),
-              )
-            }
-          },
-          navigationIcon = { TextButton(onClick = onBack) { Text("Назад") } },
-          actions = {
-            PathChip()
-            TextButton(
-              onClick = vm::requestText,
-              enabled = state.phase is AttachPhase.Attached,
-              modifier = Modifier.testTag("terminal-copy"),
-            ) { Text("Копирай") }
-          },
-        )
-        ConnectionBanner()
-      }
-    },
+    topBar = { TerminalTopBar(key.title, state, vm, onBack) },
     bottomBar = {
       if (state.bars.input) InputBar(
         vm = vm,
@@ -221,54 +168,14 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
         // Цял екран (без горната лента и полето за писане): по един празен ред горе и долу.
         rowPadding = !state.bars.topBar && !state.bars.input,
       )
-      // Плаващите бутони са в една колона вдясно, а не подравнени поотделно: в ниско място
-      // (хоризонтално, с клавиатура) иначе се застъпват и горният прихваща докосванията.
-      // Колоната се реже по мястото на терминала, вместо да излиза върху полето за писане.
-      Column(
-        horizontalAlignment = Alignment.End,
-        modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight().clipToBounds().padding(8.dp),
-      ) {
-        // Горе: горната лента (заглавие, „Назад“, „Копирай“) се показва само при нужда.
-        FloatingBarButton(
-          icon = if (state.bars.topBar) TerminalIcons.ArrowUp else TerminalIcons.ArrowDown,
-          description = if (state.bars.topBar) "Скрий горната лента" else "Покажи горната лента",
-          tag = "float-top-bar",
-          onClick = vm::toggleTopBar,
-        )
-        Spacer(Modifier.weight(1f).heightIn(min = 12.dp))
-        // Скрол под палеца, като от trackpad-а (Claude Code го превърта така). PgUp / PgDn са в
-        // реда с клавиши: в shell те вървят по историята на командите.
-        RepeatKeyButton("▲", description = "Скрол нагоре", tag = "float-scroll-up") { vm.scrollWheel(up = true) }
-        Spacer(Modifier.height(12.dp))
-        RepeatKeyButton("▼", description = "Скрол надолу", tag = "float-scroll-down") { vm.scrollWheel(up = false) }
-        Spacer(Modifier.height(12.dp))
-        // Едно докосване до най-новото: историята на телефона и скролът на агента (Claude Code).
-        // Докато скролира, свети; второ докосване го спира.
-        FloatingBarButton(
-          icon = TerminalIcons.ToBottom,
-          description = if (state.jumping) "Спри скрола до най-долу" else "Най-долу",
-          tag = "float-to-bottom",
-          active = state.jumping,
-          onClick = vm::jumpToBottom,
-        )
-        Spacer(Modifier.weight(1f).heightIn(min = 12.dp))
-        // Долу: разпъва полето за писане. Разпънато се прибира от реда с клавиши (или с Back),
-        // а докато има маркирано, бутонът не се показва, за да не покрива лентата за маркиране.
-        // Празното място остава, за да не скачат ▲ ▼.
-        if (!state.bars.input && state.selection == null) {
-          FloatingBarButton(
-            icon = TerminalIcons.Keyboard,
-            description = "Покажи полето за писане",
-            tag = "float-input",
-            onClick = {
-              vm.setInputShown(true)
-              focusInput++
-            },
-          )
-        } else {
-          Spacer(Modifier.size(52.dp))
-        }
-      }
+      FloatingButtons(
+        state,
+        vm,
+        onShowInput = {
+          vm.setInputShown(true)
+          focusInput++
+        },
+      )
       // Скрита горна лента: „Назад“ остава горе вляво, защото е най-честото, за което тя се
       // разпъваше. Води направо до табовете, като „Назад“ в лентата.
       if (!state.bars.topBar) {
@@ -298,6 +205,100 @@ fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
     }
   }
   copyText?.let { text -> CopyTextDialog(text = text, onDismiss = { copyText = null }) }
+}
+
+/** Горната лента (заглавие, размер, „Назад“, „Копирай“) и банерът за връзката. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TerminalTopBar(title: String, state: TerminalUiState, vm: TerminalViewModel, onBack: () -> Unit) {
+  // Скрита горна лента: банерът за връзката остава, под status bar-а.
+  val insets = if (state.bars.topBar) Modifier else Modifier.windowInsetsPadding(WindowInsets.statusBars)
+  Column(insets) {
+    if (state.bars.topBar) TopAppBar(
+      title = { TerminalTitle(title, state.phase as? AttachPhase.Attached, onFitToScreen = vm::fitToScreen) },
+      navigationIcon = { TextButton(onClick = onBack) { Text("Назад") } },
+      actions = {
+        PathChip()
+        TextButton(
+          onClick = vm::requestText,
+          enabled = state.phase is AttachPhase.Attached,
+          modifier = Modifier.testTag("terminal-copy"),
+        ) { Text("Копирай") }
+      },
+    )
+    ConnectionBanner()
+  }
+}
+
+/** Заглавието на таба, размерът на Mac-а и „Размер по този екран“ — последните само при attach. */
+@Composable
+private fun TerminalTitle(title: String, attached: AttachPhase.Attached?, onFitToScreen: () -> Unit) {
+  Column {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+      Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+      attached?.let { Text("  ${it.cols} × ${it.rows}", style = MaterialTheme.typography.labelMedium, maxLines = 1) }
+    }
+    // Само по натискане: телефонът иначе никога не сменя размера на таба на Mac-а.
+    if (attached != null) Text(
+      "Размер по този екран",
+      style = MaterialTheme.typography.labelMedium,
+      color = MaterialTheme.colorScheme.primary,
+      maxLines = 1,
+      modifier = Modifier.clickable(onClick = onFitToScreen).testTag("terminal-fit-screen"),
+    )
+  }
+}
+
+/**
+ * Плаващите бутони вдясно: горната лента, ▲ ▼, „Най-долу“ и полето за писане. В една колона, а не
+ * подравнени поотделно: в ниско място (хоризонтално, с клавиатура) иначе се застъпват и горният
+ * прихваща докосванията. Колоната се реже по мястото на терминала, вместо да излиза върху полето
+ * за писане.
+ */
+@Composable
+private fun BoxScope.FloatingButtons(state: TerminalUiState, vm: TerminalViewModel, onShowInput: () -> Unit) {
+  Column(
+    horizontalAlignment = Alignment.End,
+    modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight().clipToBounds().padding(8.dp),
+  ) {
+    // Горе: горната лента (заглавие, „Назад“, „Копирай“) се показва само при нужда.
+    FloatingBarButton(
+      icon = if (state.bars.topBar) TerminalIcons.ArrowUp else TerminalIcons.ArrowDown,
+      description = if (state.bars.topBar) "Скрий горната лента" else "Покажи горната лента",
+      tag = "float-top-bar",
+      onClick = vm::toggleTopBar,
+    )
+    Spacer(Modifier.weight(1f).heightIn(min = 12.dp))
+    // Скрол под палеца, като от trackpad-а (Claude Code го превърта така). PgUp / PgDn са в
+    // реда с клавиши: в shell те вървят по историята на командите.
+    RepeatKeyButton("▲", description = "Скрол нагоре", tag = "float-scroll-up") { vm.scrollWheel(up = true) }
+    Spacer(Modifier.height(12.dp))
+    RepeatKeyButton("▼", description = "Скрол надолу", tag = "float-scroll-down") { vm.scrollWheel(up = false) }
+    Spacer(Modifier.height(12.dp))
+    // Едно докосване до най-новото: историята на телефона и скролът на агента (Claude Code).
+    // Докато скролира, свети; второ докосване го спира.
+    FloatingBarButton(
+      icon = TerminalIcons.ToBottom,
+      description = if (state.jumping) "Спри скрола до най-долу" else "Най-долу",
+      tag = "float-to-bottom",
+      active = state.jumping,
+      onClick = vm::jumpToBottom,
+    )
+    Spacer(Modifier.weight(1f).heightIn(min = 12.dp))
+    // Долу: разпъва полето за писане. Разпънато се прибира от реда с клавиши (или с Back),
+    // а докато има маркирано, бутонът не се показва, за да не покрива лентата за маркиране.
+    // Празното място остава, за да не скачат ▲ ▼.
+    if (!state.bars.input && state.selection == null) {
+      FloatingBarButton(
+        icon = TerminalIcons.Keyboard,
+        description = "Покажи полето за писане",
+        tag = "float-input",
+        onClick = onShowInput,
+      )
+    } else {
+      Spacer(Modifier.size(52.dp))
+    }
+  }
 }
 
 /**
@@ -398,250 +399,6 @@ private fun PhaseOverlay(phase: AttachPhase, onReattach: () -> Unit, modifier: M
 private fun OverlayCard(modifier: Modifier, content: @Composable () -> Unit) {
   Card(modifier = modifier.padding(24.dp)) {
     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) { content() }
-  }
-}
-
-@Composable
-private fun InputBar(
-  vm: TerminalViewModel,
-  /** Расте при всяко разпъване с бутона: полето (или „Живи клавиши“) взема фокуса. */
-  focusRequest: Int,
-  /** Прибира полето и клавиатурата; текстът в полето остава. */
-  onCollapse: () -> Unit,
-  /** Текстът в полето за ред; държи го екранът, за да оцелее прибирането. */
-  fieldState: MutableState<TextFieldValue>,
-  ctrlSticky: Boolean,
-  liveKeys: Boolean,
-  suggesting: Boolean,
-  suggestions: List<String>,
-  modifier: Modifier = Modifier,
-) {
-  var field by fieldState
-  val focusManager = LocalFocusManager.current
-  // Паметта за думата в процес живее с екрана; самото View — само докато режимът е включен.
-  val liveKeysInput = remember { LiveKeys(vm::sendLive) }
-  var liveView by remember { mutableStateOf<LiveKeysView?>(null) }
-  val fieldFocus = remember { FocusRequester() }
-  val keyboard = LocalSoftwareKeyboardController.current
-
-  // Разпънато с бутона: курсорът в полето и клавиатурата отворена, без второ докосване.
-  LaunchedEffect(focusRequest) {
-    if (focusRequest == 0) return@LaunchedEffect
-    // Полето е добавено в този кадър; фокусът хваща едва след layout-а.
-    withFrameNanos { }
-    if (liveKeys) {
-      liveView?.let { view -> view.post { view.showKeyboard() } }
-    } else {
-      fieldFocus.requestFocus()
-      keyboard?.show()
-    }
-  }
-
-  // Включени „Живи клавиши“: клавиатурата пише в невидимото поле, а не в полето за ред.
-  LaunchedEffect(liveKeys, liveView) {
-    val view = liveView ?: return@LaunchedEffect
-    if (liveKeys) {
-      focusManager.clearFocus()
-      // След layout-а, иначе requestFocus на току-що добавено View понякога не хваща.
-      view.post { view.showKeyboard() }
-    }
-  }
-
-  Column(
-    verticalArrangement = Arrangement.spacedBy(4.dp),
-    modifier = modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer).padding(6.dp),
-  ) {
-    if (suggestions.isNotEmpty()) {
-      Row(
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).testTag("suggestions"),
-      ) {
-        suggestions.forEach { s ->
-          // Предложението само пълни полето. Праща се едва със „Прати“.
-          SuggestionChip(
-            onClick = {
-              // Предложението е за поправяне преди изпращане — значи в полето за ред.
-              vm.setLiveKeys(false)
-              field = TextFieldValue(s, selection = TextRange(s.length))
-            },
-            label = { Text(s, fontFamily = FontFamily.Monospace, maxLines = 1) },
-          )
-        }
-        TextButton(onClick = vm::clearSuggestions) { Text("✕") }
-      }
-    }
-    Row(
-      horizontalArrangement = Arrangement.spacedBy(4.dp),
-      modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).testTag("key-row"),
-    ) {
-      // Прибирането е тук, а не плаващо над терминала: в ниско място бутонът би покрил ▲ ▼.
-      FilledTonalIconButton(
-        onClick = onCollapse,
-        modifier = Modifier.size(36.dp).testTag("input-collapse"),
-      ) {
-        Icon(TerminalIcons.KeyboardHide, contentDescription = "Скрий полето за писане")
-      }
-      FilterChip(
-        selected = liveKeys,
-        onClick = { vm.setLiveKeys(!liveKeys) },
-        label = { Text("Живи клавиши") },
-        modifier = Modifier.height(36.dp).testTag("live-keys"),
-      )
-      // В реда с клавиши, а не под „Прати“: там собственикът го натискаше вместо „Прати“.
-      SuggestButton(suggesting, onClick = vm::suggest)
-      KeyButton("Esc") { vm.sendKey(TerminalKeys.ESC) }
-      KeyButton("Tab") { vm.sendKey(TerminalKeys.TAB) }
-      KeyButton("Ctrl", highlighted = ctrlSticky) { vm.toggleCtrl() }
-      KeyButton("^C") { vm.sendKey(TerminalKeys.CTRL_C) }
-      KeyButton("^D") { vm.sendKey(TerminalKeys.CTRL_D) }
-      KeyButton("^L") { vm.sendKey(TerminalKeys.CTRL_L) }
-      KeyButton("↑") { vm.sendKey(TerminalKeys.UP) }
-      KeyButton("↓") { vm.sendKey(TerminalKeys.DOWN) }
-      KeyButton("←") { vm.sendKey(TerminalKeys.LEFT) }
-      KeyButton("→") { vm.sendKey(TerminalKeys.RIGHT) }
-      KeyButton("PgUp") { vm.sendKey(TerminalKeys.PAGE_UP) }
-      KeyButton("PgDn") { vm.sendKey(TerminalKeys.PAGE_DOWN) }
-      KeyButton("Home") { vm.sendKey(TerminalKeys.HOME) }
-      KeyButton("End") { vm.sendKey(TerminalKeys.END) }
-      // Историята на телефона (xterm.js), за shell; горните четири са за програмата.
-      // Повтарят, докато се държат, както ▲ ▼: историята се превърта с много страници.
-      RepeatKeyChip("История ↑", tag = "history-up") { vm.scrollHistory(-1) }
-      RepeatKeyChip("История ↓", tag = "history-down") { vm.scrollHistory(1) }
-      KeyButton("Долу", tag = "history-bottom") { vm.scrollToBottom() }
-      KeyButton("⏎") { vm.sendKey(TerminalKeys.ENTER) }
-      KeyButton("!") { vm.sendKey("!") }
-      KeyButton("/") { vm.sendKey("/") }
-    }
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-      if (liveKeys) {
-        LiveKeysArea(
-          keys = liveKeysInput,
-          ctrlSticky = ctrlSticky,
-          onView = { liveView = it },
-          modifier = Modifier.weight(1f),
-        )
-      } else {
-        OutlinedTextField(
-        value = field,
-        onValueChange = { next ->
-          // При лепкав Ctrl следващата буква отива като control код, а не в полето.
-          val ch = if (ctrlSticky) TextDiff.insertedChar(field.text, next.text) else null
-          if (ch == null || !vm.consumeCtrl(ch)) field = next
-        },
-        placeholder = { Text(if (ctrlSticky) "Ctrl + буква…" else "Текст за терминала") },
-        textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
-        maxLines = 4,
-        modifier = Modifier.weight(1f).focusRequester(fieldFocus).testTag("terminal-input"),
-        )
-      }
-      if (!liveKeys) {
-        Button(
-          onClick = { if (vm.sendLine(field.text)) field = TextFieldValue("") },
-          contentPadding = PaddingValues(horizontal = 12.dp),
-          modifier = Modifier.height(40.dp).testTag("terminal-send"),
-        ) { Text("Прати") }
-      }
-    }
-  }
-}
-
-/** „Предложи“: предложенията само пълнят полето за ред, нищо не се праща само. */
-@Composable
-private fun SuggestButton(suggesting: Boolean, onClick: () -> Unit) {
-  OutlinedButton(
-    onClick = onClick,
-    enabled = !suggesting,
-    contentPadding = PaddingValues(horizontal = 10.dp),
-    modifier = Modifier.height(36.dp).testTag("terminal-suggest"),
-  ) {
-    if (suggesting) {
-      CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(14.dp))
-      Text(" Мисля…")
-    } else {
-      Text("Предложи")
-    }
-  }
-}
-
-/**
- * Мястото на полето за ред при „Живи клавиши“: невидимото [LiveKeysView] върху надпис.
- * Докосване показва клавиатурата отново, ако е била скрита.
- */
-@Composable
-private fun LiveKeysArea(
-  keys: LiveKeys,
-  ctrlSticky: Boolean,
-  onView: (LiveKeysView?) -> Unit,
-  modifier: Modifier = Modifier,
-) {
-  Box(
-    contentAlignment = Alignment.CenterStart,
-    modifier = modifier
-      .height(56.dp)
-      .border(1.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(4.dp))
-      .padding(horizontal = 12.dp),
-  ) {
-    Text(
-      if (ctrlSticky) "Ctrl + буква…" else "Живи клавиши: всеки знак отива веднага",
-      style = MaterialTheme.typography.bodyMedium,
-      color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-    AndroidView(
-      factory = { context ->
-        LiveKeysView(context, keys).apply {
-          setOnClickListener { showKeyboard() }
-          onView(this)
-        }
-      },
-      // Режимът е изключен: клавиатурата се скрива с полето, за да не пише в нищото.
-      onRelease = { view ->
-        view.hideKeyboard()
-        onView(null)
-      },
-      modifier = Modifier.matchParentSize().testTag("live-keys-input"),
-    )
-  }
-}
-
-@Composable
-private fun KeyButton(label: String, highlighted: Boolean = false, tag: String = "key-$label", onClick: () -> Unit) {
-  val colors = if (highlighted) {
-    ButtonDefaults.filledTonalButtonColors(
-      containerColor = MaterialTheme.colorScheme.primary,
-      contentColor = MaterialTheme.colorScheme.onPrimary,
-    )
-  } else {
-    ButtonDefaults.filledTonalButtonColors()
-  }
-  FilledTonalButton(
-    onClick = onClick,
-    colors = colors,
-    contentPadding = PaddingValues(horizontal = 10.dp),
-    modifier = Modifier.height(36.dp).testTag(tag),
-  ) { Text(label, fontFamily = FontFamily.Monospace) }
-}
-
-/**
- * На вид като [KeyButton], но повтаря, докато се държи ([repeatPress]). Не е `Button`:
- * неговото докосване би дало второ действие освен това на [repeatPress]. Само за превъртане
- * на историята — клавиш, повторен към агента, би бил много клавиши наведнъж.
- */
-@Composable
-private fun RepeatKeyChip(label: String, tag: String, onFire: () -> Unit) {
-  Surface(
-    shape = ButtonDefaults.filledTonalShape,
-    color = MaterialTheme.colorScheme.secondaryContainer,
-    contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-    modifier = Modifier
-      .height(36.dp)
-      .clip(ButtonDefaults.filledTonalShape)
-      .testTag(tag)
-      .repeatPress(description = label, onFire = onFire),
-  ) {
-    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxHeight().padding(horizontal = 10.dp)) {
-      Text(label, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.labelLarge)
-    }
   }
 }
 
