@@ -55,12 +55,12 @@ class TerminalPool(
     override fun attachSent(session: TerminalSession, keep: Boolean) {
       if (keep) return
       // Attach без keep откача всички други на връзката (виж протокола, „attach / detach“).
-      entries.filter { it !== session }.forEach { it.markNeedsAttach() }
+      othersThan(session).forEach { it.markNeedsAttach() }
     }
 
     override fun attachLimit(session: TerminalSession) {
       log("attach_limit за ${session.contentId}: пулът се свива до видимия")
-      entries.filter { it !== session }.forEach { release(it) }
+      othersThan(session).forEach { release(it) }
     }
 
     override fun detachedWhileHidden(session: TerminalSession) {
@@ -99,7 +99,7 @@ class TerminalPool(
     // Стар Mac (caps без attach.keep): един таб на връзка. Неизвестни caps (нов сокет преди
     // hello) не пускат нищо — другите вече са „нужен attach“ след новата сесия.
     val caps = link.hostCaps.value
-    if (caps != null && Caps.ATTACH_KEEP !in caps) entries.filter { it !== session }.forEach { release(it) }
+    if (caps != null && Caps.ATTACH_KEEP !in caps) othersThan(session).forEach { release(it) }
     while (entries.size > limit) release(entries.last())
     session.show()
     return session
@@ -164,7 +164,7 @@ class TerminalPool(
    */
   private fun onList(list: ListReply) {
     if (link.hostSession.value == null) return
-    val alive = list.repos.flatMap { repo -> repo.worktrees.flatMap { wt -> wt.tabs.map { it.contentId } } }.toSet()
+    val alive = liveContentIds(list)
     for (session in entries.toList()) {
       if (session.visible || session.contentId in alive) {
         listMisses.remove(session.contentId)
@@ -175,6 +175,13 @@ class TerminalPool(
       if (misses >= LIST_MISSES_TO_RELEASE) release(session)
     }
   }
+
+  /** Терминалите на всички табове в списъка на Mac-а. */
+  private fun liveContentIds(list: ListReply): Set<String> =
+    list.repos.flatMap { repo -> repo.worktrees.flatMap { wt -> wt.tabs.map { it.contentId } } }.toSet()
+
+  /** Живите терминали без [session]; копие, защото пускането им мени [entries]. */
+  private fun othersThan(session: TerminalSession): List<TerminalSession> = entries.filter { it !== session }
 
   private fun release(session: TerminalSession, detach: Boolean = true) {
     entries.remove(session)
