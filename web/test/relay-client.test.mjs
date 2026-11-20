@@ -10,7 +10,8 @@ let mock;
 before(async () => { mock = await startMock(); });
 after(async () => { await mock?.stop(); });
 
-function connect(settings = mock.settings) {
+/** Връзка към mock-а; спира се в края на теста и при падане — иначе висящата връзка спира `npm test` (ЧК4). */
+function connect(t, settings = mock.settings) {
   const relay = new RelayClient({ timing: { lanRetryFirstMs: 300, lanRetryMaxMs: 600 } });
   const host = new HostController(relay, { listIntervalMs: 60_000 });
   const messages = [];
@@ -19,19 +20,22 @@ function connect(settings = mock.settings) {
   const text = (contentId) => messages
     .filter((m) => m.t === 'out' && m.contentId === contentId)
     .map((m) => Buffer.from(m.b64, 'base64').toString('utf8')).join('');
-  return { relay, host, messages, text, stop: () => { host.setActive(false); relay.stop(); } };
+  t.after(() => {
+    host.setActive(false);
+    relay.stop();
+  });
+  return { relay, host, messages, text };
 }
 
-test('грешен ключ — unauthorized и нов опит няма', async () => {
-  const c = connect({ ...mock.settings, apiKey: 'wrong' });
+test('грешен ключ — unauthorized и нов опит няма', async (t) => {
+  const c = connect(t, { ...mock.settings, apiKey: 'wrong' });
   await waitFor(() => c.relay.state.connection === 'unauthorized', 'unauthorized');
   await new Promise((r) => setTimeout(r, 1_300));
   assert.equal(c.relay.state.connection, 'unauthorized');
-  c.stop();
 });
 
-test('онлайн Mac — hello, LAN път, list и терминал с вход', async () => {
-  const c = connect();
+test('онлайн Mac — hello, LAN път, list и терминал с вход', async (t) => {
+  const c = connect(t);
   c.host.setActive(true);
   await waitFor(() => c.relay.state.path === 'lan', 'LAN път');
   assert.equal(c.relay.state.hostName, 'Mock Mac');
@@ -46,11 +50,10 @@ test('онлайн Mac — hello, LAN път, list и терминал с вхо
   await waitFor(() => c.text('content-shell-main').includes('web-42'), 'ехото на командата');
   // Вход за друг таб (закъснял Enter след смяна) не тръгва.
   assert.equal(c.host.input(Buffer.from('\r').toString('base64'), 'content-idle'), false);
-  c.stop();
 });
 
-test('LAN пада — обратно на relay-а и нов attach сам', async () => {
-  const c = connect();
+test('LAN пада — обратно на relay-а и нов attach сам', async (t) => {
+  const c = connect(t);
   c.host.setActive(true);
   await waitFor(() => c.relay.state.path === 'lan', 'LAN път');
   c.host.open('content-idle');
@@ -64,11 +67,10 @@ test('LAN пада — обратно на relay-а и нов attach сам', as
   // Нов hello по relay-а носи пак `lan` и пътят се връща на LAN, с нов attach.
   await waitFor(() => c.relay.state.path === 'lan', 'пак LAN', 10_000);
   await waitFor(() => c.messages.filter((m) => m.t === 'attached').length === 3, 'attached по LAN');
-  c.stop();
 });
 
-test('Mac-ът изчезва от relay-а и се връща — нов attach', async () => {
-  const c = connect();
+test('Mac-ът изчезва от relay-а и се връща — нов attach', async (t) => {
+  const c = connect(t);
   c.host.setActive(true);
   await waitFor(() => c.relay.state.hostOnline, 'онлайн');
   // mock-offline засяга само relay клиентите, затова LAN се спира първо.
@@ -85,11 +87,10 @@ test('Mac-ът изчезва от relay-а и се връща — нов attach
   await waitFor(() => c.relay.state.hostOnline, 'пак онлайн', 10_000);
   await waitFor(() => c.messages.filter((m) => m.t === 'attached').length > before, 'нов attached');
   c.host.input(Buffer.from('mock-lan-on\r').toString('base64'), c.host.openContentId);
-  c.stop();
 });
 
-test('нов таб с размера на прозореца', async () => {
-  const c = connect();
+test('нов таб с размера на прозореца', async (t) => {
+  const c = connect(t);
   c.host.setActive(true);
   await waitFor(() => c.relay.state.hostSession != null, 'сесия');
   c.host.newTab({ worktreeId: 'wt-main', cols: 90, rows: 30, ref: 'r1' });
@@ -105,11 +106,10 @@ test('нов таб с размера на прозореца', async () => {
   c.host.newTab({ worktreeId: 'wt-missing', cols: 90, rows: 30, ref: 'r2' });
   const err = await waitFor(() => c.messages.find((m) => m.t === 'error' && m.ref === 'r2'), 'грешка');
   assert.match(err.message, /unknown worktree/);
-  c.stop();
 });
 
-test('нов worktree: първият таб с размера на прозореца, после в list и под repository-то', async () => {
-  const c = connect();
+test('нов worktree: първият таб с размера на прозореца, после в list и под repository-то', async (t) => {
+  const c = connect(t);
   c.host.setActive(true);
   await waitFor(() => c.relay.state.hostSession != null, 'сесия');
   const list = await waitFor(() => c.messages.find((m) => m.t === 'list'), 'list');
@@ -126,13 +126,14 @@ test('нов worktree: първият таб с размера на прозор
   await waitFor(() => c.messages.some((m) => m.t === 'list' &&
     m.repos.some((r) => r.id === 'repo-supacode' && r.rowIds?.includes(reply.worktreeId) &&
       r.worktrees.some((w) => w.id === reply.worktreeId))), 'worktree-то в list');
-  c.stop();
 });
 
-test('нов worktree: грешките на Mac-а идват с ref-а и кода', async () => {
-  const c = connect();
+test('нов worktree: грешките на Mac-а идват с ref-а и кода', async (t) => {
+  const c = connect(t);
   c.host.setActive(true);
-  await waitFor(() => c.relay.state.hostSession != null, 'сесия');
+  // Първата сесия е по relay-а; LAN-ът идва малко след нея и сменя сесията, а чакащ `worktree.new`
+  // тогава получава `worktree_lost` (ЧК4: под натоварване тестът хващаше relay сесията).
+  await waitFor(() => c.relay.state.hostSession != null && c.relay.state.path === 'lan', 'LAN сесия', 10_000);
   const errorFor = (ref) => waitFor(() => c.messages.find((m) => m.t === 'error' && m.ref === ref), `грешка ${ref}`, 6_000);
   c.host.newWorktree({ repositoryId: 'repo-supacode', name: 'main', ref: 'e1' });
   assert.equal((await errorFor('e1')).code, 'worktree_failed');
@@ -146,11 +147,10 @@ test('нов worktree: грешките на Mac-а идват с ref-а и ко
   c.host.newWorktree({ repositoryId: 'repo-supacode', name: 'mock-notab-1', ref: 'e5' });
   const noTab = await waitFor(() => c.messages.find((m) => m.t === 'worktree.new' && m.ref === 'e5'), 'без таб', 5_000);
   assert.equal(noTab.contentId, null);
-  c.stop();
 });
 
-test('нов worktree: смяна на пътя — отговорът няма да дойде, страницата го знае веднага', async () => {
-  const c = connect();
+test('нов worktree: смяна на пътя — отговорът няма да дойде, страницата го знае веднага', async (t) => {
+  const c = connect(t);
   c.host.setActive(true);
   await waitFor(() => c.relay.state.hostSession != null && c.relay.state.path === 'lan', 'LAN сесия', 10_000);
   c.host.newWorktree({ repositoryId: 'repo-supacode', name: 'mock-slow-path', ref: 'p1' });
@@ -162,11 +162,10 @@ test('нов worktree: смяна на пътя — отговорът няма 
   await waitFor(() => c.messages.filter((m) => m.t === 'attached').length === 2, 'attached по relay-а');
   c.host.input(Buffer.from('mock-lan-on\r').toString('base64'), c.host.openContentId);
   await waitFor(() => c.relay.state.path === 'lan', 'пак LAN', 10_000);
-  c.stop();
 });
 
-test('изтриване на worktree: основният не може, dirty отказва, иначе изчезва от list (ЗД13)', async () => {
-  const c = connect();
+test('изтриване на worktree: основният не може, dirty отказва, иначе изчезва от list (ЗД13)', async (t) => {
+  const c = connect(t);
   c.host.setActive(true);
   await waitFor(() => c.relay.state.hostSession != null, 'сесия');
   const list = await waitFor(() => c.messages.find((m) => m.t === 'list'), 'list');
@@ -197,11 +196,10 @@ test('изтриване на worktree: основният не може, dirty 
   await waitFor(() => c.messages.some((m) => m.t === 'list' &&
     !m.repos.some((r) => r.worktrees.some((w) => w.id === created.worktreeId)) &&
     !m.repos.some((r) => r.rowIds?.includes(created.worktreeId))), 'вече го няма в list');
-  c.stop();
 });
 
-test('„Опресни“: list със същото id приключва чакането (ЗД13)', async () => {
-  const c = connect();
+test('„Опресни“: list със същото id приключва чакането (ЗД13)', async (t) => {
+  const c = connect(t);
   c.host.setActive(true);
   await waitFor(() => c.relay.state.hostSession != null, 'сесия');
   const before = c.messages.filter((m) => m.t === 'list').length;
@@ -210,11 +208,10 @@ test('„Опресни“: list със същото id приключва ча�
   assert.equal(done.kind, 'worktrees.refresh');
   assert.ok(c.messages.filter((m) => m.t === 'list').length > before);
   assert.equal(c.host.pending.size, 0);
-  c.stop();
 });
 
-test('предложенията идват с ref-а на страницата', async () => {
-  const c = connect();
+test('предложенията идват с ref-а на страницата', async (t) => {
+  const c = connect(t);
   c.host.setActive(true);
   await waitFor(() => c.relay.state.hostSession != null, 'сесия');
   c.host.open('content-shell-main');
@@ -222,7 +219,6 @@ test('предложенията идват с ref-а на страницата'
   const reply = await waitFor(() => c.messages.find((m) => m.t === 'suggest'), 'suggest', 6_000);
   assert.equal(reply.ref, 's1');
   assert.ok(reply.suggestions.length > 0);
-  c.stop();
 });
 
 test('невалиден адрес на relay-а — чакане с причина, процесът живее', async () => {
@@ -233,9 +229,8 @@ test('невалиден адрес на relay-а — чакане с причи
   relay.stop();
 });
 
-test('ред от полето: Enter след 150 ms, а след смяна на пътя — без Enter', async () => {
-  const c = connect();
-  try {
+test('ред от полето: Enter след 150 ms, а след смяна на пътя — без Enter', async (t) => {
+  const c = connect(t);
   c.host.setActive(true);
   await waitFor(() => c.relay.state.path === 'lan', 'LAN път');
   c.host.open('content-compact');
@@ -254,34 +249,27 @@ test('ред от полето: Enter след 150 ms, а след смяна н
   const after = mock.log().slice(before).split('\n').filter((l) => l.includes('input received,') && l.includes('content: content-compact,'));
   assert.ok(!after.some((l) => l.includes('hex: 0d')), `Enter тръгна след смяната:\n${after.join('\n')}`);
   assert.ok(!c.text('content-compact').includes('never-5'));
-  } finally {
-    c.stop();
-  }
 });
 
-test('размер по екрана: само за отворения таб, host-ът ограничава и отговаря със size', async () => {
-  const c = connect();
-  try {
-    c.host.setActive(true);
-    await waitFor(() => c.relay.state.hostSession != null, 'сесия');
-    c.host.open('content-notes');
-    // Преди `attached` host-ът още не знае таба по тази връзка.
-    assert.equal(c.host.resize({ contentId: 'content-notes', cols: 150, rows: 45 }), false);
-    await waitFor(() => c.messages.some((m) => m.t === 'attached'), 'attached');
-    assert.equal(c.host.resize({ contentId: 'content-idle', cols: 150, rows: 45 }), false);
-    assert.equal(c.host.resize({ contentId: 'content-notes', cols: 150.5, rows: 45 }), false);
-    assert.equal(c.host.resize({ contentId: 'content-notes', cols: 150, rows: 45 }), true);
-    const size = await waitFor(() => c.messages.find((m) => m.t === 'size'), 'size');
-    assert.deepEqual([size.cols, size.rows], [150, 45]);
-    // Същият размер пак: по договора host-ът пак отговаря със `size`, за да не чака страницата.
-    c.host.resize({ contentId: 'content-notes', cols: 150, rows: 45 });
-    await waitFor(() => c.messages.filter((m) => m.t === 'size').length === 2, 'втори size');
-    assert.deepEqual(c.messages.filter((m) => m.t === 'size').map((m) => [m.cols, m.rows]), [[150, 45], [150, 45]]);
-    c.host.resize({ contentId: 'content-notes', cols: 9999, rows: 1 });
-    await waitFor(() => c.messages.some((m) => m.t === 'size' && m.cols === 500 && m.rows === 5), 'ограничен size');
-  } finally {
-    c.stop();
-  }
+test('размер по екрана: само за отворения таб, host-ът ограничава и отговаря със size', async (t) => {
+  const c = connect(t);
+  c.host.setActive(true);
+  await waitFor(() => c.relay.state.hostSession != null, 'сесия');
+  c.host.open('content-notes');
+  // Преди `attached` host-ът още не знае таба по тази връзка.
+  assert.equal(c.host.resize({ contentId: 'content-notes', cols: 150, rows: 45 }), false);
+  await waitFor(() => c.messages.some((m) => m.t === 'attached'), 'attached');
+  assert.equal(c.host.resize({ contentId: 'content-idle', cols: 150, rows: 45 }), false);
+  assert.equal(c.host.resize({ contentId: 'content-notes', cols: 150.5, rows: 45 }), false);
+  assert.equal(c.host.resize({ contentId: 'content-notes', cols: 150, rows: 45 }), true);
+  const size = await waitFor(() => c.messages.find((m) => m.t === 'size'), 'size');
+  assert.deepEqual([size.cols, size.rows], [150, 45]);
+  // Същият размер пак: по договора host-ът пак отговаря със `size`, за да не чака страницата.
+  c.host.resize({ contentId: 'content-notes', cols: 150, rows: 45 });
+  await waitFor(() => c.messages.filter((m) => m.t === 'size').length === 2, 'втори size');
+  assert.deepEqual(c.messages.filter((m) => m.t === 'size').map((m) => [m.cols, m.rows]), [[150, 45], [150, 45]]);
+  c.host.resize({ contentId: 'content-notes', cols: 9999, rows: 1 });
+  await waitFor(() => c.messages.some((m) => m.t === 'size' && m.cols === 500 && m.rows === 5), 'ограничен size');
 });
 
 
