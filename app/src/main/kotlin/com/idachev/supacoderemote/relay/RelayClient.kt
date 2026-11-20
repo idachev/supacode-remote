@@ -260,20 +260,22 @@ class RelayClient(
   /** По LAN, ако е горе, иначе по relay-а. Relay сокетът остава отворен като резерва. */
   override fun send(message: ClientMessage): Boolean {
     val text = ProtocolCodec.encode(message)
-    if (message is WatchRequest) return sendWatch(message, text)
-    if (message !is AttachRequest && message !is DetachRequest) return sendText(text)
+    return when (message) {
+      is WatchRequest -> sendWatch(message, text)
+      is AttachRequest, is DetachRequest -> sendStreamRequest(message, text)
+      else -> sendText(text)
+    }
+  }
+
+  /** `attach` / `detach`: [gate] научава по кой сокет е тръгнала заявката. */
+  private fun sendStreamRequest(message: ClientMessage, text: String): Boolean {
     // Под streamLock-а: отговорът по пътя не може да бъде решен, преди gate да знае за заявката.
     synchronized(streamLock) {
-      val lanNow = lan
-      val ws = socket
-      val via: Any = when {
-        lanNow != null && lanNow.send(text) -> lanNow
-        ws != null && ws.send(text) -> ws
-        else -> return false
-      }
+      val via = sendTextVia(text) ?: return false
       when (message) {
         is AttachRequest -> gate.attachSent(via, message.id, message.contentId, keep = message.keep == true)
         is DetachRequest -> sendDetaches(gate.detachSent(via, message.contentId))
+        else -> Unit
       }
       return true
     }
@@ -393,18 +395,7 @@ class RelayClient(
   }
 
   private fun restartLocked() {
-    job?.cancel()
-    job = null
-    // Старият опит спира веднага за всички: закъснелите му callback-и и `finally` вече не
-    // пипат състоянието, а `send` не тръгва по затварящия се сокет.
-    attempts.incrementAndGet()
-    socket = null
-    closeLanLocked()
-    // Новата връзка почва без caps и без watch: Mac-ът ги е забравил заедно със старата.
-    capsBySocket.clear()
-    watchSocket = null
-    _hostOnline.value = false
-    updateRouteLocked()
+    dropConnectionLocked()
     _boundHostId.value = selection.selectedHostId.value
     val current = settings
     if (current == null || !activeLocked()) {
@@ -417,6 +408,22 @@ class RelayClient(
       return
     }
     job = scope.launch { runLoop(url, current.apiKey) }
+  }
+
+  /** Затваря стария опит, LAN-а и всичко, което Mac-ът е помнил за старата връзка. */
+  private fun dropConnectionLocked() {
+    job?.cancel()
+    job = null
+    // Старият опит спира веднага за всички: закъснелите му callback-и и `finally` вече не
+    // пипат състоянието, а `send` не тръгва по затварящия се сокет.
+    attempts.incrementAndGet()
+    socket = null
+    closeLanLocked()
+    // Новата връзка почва без caps и без watch: Mac-ът ги е забравил заедно със старата.
+    capsBySocket.clear()
+    watchSocket = null
+    _hostOnline.value = false
+    updateRouteLocked()
   }
 
   private suspend fun runLoop(url: String, apiKey: String) {
@@ -445,83 +452,99 @@ class RelayClient(
   }
 
   private suspend fun connectOnce(url: String, apiKey: String): Outcome {
-    val done = CompletableDeferred<Outcome>()
-    // Callback-ите на OkHttp идват от друга нишка и може да закъснеят след края на опита.
-    val finished = AtomicBoolean(false)
-    val attempt = attempts.incrementAndGet()
+    val attempt = Attempt(attempts.incrementAndGet())
     // Новата връзка започва без host: стар опит може да е оставил `hostOnline` вдигнат.
-    setHostOnline(false, attempt)
-    var opened = false
+    setHostOnline(false, attempt.number)
     val request = Request.Builder().url(url).header("Authorization", "Bearer $apiKey").build()
-    val ws = http.newWebSocket(request, object : WebSocketListener() {
-      override fun onOpen(webSocket: WebSocket, response: Response) {
-        if (finished.get() || attempt != attempts.get()) return
-        opened = true
-        lastFrameAt = System.currentTimeMillis()
-        socket = webSocket
-        _state.value = ConnectionState.Connected
-      }
-
-      override fun onMessage(webSocket: WebSocket, text: String) {
-        if (finished.get() || attempt != attempts.get()) return
-        lastFrameAt = System.currentTimeMillis()
-        val message = ProtocolCodec.decode(text, ::logSkipped) ?: return
-        when (message) {
-          is RelayStatus -> if (!onRelayStatus(webSocket, message, attempt)) return
-          is HelloReply -> {
-            if (!isForeignHello(message)) {
-              onOwnHello(message)
-              rememberCaps(webSocket, message.caps)
-            }
-            onRelayHello(message)
-          }
-          else -> Unit
-        }
-        deliver(webSocket, message)
-      }
-
-      override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-        webSocket.close(1000, null)
-      }
-
-      override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-        done.complete(Outcome.Closed(reason.ifBlank { "затворена ($code)" }, opened))
-      }
-
-      override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-        if (response?.code == 401) {
-          done.complete(Outcome.Unauthorized)
-        } else {
-          val reason = response?.let { "HTTP ${it.code}" } ?: t.message ?: t.javaClass.simpleName
-          done.complete(Outcome.Closed(reason, opened))
-        }
-      }
-    })
-    val keepalive = scope.launch {
-      while (true) {
-        delay(timing.pingIntervalMs)
-        if (socket === ws) {
-          if (System.currentTimeMillis() - lastFrameAt > timing.silenceLimitMs) {
-            ws.cancel()
-            done.complete(Outcome.Closed("няма отговор от relay-а", opened))
-            return@launch
-          }
-          ws.send(PING)
-        }
-      }
-    }
+    val ws = http.newWebSocket(request, RelayListener(attempt))
+    val keepalive = scope.launch { keepRelayAlive(ws, attempt) }
     try {
-      return done.await()
+      return attempt.done.await()
     } finally {
-      finished.set(true)
+      attempt.finished.set(true)
       keepalive.cancel()
       if (socket === ws) socket = null
       sourceClosed(ws)
       forgetCaps(ws)
       // Нормално затваряне при отиване във фон; при вече паднала връзка не прави нищо.
       ws.close(1000, null)
-      setHostOnline(false, attempt)
+      setHostOnline(false, attempt.number)
     }
+  }
+
+  /** Един опит за връзка с relay-а: номерът му, краят му и дали сокетът се е отворил. */
+  private inner class Attempt(val number: Int) {
+    val done = CompletableDeferred<Outcome>()
+
+    /** Callback-ите на OkHttp идват от друга нишка и може да закъснеят след края на опита. */
+    val finished = AtomicBoolean(false)
+    var opened = false
+
+    /** Само текущият опит пипа състоянието; закъснял callback на стар опит не прави нищо. */
+    fun isCurrent(): Boolean = !finished.get() && number == attempts.get()
+  }
+
+  /** Кадрите от relay сокета на [attempt] към състоянието и екраните. */
+  private inner class RelayListener(private val attempt: Attempt) : WebSocketListener() {
+    override fun onOpen(webSocket: WebSocket, response: Response) {
+      if (!attempt.isCurrent()) return
+      attempt.opened = true
+      lastFrameAt = System.currentTimeMillis()
+      socket = webSocket
+      _state.value = ConnectionState.Connected
+    }
+
+    override fun onMessage(webSocket: WebSocket, text: String) {
+      if (!attempt.isCurrent()) return
+      lastFrameAt = System.currentTimeMillis()
+      val message = ProtocolCodec.decode(text, ::logSkipped) ?: return
+      when (message) {
+        is RelayStatus -> if (!onRelayStatus(webSocket, message, attempt.number)) return
+        is HelloReply -> onHelloViaRelay(webSocket, message)
+        else -> Unit
+      }
+      deliver(webSocket, message)
+    }
+
+    override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+      webSocket.close(1000, null)
+    }
+
+    override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+      attempt.done.complete(Outcome.Closed(reason.ifBlank { "затворена ($code)" }, attempt.opened))
+    }
+
+    override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+      if (response?.code == 401) {
+        attempt.done.complete(Outcome.Unauthorized)
+      } else {
+        val reason = response?.let { "HTTP ${it.code}" } ?: t.message ?: t.javaClass.simpleName
+        attempt.done.complete(Outcome.Closed(reason, attempt.opened))
+      }
+    }
+  }
+
+  /** `ping` на всеки [Timing.pingIntervalMs]; без кадър над [Timing.silenceLimitMs] опитът свършва. */
+  private suspend fun keepRelayAlive(ws: WebSocket, attempt: Attempt) {
+    while (true) {
+      delay(timing.pingIntervalMs)
+      if (socket !== ws) continue
+      if (System.currentTimeMillis() - lastFrameAt > timing.silenceLimitMs) {
+        ws.cancel()
+        attempt.done.complete(Outcome.Closed("няма отговор от relay-а", attempt.opened))
+        return
+      }
+      ws.send(PING)
+    }
+  }
+
+  /** `hello` по relay-а: името и caps само от свързания Mac, после евентуалният LAN. */
+  private fun onHelloViaRelay(webSocket: WebSocket, hello: HelloReply) {
+    if (!isForeignHello(hello)) {
+      onOwnHello(hello)
+      rememberCaps(webSocket, hello.caps)
+    }
+    followLanOffer(hello)
   }
 
   /**
@@ -592,7 +615,7 @@ class RelayClient(
    * бил предложен в тази връзка (напр. Mac-ът го е спрял за малко) — нов `hello` по-късно,
    * с растяща пауза, за да се върнем на LAN, щом пак е там.
    */
-  private fun onRelayHello(hello: HelloReply) {
+  private fun followLanOffer(hello: HelloReply) {
     val info = hello.lan
     synchronized(lock) {
       // `hello` от друг Mac (relay-ят е объркал потоците): без LAN към него, както при грешен fpMac.
@@ -628,22 +651,28 @@ class RelayClient(
       lanRetry?.cancel()
       lanJob = scope.launch {
         val session = LanSession.connect(http, info, key, lanListener, Duration.ofMillis(timing.lanConnectTimeoutMs))
-        synchronized(lock) {
-          if (generation != lanGeneration || session == null || session.closed) {
-            session?.close()
-            if (generation == lanGeneration) scheduleLanRetryLocked()
-            return@launch
-          }
-          lan = session
-          lanLastFrameAt = System.currentTimeMillis()
-          lanRetryMs = timing.lanRetryFirstMs
-          // hello първо, после новата сесия: по нея терминалът прави attach, а екраните — list.
-          session.send(ProtocolCodec.encode(HelloRequest()))
-          updateRouteLocked()
-          lanKeepalive = scope.launch { keepLanAlive(session) }
-        }
+        synchronized(lock) { adoptLanLocked(session, generation) }
       }
     }
+  }
+
+  /**
+   * LAN опитът от [generation] свърши. Отворена сесия поема заявките, ако настройките са същите;
+   * иначе се затваря, а при същите настройки следва нов опит по-късно.
+   */
+  private fun adoptLanLocked(session: LanSession?, generation: Int) {
+    if (generation != lanGeneration || session == null || session.closed) {
+      session?.close()
+      if (generation == lanGeneration) scheduleLanRetryLocked()
+      return
+    }
+    lan = session
+    lanLastFrameAt = System.currentTimeMillis()
+    lanRetryMs = timing.lanRetryFirstMs
+    // hello първо, после новата сесия: по нея терминалът прави attach, а екраните — list.
+    session.send(ProtocolCodec.encode(HelloRequest()))
+    updateRouteLocked()
+    lanKeepalive = scope.launch { keepLanAlive(session) }
   }
 
   private val lanListener = object : LanSession.Listener {
