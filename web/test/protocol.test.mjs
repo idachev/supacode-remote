@@ -239,3 +239,20 @@ test('busy на таба се чете, с грешен тип табът се �
   assert.deepEqual(skipped, ['repos[0].worktrees[0].tabs[2]']);
 });
 
+
+// ЧК5: и в `hello` / `relay` пропуснатият елемент се докладва с пътя си, както на телефона (КЛ7).
+test('hello с лош елемент в caps и lan addrs докладва пътя им', () => {
+  const skipped = [];
+  const hello = decode(`{"t":"hello","v":1,"caps":["watch",5,"attach.keep"],
+    "lan":{"addrs":["10.0.0.2",{}],"port":8788,"fp":"ab","fpMac":"cd"}}`, (path) => skipped.push(path));
+  assert.deepEqual(hello.caps, ['watch', 'attach.keep']);
+  assert.deepEqual(hello.lan.addrs, ['10.0.0.2']);
+  assert.deepEqual(skipped, ['caps[1]', 'lan.addrs[1]']);
+});
+
+test('relay с Mac без id докладва пътя му', () => {
+  const skipped = [];
+  const relay = decode('{"t":"relay","hostOnline":true,"hosts":[{"id":"a"},{"name":"no id"}]}', (path) => skipped.push(path));
+  assert.deepEqual(relay.hosts.map((h) => h.id), ['a']);
+  assert.deepEqual(skipped, ['hosts[1]']);
+});

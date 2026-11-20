@@ -55,7 +55,7 @@ Navigation 3. compileSdk и targetSdk са 36 (template-ът иска 37, но p
   което изобщо не е масив, прави собственика си лош елемент; на най-горното ниво — целия кадър.
   `ProtocolCodec.decode` и `web/src/protocol.mjs` `decode` с `onSkip`; тестове — същите случаи в
   `ProtocolCodecTest` и `protocol.test.mjs`. Същото важи за `caps` и `lan.addrs` в `hello` и за
-  `hosts` в `relay` (КЛ7); уеб там и преди пропускаше лошите елементи, без лог.
+  `hosts` в `relay` (КЛ7, ЧК5); в уеб логът е `protocol.element_skipped`.
 - Към host-а не се праща нищо, докато relay-ът не каже `hostOnline:true` — иначе relay-ът
   отговаря с грешка на всяка заявка. При всеки преход false → true: `hello`, `list` и
   нов `attach` на отворения терминал. Повторно `relay` с `hostOnline:true` (само нов

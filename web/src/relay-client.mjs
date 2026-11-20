@@ -363,8 +363,8 @@ export class RelayClient extends EventEmitter {
     this.#set({ connection: 'connected', retryInMs: 0, reason: null });
   }
 
-  /** Само пътят на пропуснатия елемент на `list`, без стойности (КЛ3). */
-  #logSkipped = (path) => this.log.warn('list.element_skipped', { path });
+  /** Само пътят на пропуснатия елемент (`list`, `hello`, `relay`), без стойности (КЛ3, ЧК5). */
+  #logSkipped = (path) => this.log.warn('protocol.element_skipped', { path });
 
   #frame(conn, text) {
     if (!this.#current(conn)) return;

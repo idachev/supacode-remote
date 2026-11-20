@@ -80,14 +80,31 @@ const isInt = (v) => Number.isInteger(v);
 const optId = (v) => (isInt(v) ? v : null);
 const strList = (v) => (Array.isArray(v) ? v.filter(isStr) : []);
 
+/**
+ * Елементите на масива, които `read` прочита (не `null`); всеки лош отива в `onSkip` с пътя си, без
+ * стойност (ЧК5, както `LossyReader` за `list`). `null`, ако полето не е масив.
+ */
+function readElements(value, path, onSkip, read) {
+  if (!Array.isArray(value)) return null;
+  const out = [];
+  value.forEach((item, index) => {
+    const element = read(item);
+    if (element == null) onSkip(`${path}[${index}]`);
+    else out.push(element);
+  });
+  return out;
+}
+
+const strOrNull = (v) => (isStr(v) ? v : null);
+
 function hostInfo(h) {
   if (!h || !isStr(h.id)) return null;
   return { id: h.id, name: isStr(h.name) ? h.name : null, online: h.online === true };
 }
 
-function lanInfo(lan) {
+function lanInfo(lan, onSkip) {
   if (!lan || typeof lan !== 'object' || !isInt(lan.port)) return null;
-  return { addrs: strList(lan.addrs), port: lan.port, fp: isStr(lan.fp) ? lan.fp : '', fpMac: isStr(lan.fpMac) ? lan.fpMac : '' };
+  return { addrs: readElements(lan.addrs, 'lan.addrs', onSkip, strOrNull) ?? [], port: lan.port, fp: isStr(lan.fp) ? lan.fp : '', fpMac: isStr(lan.fpMac) ? lan.fpMac : '' };
 }
 
 const terminalSize = (o) => isStr(o.contentId) && isInt(o.cols) && isInt(o.rows);
@@ -194,22 +211,23 @@ function decodeList(o, onSkip) {
  * може да изпусне, получават стойност по подразбиране.
  */
 const DECODERS = {
-  relay: (o) => ({
+  relay: (o, onSkip) => ({
     t: 'relay',
     hostOnline: o.hostOnline === true,
     host: isStr(o.host) ? o.host : null,
     // Липсващо поле (стар relay) не е същото като празен списък (нов relay без Mac-ове).
-    hosts: Array.isArray(o.hosts) ? o.hosts.map(hostInfo).filter(Boolean) : null,
+    hosts: readElements(o.hosts, 'hosts', onSkip, hostInfo),
   }),
-  hello: (o) => ({
+  hello: (o, onSkip) => ({
     t: 'hello', v: isInt(o.v) ? o.v : PROTOCOL_VERSION,
     host: isStr(o.host) ? o.host : null,
     hostId: isStr(o.hostId) ? o.hostId : null,
     // Версията на Supacode („Supacode 0.11.5 (154)“); стар host я изпуска.
     app: isStr(o.app) && o.app ? o.app : null,
-    lan: lanInfo(o.lan),
-    // Стар host изпуска `caps`: празен списък значи „нищо отгоре на основните съобщения“.
-    caps: strList(o.caps),
+    // Стар host изпуска `caps`: празен списък значи „нищо отгоре на основните съобщения“. Преди
+    // `lan`, за да докладва пропуснатото в същия ред като телефона.
+    caps: readElements(o.caps, 'caps', onSkip, strOrNull) ?? [],
+    lan: lanInfo(o.lan, onSkip),
   }),
   // Отговорът на `watch`; `on` казва дали връзката още гледа.
   watch: (o) => ({ t: 'watch', id: optId(o.id), on: o.on === true }),
