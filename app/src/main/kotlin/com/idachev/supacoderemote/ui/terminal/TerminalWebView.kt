@@ -98,130 +98,114 @@ class TerminalPageView(private val appContext: Context, private val readyWithout
     private set
 
   val webView: WebView = WebView(context).apply {
-    settings.javaScriptEnabled = true
-    settings.allowFileAccess = false
-    settings.allowContentAccess = false
-    // Без zoom: размерът на текста е настройка („Размер на текста“).
-    settings.setSupportZoom(false)
-    settings.builtInZoomControls = false
-    settings.displayZoomControls = false
-    settings.useWideViewPort = true
-    settings.loadWithOverviewMode = false
-    // 120 колони на телефон дават шрифт около 5 px; без това WebView го вдига на 8 px
-    // и колоните излизат извън екрана.
-    settings.minimumFontSize = 1
-    settings.minimumLogicalFontSize = 1
-    settings.textZoom = 100
-    setBackgroundColor(android.graphics.Color.rgb(0x1e, 0x1e, 0x1e))
-    // Без glow / разтягане на WebView-то на ръба; скролът отвъд ръба стига до програмата.
-    overScrollMode = android.view.View.OVER_SCROLL_NEVER
-    webChromeClient = object : WebChromeClient() {
-      override fun onConsoleMessage(message: ConsoleMessage): Boolean {
-        Log.d(TAG, "js: ${message.message()} (${message.sourceId()}:${message.lineNumber()})")
-        return true
-      }
-    }
+    configureForTerminal()
     // Методите на моста идват от нишката на WebView-то, не от main.
-    addJavascriptInterface(object {
-      @JavascriptInterface
-      fun ready() {
-        main.post {
-          ready = true
-          callbacks?.onReady?.invoke() ?: readyWithoutScreen()
-        }
-      }
-
-      /** Отговорът на `supa.copyText()`: текстът на терминала като обикновен текст. */
-      @JavascriptInterface
-      fun text(value: String) {
-        main.post { callbacks?.onText?.invoke(value) }
-      }
-
-      /** „Копирай“ от лентата за маркиране: показаният текст. */
-      @JavascriptInterface
-      fun copy(value: String) {
-        main.post { callbacks?.onCopy?.invoke(value) }
-      }
-
-      /**
-       * Маркираното след дълго натискане: краищата (включително) и размерът на буфера
-       * ([cols] × [rows] с историята), за да не излязат ◀ ▶ извън него.
-       */
-      @JavascriptInterface
-      fun selection(startCol: Int, startRow: Int, endCol: Int, endRow: Int, cols: Int, rows: Int) {
-        val value = TerminalSelection.of(Cell(startCol, startRow), Cell(endCol, endRow), cols, rows)
-        main.post { callbacks?.onSelection?.invoke(value) }
-      }
-
-      /** Маркираното е изчезнало в страницата (тап, reset): лентата се скрива. */
-      @JavascriptInterface
-      fun selectionGone() {
-        main.post { callbacks?.onSelection?.invoke(null) }
-      }
-
-      /** Скрол отвъд ръба на историята: "up" / "down" — скрол като от trackpad-а към програмата. */
-      @JavascriptInterface
-      fun overscroll(direction: String) {
-        main.post { callbacks?.onOverscroll?.invoke(direction == "up") }
-      }
-
-      /**
-       * Височината на терминала (CSS px = dp). WebView-то става точно толкова: така при
-       * zoom видимата част не може да излезе в празното извън терминала.
-       */
-      @JavascriptInterface
-      fun height(dp: Int) {
-        main.post { pageHeight = dp }
-      }
-
-      /** Височината на един ред на терминала (CSS px = dp), за отстъпа на цял екран. */
-      @JavascriptInterface
-      fun rowHeight(dp: Double) {
-        main.post { rowHeight = dp.toFloat() }
-      }
-
-      /** Подписът на екрана, поискан от `supa.reportScreen` („Най-долу“). */
-      @JavascriptInterface
-      fun screenSignature(hash: Int) {
-        main.post { callbacks?.onScreenSignature?.invoke(hash) }
-      }
-
-      /** Отговорът на `supa.measureGrid`: размерът, който влиза в мястото на терминала. */
-      @JavascriptInterface
-      fun grid(cols: Int, rows: Int) {
-        main.post { callbacks?.onGrid?.invoke(cols, rows) }
-      }
-
-      /** Отговорът на `supa.reportGrid`: мярката за нов таб. */
-      @JavascriptInterface
-      fun gridEstimate(cols: Int, rows: Int) {
-        main.post { callbacks?.onGridEstimate?.invoke(cols, rows) }
-      }
-
-      /** Байтовете на xterm.js за скрола от `supa.wheel` (mouse report или стрелки). */
-      @JavascriptInterface
-      fun input(data: String) {
-        main.post { callbacks?.onInput?.invoke(data) }
-      }
-
-      /**
-       * Тап в терминала (`supa.tap`): редът с пренесените му части и индексът на тапнатия знак.
-       * Адрес под пръста се отваря в браузъра; иначе тапът не прави нищо.
-       */
-      @JavascriptInterface
-      fun tapText(text: String, index: Int) {
-        val url = TerminalLinks.urlAt(text, index) ?: return
-        main.post { openInBrowser(context, url) }
-      }
-
-      /** Тап по OSC 8 линк (`supa.tap`): адресът от последователността, не от текста. */
-      @JavascriptInterface
-      fun tapUrl(url: String) {
-        main.post { openInBrowser(context, url) }
-      }
-    }, "SupaBridge")
+    addJavascriptInterface(createBridge(), "SupaBridge")
     installSelectionGesture(this)
     loadUrl("file:///android_asset/terminal/index.html")
+  }
+
+  /**
+   * SupaBridge: каквото страницата казва на приложението. Всеки метод минава към main и оттам
+   * към екрана, който показва страницата сега ([callbacks]).
+   */
+  private fun createBridge(): Any = object {
+    @JavascriptInterface
+    fun ready() {
+      main.post {
+        ready = true
+        callbacks?.onReady?.invoke() ?: readyWithoutScreen()
+      }
+    }
+
+    /** Отговорът на `supa.copyText()`: текстът на терминала като обикновен текст. */
+    @JavascriptInterface
+    fun text(value: String) {
+      main.post { callbacks?.onText?.invoke(value) }
+    }
+
+    /** „Копирай“ от лентата за маркиране: показаният текст. */
+    @JavascriptInterface
+    fun copy(value: String) {
+      main.post { callbacks?.onCopy?.invoke(value) }
+    }
+
+    /**
+     * Маркираното след дълго натискане: краищата (включително) и размерът на буфера
+     * ([cols] × [rows] с историята), за да не излязат ◀ ▶ извън него.
+     */
+    @JavascriptInterface
+    fun selection(startCol: Int, startRow: Int, endCol: Int, endRow: Int, cols: Int, rows: Int) {
+      val value = TerminalSelection.of(Cell(startCol, startRow), Cell(endCol, endRow), cols, rows)
+      main.post { callbacks?.onSelection?.invoke(value) }
+    }
+
+    /** Маркираното е изчезнало в страницата (тап, reset): лентата се скрива. */
+    @JavascriptInterface
+    fun selectionGone() {
+      main.post { callbacks?.onSelection?.invoke(null) }
+    }
+
+    /** Скрол отвъд ръба на историята: "up" / "down" — скрол като от trackpad-а към програмата. */
+    @JavascriptInterface
+    fun overscroll(direction: String) {
+      main.post { callbacks?.onOverscroll?.invoke(direction == "up") }
+    }
+
+    /**
+     * Височината на терминала (CSS px = dp). WebView-то става точно толкова: така при
+     * zoom видимата част не може да излезе в празното извън терминала.
+     */
+    @JavascriptInterface
+    fun height(dp: Int) {
+      main.post { pageHeight = dp }
+    }
+
+    /** Височината на един ред на терминала (CSS px = dp), за отстъпа на цял екран. */
+    @JavascriptInterface
+    fun rowHeight(dp: Double) {
+      main.post { rowHeight = dp.toFloat() }
+    }
+
+    /** Подписът на екрана, поискан от `supa.reportScreen` („Най-долу“). */
+    @JavascriptInterface
+    fun screenSignature(hash: Int) {
+      main.post { callbacks?.onScreenSignature?.invoke(hash) }
+    }
+
+    /** Отговорът на `supa.measureGrid`: размерът, който влиза в мястото на терминала. */
+    @JavascriptInterface
+    fun grid(cols: Int, rows: Int) {
+      main.post { callbacks?.onGrid?.invoke(cols, rows) }
+    }
+
+    /** Отговорът на `supa.reportGrid`: мярката за нов таб. */
+    @JavascriptInterface
+    fun gridEstimate(cols: Int, rows: Int) {
+      main.post { callbacks?.onGridEstimate?.invoke(cols, rows) }
+    }
+
+    /** Байтовете на xterm.js за скрола от `supa.wheel` (mouse report или стрелки). */
+    @JavascriptInterface
+    fun input(data: String) {
+      main.post { callbacks?.onInput?.invoke(data) }
+    }
+
+    /**
+     * Тап в терминала (`supa.tap`): редът с пренесените му части и индексът на тапнатия знак.
+     * Адрес под пръста се отваря в браузъра; иначе тапът не прави нищо.
+     */
+    @JavascriptInterface
+    fun tapText(text: String, index: Int) {
+      val url = TerminalLinks.urlAt(text, index) ?: return
+      main.post { openInBrowser(context, url) }
+    }
+
+    /** Тап по OSC 8 линк (`supa.tap`): адресът от последователността, не от текста. */
+    @JavascriptInterface
+    fun tapUrl(url: String) {
+      main.post { openInBrowser(context, url) }
+    }
   }
 
   /** Екранът [owner] показва страницата: линковете се отварят от неговото Activity. */
@@ -365,6 +349,33 @@ fun TerminalWebView(
 private const val TAG = "TerminalWebView"
 
 private const val GRID_ESTIMATE_DELAY_MS = 500L
+
+/** Настройките на WebView-то за xterm.js: без zoom, без минимален шрифт, без glow на ръба. */
+private fun WebView.configureForTerminal() {
+  settings.javaScriptEnabled = true
+  settings.allowFileAccess = false
+  settings.allowContentAccess = false
+  // Без zoom: размерът на текста е настройка („Размер на текста“).
+  settings.setSupportZoom(false)
+  settings.builtInZoomControls = false
+  settings.displayZoomControls = false
+  settings.useWideViewPort = true
+  settings.loadWithOverviewMode = false
+  // 120 колони на телефон дават шрифт около 5 px; без това WebView го вдига на 8 px
+  // и колоните излизат извън екрана.
+  settings.minimumFontSize = 1
+  settings.minimumLogicalFontSize = 1
+  settings.textZoom = 100
+  setBackgroundColor(android.graphics.Color.rgb(0x1e, 0x1e, 0x1e))
+  // Без glow / разтягане на WebView-то на ръба; скролът отвъд ръба стига до програмата.
+  overScrollMode = android.view.View.OVER_SCROLL_NEVER
+  webChromeClient = object : WebChromeClient() {
+    override fun onConsoleMessage(message: ConsoleMessage): Boolean {
+      Log.d(TAG, "js: ${message.message()} (${message.sourceId()}:${message.lineNumber()})")
+      return true
+    }
+  }
+}
 
 /**
  * Адресът от терминала в браузъра на телефона. Изходът на програмата не е доверен: проверката
