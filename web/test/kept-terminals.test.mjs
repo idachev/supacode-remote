@@ -381,3 +381,19 @@ test('след смяна на пътя входът не тръгва пред�
   await waitFor(() => c.attachedFor('content-shell-main') === 2, 'attached по relay-а');
   assert.equal(c.host.input(b64(' '), 'content-shell-main'), true);
 });
+
+// КЛ8: Enter на реда чака 150 ms; ако дотогава табът е откачен (`detached`), Enter не тръгва —
+// както на телефона, където `sendRaw` иска закачен терминал.
+test('Enter на реда не тръгва след detached на таба', async (t) => {
+  const c = client(t, mock, { lineEnterDelayMs: 300 });
+  c.host.setActive(true);
+  await ready(c);
+  c.host.open('content-compact');
+  await waitFor(() => c.attachedFor('content-compact') === 1, 'attached');
+  const from = c.sent.length;
+  assert.equal(c.host.line('echo kl8', 'content-compact'), true);
+  c.relay.emit('message', { t: 'detached', contentId: 'content-compact', reason: 'проба' });
+  await pause(500);
+  const inputs = c.sent.slice(from).filter((m) => m.t === 'input' && m.contentId === 'content-compact').map((m) => m.b64);
+  assert.deepEqual(inputs, [b64('echo kl8')], 'само текстът, без Enter');
+});

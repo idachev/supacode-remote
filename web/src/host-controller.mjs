@@ -173,7 +173,8 @@ export class HostController extends EventEmitter {
     const session = this.relay.state.hostSession;
     if (text && !this.relay.send({ t: 'input', contentId, b64: Buffer.from(text, 'utf8').toString('base64') })) return false;
     const enter = () => {
-      if (this.openContentId !== contentId || this.relay.state.hostSession !== session) return;
+      // Откачен таб (`detached`) или нова сесия: Enter би изпълнил ред, който не е стигнал (КЛ8).
+      if (this.openContentId !== contentId || this.relay.state.hostSession !== session || !this.#attachedNow(contentId)) return;
       this.relay.send({ t: 'input', contentId, b64: Buffer.from('\r').toString('base64') });
     };
     if (text) setTimeout(enter, this.lineEnterDelayMs);
