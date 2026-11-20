@@ -102,6 +102,30 @@ test('„Предложи“ само пълни полето, Esc не стиг
   assert.deepEqual(inputsSince(from, 'content-claude'), [Buffer.from('ls -la').toString('hex'), '0d']);
 });
 
+// КЛ5: докато табът не е на живо (тук Mac-ът е изчезнал), редът не се праща, остава в полето и
+// страницата казва защо.
+test('ред без връзка с таба остава в полето със съобщение', async (t) => {
+  if (!browser) return t.skip('няма Google Chrome');
+  await waitLive();
+  // При LAN `mock-offline` спира само relay-а: първо пътят минава на relay.
+  await typeInTerminal('mock-lan-off');
+  await waitFor(async () => (await page.locator('#path-chip').textContent()) === 'Relay', 'Relay чип');
+  await waitLive();
+  await typeInTerminal('mock-offline');
+  await page.waitForFunction(() => !document.getElementById('term-status').hidden, null, { timeout: 5_000 });
+  const from = mock.log().length;
+  await page.locator('#line-input').fill('echo kl5');
+  await page.locator('#line-input').press('Enter');
+  assert.equal(await page.locator('#line-input').inputValue(), 'echo kl5');
+  assert.equal(await page.locator('#toast').textContent(), 'Терминалът не е свързан — редът не е изпратен');
+  await page.waitForFunction(() => document.getElementById('term-status').hidden, null, { timeout: 15_000 });
+  assert.deepEqual(inputsSince(from, 'content-claude'), []);
+  await page.locator('#line-input').fill('');
+  await typeInTerminal('mock-lan-on');
+  await waitFor(async () => (await page.locator('#path-chip').textContent()) === 'LAN', 'пак LAN', 20_000);
+  await waitLive();
+});
+
 test('Ctrl+⌘+↓ сменя таба, нов таб тръгва с размера на прозореца', async (t) => {
   if (!browser) return t.skip('няма Google Chrome');
   await page.locator('.term-view:not([hidden]) .xterm-helper-textarea').focus();

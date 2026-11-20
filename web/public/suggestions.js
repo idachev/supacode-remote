@@ -1,8 +1,11 @@
 // „Предложи“ и полето за ред. Предложението само пълни полето; никога не се праща само.
 // Редът от полето праща Node (текстът, после Enter след 150 ms, ОП33).
 
-import { $, el } from './dom.js';
+import { $, el, toast } from './dom.js';
 import { nextRef, ui } from './ui-state.js';
+
+/** Редът не тръгна: табът не е на живо. Същият текст праща и Node при отказ (`browser-link.mjs`). */
+export const LINE_NOT_SENT = 'Терминалът не е свързан — редът не е изпратен';
 
 let link = null;
 let terminal = null;
@@ -11,8 +14,9 @@ export function initSuggestions(deps) {
   ({ link, terminal } = deps);
   $('line-form').addEventListener('submit', (e) => {
     e.preventDefault();
-    sendLine($('line-input').value);
-    $('line-input').value = '';
+    // КЛ5: неизпратен ред остава в полето, иначе би се изгубил без дума.
+    if (sendLine($('line-input').value)) $('line-input').value = '';
+    else toast(LINE_NOT_SENT);
   });
   $('line-input').addEventListener('keydown', (e) => {
     if (e.key === 'Escape') toggleLine(false);
@@ -26,7 +30,18 @@ export function toggleLine(show = $('line-form').hidden) {
 }
 
 function sendLine(text) {
-  if (ui.phase === 'live') link.send({ t: 'line', text, contentId: ui.openContentId });
+  if (ui.phase !== 'live') return false;
+  link.send({ t: 'line', text, contentId: ui.openContentId });
+  return true;
+}
+
+/**
+ * Node не прати реда (КЛ5): табът се е откачил, докато редът е пътувал (смяна на пътя). Текстът се
+ * връща в полето, ако там още няма нов и табът е същият.
+ */
+export function restoreLine(m) {
+  if (m.contentId === ui.openContentId && !$('line-input').value) $('line-input').value = m.text;
+  toast(m.message || LINE_NOT_SENT);
 }
 
 export function requestSuggestions() {

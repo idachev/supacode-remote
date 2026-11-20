@@ -168,3 +168,17 @@ test('null, масив или число от страницата не спир
   other.ws.close();
 });
 
+
+// КЛ5: ред, който Node не прати (табът още не е закачен, напр. при смяна на пътя), се връща на
+// страницата с текста си: тя го слага пак в полето и казва защо.
+test('отказан ред се връща на страницата с текста', async () => {
+  const p = page();
+  await p.opened;
+  await waitFor(() => p.last('state')?.hostSession != null, 'сесия');
+  p.send({ t: 'line', text: 'echo kl5', contentId: 'content-shell-main' });
+  await waitFor(() => p.got.some((m) => m.t === 'error' && m.kind === 'line'), 'отказ за реда');
+  const refused = p.got.find((m) => m.t === 'error' && m.kind === 'line');
+  assert.equal(refused.text, 'echo kl5');
+  assert.equal(refused.contentId, 'content-shell-main');
+  p.ws.close();
+});

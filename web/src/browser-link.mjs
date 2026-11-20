@@ -24,6 +24,8 @@ function parseObject(text) {
   }
 }
 
+/** Ред, който Node не прати: табът не е закачен в текущата сесия (КЛ5). Същият текст е в `public/suggestions.js`. */
+const LINE_REFUSED = 'Терминалът не е свързан — редът не е изпратен';
 const BAD_KEY = 'Ключът е „relay/ключ“, напр. relay.example.com/abcde-fghij-…';
 
 export class BrowserLink {
@@ -149,7 +151,11 @@ export class BrowserLink {
       open: (_ws, m) => str(m.contentId) && this.host.open(m.contentId),
       close: () => this.host.close(),
       input: (_ws, m) => str(m.b64) && this.host.input(m.b64, m.contentId),
-      line: (_ws, m) => str(m.text) && this.host.line(m.text, m.contentId),
+      // КЛ5: отказан ред (табът още не е закачен, напр. при смяна на пътя) се връща с текста си:
+      // страницата вече е изчистила полето и иначе редът би се изгубил без дума.
+      line: (ws, m) => str(m.text) && (this.host.line(m.text, m.contentId) || this.#send(ws, {
+        t: 'error', kind: 'line', message: LINE_REFUSED, text: m.text, contentId: str(m.contentId) ? m.contentId : null,
+      })),
       suggest: (_ws, m) => this.host.suggest(m.ref ?? null),
       resize: (_ws, m) => this.#resize(m),
       'tab.new': (_ws, m) => str(m.worktreeId) && this.host.newTab({ worktreeId: m.worktreeId, cols: m.cols, rows: m.rows, ref: m.ref ?? null }),

@@ -13,7 +13,7 @@ import { findTab, sessionRows, worktreeOrder } from './session-groups.js';
 import { initSessionsView, renderSessions } from './sessions-view.js';
 import { initSetupView, setupResult, showSetup } from './setup-view.js';
 import {
-  closeSuggestions, initSuggestions, requestSuggestions, showSuggestions, suggestionsOpen, toggleLine,
+  closeSuggestions, initSuggestions, requestSuggestions, restoreLine, showSuggestions, suggestionsOpen, toggleLine,
 } from './suggestions.js';
 import { TerminalView } from './terminal.js';
 import { SIDEBAR_KEY, currentTab, newTabFont, nextRef, ui } from './ui-state.js';
@@ -337,6 +337,10 @@ function onSuggest(m) {
 }
 
 function onError(m) {
+  if (m.kind === 'line') {
+    restoreLine(m);
+    return;
+  }
   if (m.code === RESIZE_FAILED && m.contentId === ui.openContentId) {
     onResizeFailed(m);
     return;
