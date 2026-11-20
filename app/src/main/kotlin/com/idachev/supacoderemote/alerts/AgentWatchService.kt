@@ -34,6 +34,29 @@ class AgentWatchService : Service() {
   override fun onCreate() {
     super.onCreate()
     AgentAlerts.createChannels(this)
+    startAsForeground()
+
+    val container = (application as SupacodeRemoteApp).container
+    // Рестарт от системата (START_STICKY) след изключен превключвател: нищо за правене.
+    if (!container.settingsStore.notifyAwaiting.value) {
+      stopSelf()
+      return
+    }
+    container.relay.setKeepAlive(true)
+    scope.launch {
+      while (true) {
+        // Пред очите на потребителя екраните питат на 3 s; тук е само за фона.
+        if (!container.appInForeground.value) container.sessions.refresh()
+        delay(POLL_MS)
+      }
+    }
+  }
+
+  /**
+   * Постоянното известие на foreground service-а. Пуснат със `startForegroundService`, service-ът
+   * трябва да го покаже до няколко секунди, затова е преди всичко друго — и когато веднага спира.
+   */
+  private fun startAsForeground() {
     val tapIntent = PendingIntent.getActivity(
       this,
       0,
@@ -53,21 +76,6 @@ class AgentWatchService : Service() {
       0
     }
     ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, type)
-
-    val container = (application as SupacodeRemoteApp).container
-    // Рестарт от системата (START_STICKY) след изключен превключвател: нищо за правене.
-    if (!container.settingsStore.notifyAwaiting.value) {
-      stopSelf()
-      return
-    }
-    container.relay.setKeepAlive(true)
-    scope.launch {
-      while (true) {
-        // Пред очите на потребителя екраните питат на 3 s; тук е само за фона.
-        if (!container.appInForeground.value) container.sessions.refresh()
-        delay(POLL_MS)
-      }
-    }
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY

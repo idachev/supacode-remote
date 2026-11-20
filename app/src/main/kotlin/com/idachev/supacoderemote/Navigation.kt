@@ -66,39 +66,9 @@ fun MainNavigation() {
     }
   }
 
-  LaunchedEffect(Unit) {
-    // Дълъг текст (напр. `worktree_dirty` с файловете) стои по-дълго, за да се прочете.
-    container.notices.messages.collect {
-      snackbar.showSnackbar(it, duration = if (it.length > 80) SnackbarDuration.Long else SnackbarDuration.Short)
-    }
-  }
-
-  // Изтрит worktree (ЗД13): екранът му и терминалите над него се затварят — към списъка.
-  LaunchedEffect(Unit) {
-    container.worktreeActions.deleted.collect { worktreeId ->
-      val at = backStack.indexOfFirst { it is WorktreeKey && it.worktreeId == worktreeId }
-      if (at > 0) while (backStack.size > at) backStack.removeAt(backStack.lastIndex)
-    }
-  }
-
-  // Докоснато известие: Сесии → Worktree → Терминал, за да води „Назад“ натам, откъдето
-  // потребителят би стигнал до таба и сам.
-  val openRequest by container.openTerminalRequests.collectAsStateWithLifecycle()
-  LaunchedEffect(openRequest) {
-    val request = openRequest ?: return@LaunchedEffect
-    container.openTerminalRequests.value = null
-    if (container.settingsStore.settings.value == null) return@LaunchedEffect
-    // Известие от друг Mac (АН6): първо към него, после терминалът — той прави attach с новата сесия.
-    if (request.hostId.isNotEmpty() && request.hostId != container.relay.boundHostId.value) {
-      container.relay.selectHost(request.hostId)
-    }
-    backStack.clear()
-    backStack.add(SessionsKey)
-    if (request.worktreeId.isNotEmpty()) {
-      backStack.add(WorktreeKey(request.repositoryId, request.worktreeId, request.worktreeName))
-    }
-    backStack.add(TerminalKey(request.contentId, request.tabTitle))
-  }
+  ShowNotices(snackbar)
+  CloseDeletedWorktrees(backStack)
+  OpenTerminalFromNotice(backStack)
 
   Box(Modifier.fillMaxSize()) {
     NavDisplay(
@@ -160,6 +130,55 @@ fun MainNavigation() {
       // Горе, под лентата: долу е полето за писане на терминала.
       modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 56.dp),
     )
+  }
+}
+
+/** Snackbar-ът показва [Notices] една по една. */
+@Composable
+private fun ShowNotices(snackbar: SnackbarHostState) {
+  val container = LocalAppContainer.current
+  LaunchedEffect(Unit) {
+    // Дълъг текст (напр. `worktree_dirty` с файловете) стои по-дълго, за да се прочете.
+    container.notices.messages.collect {
+      snackbar.showSnackbar(it, duration = if (it.length > 80) SnackbarDuration.Long else SnackbarDuration.Short)
+    }
+  }
+}
+
+/** Изтрит worktree (ЗД13): екранът му и терминалите над него се затварят — към списъка. */
+@Composable
+private fun CloseDeletedWorktrees(backStack: MutableList<NavKey>) {
+  val container = LocalAppContainer.current
+  LaunchedEffect(Unit) {
+    container.worktreeActions.deleted.collect { worktreeId ->
+      val at = backStack.indexOfFirst { it is WorktreeKey && it.worktreeId == worktreeId }
+      if (at > 0) while (backStack.size > at) backStack.removeAt(backStack.lastIndex)
+    }
+  }
+}
+
+/**
+ * Докоснато известие: Сесии → Worktree → Терминал, за да води „Назад“ натам, откъдето
+ * потребителят би стигнал до таба и сам.
+ */
+@Composable
+private fun OpenTerminalFromNotice(backStack: MutableList<NavKey>) {
+  val container = LocalAppContainer.current
+  val openRequest by container.openTerminalRequests.collectAsStateWithLifecycle()
+  LaunchedEffect(openRequest) {
+    val request = openRequest ?: return@LaunchedEffect
+    container.openTerminalRequests.value = null
+    if (container.settingsStore.settings.value == null) return@LaunchedEffect
+    // Известие от друг Mac (АН6): първо към него, после терминалът — той прави attach с новата сесия.
+    if (request.hostId.isNotEmpty() && request.hostId != container.relay.boundHostId.value) {
+      container.relay.selectHost(request.hostId)
+    }
+    backStack.clear()
+    backStack.add(SessionsKey)
+    if (request.worktreeId.isNotEmpty()) {
+      backStack.add(WorktreeKey(request.repositoryId, request.worktreeId, request.worktreeName))
+    }
+    backStack.add(TerminalKey(request.contentId, request.tabTitle))
   }
 }
 
