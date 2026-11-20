@@ -1,5 +1,6 @@
 package com.idachev.supacoderemote.alerts
 
+import android.app.Notification
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
@@ -57,25 +58,29 @@ class AgentWatchService : Service() {
    * трябва да го покаже до няколко секунди, затова е преди всичко друго — и когато веднага спира.
    */
   private fun startAsForeground() {
+    val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+      ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+    } else {
+      0
+    }
+    ServiceCompat.startForeground(this, NOTIFICATION_ID, watchNotification(), type)
+  }
+
+  /** Докосване отваря приложението там, където е било. */
+  private fun watchNotification(): Notification {
     val tapIntent = PendingIntent.getActivity(
       this,
       0,
       Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
       PendingIntent.FLAG_IMMUTABLE,
     )
-    val notification = NotificationCompat.Builder(this, AgentAlerts.CHANNEL_WATCH)
+    return NotificationCompat.Builder(this, AgentAlerts.CHANNEL_WATCH)
       .setSmallIcon(R.drawable.ic_notification)
       .setContentTitle("Следя агентите на Mac-а")
       .setContentText("Известие, когато агент чака вход")
       .setOngoing(true)
       .setContentIntent(tapIntent)
       .build()
-    val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-      ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-    } else {
-      0
-    }
-    ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, type)
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY

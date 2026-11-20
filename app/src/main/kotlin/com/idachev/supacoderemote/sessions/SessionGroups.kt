@@ -84,7 +84,7 @@ object SessionGroups {
     if (list.sections.isEmpty()) {
       rows(list.repos, collapsed, query)
     } else {
-      sectionRows(list.repos, list.sections, collapsed, query.trim())
+      SectionRows(list.repos, collapsed, query.trim()).build(list.sections)
     }
 
   /**
@@ -106,23 +106,14 @@ object SessionGroups {
   private fun Worktree.matches(q: String): Boolean =
     listOfNotNull(displayName, name, branch).any { FuzzyMatch.matches(it, q) }
 
-  private fun sectionRows(
-    allRepos: List<Repository>,
-    sections: List<SidebarSection>,
-    collapsed: Map<String, Boolean>,
-    query: String,
-  ): List<SessionRow> = SectionRows(filter(allRepos, query), collapsed, query).build(sections)
-
-  /**
-   * Редовете по `sections` за вече филтрираните [repos]. Id-тата носят индекса на секцията,
-   * защото две групи може да имат едно и също заглавие.
-   */
+  /** Редовете по `sections` на sidebar-а: само repository-тата, които отговарят на [query]. */
   private class SectionRows(
-    repos: List<Repository>,
+    allRepos: List<Repository>,
     private val collapsed: Map<String, Boolean>,
     private val query: String,
   ) {
     private val searching = query.isNotEmpty()
+    private val repos = filter(allRepos, query)
     private val repoById = repos.associateBy { it.id }
     private val owner = repos.flatMap { r -> r.worktrees.map { it.id to r } }.toMap()
 

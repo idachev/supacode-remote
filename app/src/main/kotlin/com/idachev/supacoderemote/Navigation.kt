@@ -133,7 +133,7 @@ fun MainNavigation() {
   }
 }
 
-/** Snackbar-ът показва [Notices] една по една. */
+/** [Notices] в snackbar-а: `showSnackbar` чака, докато съобщението изчезне, затова излизат едно след друго. */
 @Composable
 private fun ShowNotices(snackbar: SnackbarHostState) {
   val container = LocalAppContainer.current
