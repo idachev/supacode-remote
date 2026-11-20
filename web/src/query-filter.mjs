@@ -48,13 +48,14 @@ function isCsiQuery(body) {
  */
 function isDroppedOsc(body) {
   const semi = body.indexOf(';');
-  if ((semi < 0 ? body : body.slice(0, semi)) === PRESENCE_OSC) return true;
+  const code = semi < 0 ? body : body.slice(0, semi);
+  if (code === PRESENCE_OSC) return true;
   if (semi < 0) return false;
-  if (body.slice(0, semi) === '52') {
+  if (code === '52') {
     const dataSemi = body.indexOf(';', semi + 1);
     return dataSemi > 0 && body.slice(dataSemi + 1) === '?';
   }
-  return semi > 0 && OSC_QUERIES.has(body.slice(0, semi)) && body.includes('?', semi);
+  return semi > 0 && OSC_QUERIES.has(code) && body.includes('?', semi);
 }
 
 /** DECRQSS (`DCS $ q`) и XTGETTCAP (`DCS + q`). */
