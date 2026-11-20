@@ -104,21 +104,29 @@ internal class TerminalStreamGate {
 
   fun accept(source: Any, message: ServerMessage): Decision {
     val contentId = streamContentId(message) ?: return Decision(deliver = true)
-    val wait = pending[contentId]
-    if (message is Attached && wait != null && wait.via === source && (message.id == null || message.id == wait.id)) {
-      pending.remove(contentId)
-      current[contentId] = source
-      attachedOn.getOrPut(source) { LinkedHashSet() }.add(contentId)
-      // По другите пътища спира самият терминал и скритите; терминал, който също чака attached по
-      // този път, тече по стария си път до своя attached (ДЗ14).
-      val detach = takeAttached { path, terminal ->
-        path !== source && (terminal == contentId || pending[terminal]?.via !== source)
-      }
-      return Decision(deliver = true, detach = detach)
-    }
+    if (message is Attached && isAwaited(message, source)) return switchPath(source, contentId)
     if (current[contentId] !== source) return Decision(deliver = false)
     if (message is Detached) attachedOn[source]?.remove(contentId)
     return Decision(deliver = true)
+  }
+
+  /** [attached] отговаря на чакащия attach по [source]: `id`-то се сверява само ако го има. */
+  private fun isAwaited(attached: Attached, source: Any): Boolean {
+    val wait = pending[attached.contentId] ?: return false
+    return wait.via === source && (attached.id == null || attached.id == wait.id)
+  }
+
+  /** `attached` на чакащия attach: [source] става текущият път на терминала. */
+  private fun switchPath(source: Any, contentId: String): Decision {
+    pending.remove(contentId)
+    current[contentId] = source
+    attachedOn.getOrPut(source) { LinkedHashSet() }.add(contentId)
+    // По другите пътища спира самият терминал и скритите; терминал, който също чака attached по
+    // този път, тече по стария си път до своя attached (ДЗ14).
+    val detach = takeAttached { path, terminal ->
+      path !== source && (terminal == contentId || pending[terminal]?.via !== source)
+    }
+    return Decision(deliver = true, detach = detach)
   }
 
   /** Mac-ът вече не държи [contentId] по [path]: без поток и без чакащ attach там. */

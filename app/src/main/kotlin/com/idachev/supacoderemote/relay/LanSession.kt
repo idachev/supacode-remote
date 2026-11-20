@@ -68,49 +68,56 @@ class LanSession private constructor(private val socket: WebSocket, val address:
       listener: Listener,
       openTimeoutMs: Long,
     ): LanSession? {
-      val ready = CompletableDeferred<LanSession?>()
       val request = Request.Builder()
         .url("wss://$addr:$port/lan")
         .header("Authorization", "Bearer $clientKey")
         .build()
-      val ws = http.newWebSocket(request, object : WebSocketListener() {
-        private var session: LanSession? = null
-        private val ended = AtomicBoolean(false)
-
-        override fun onOpen(webSocket: WebSocket, response: Response) {
-          val ok = LanSession(webSocket, addr)
-          session = ok
-          ready.complete(ok)
-        }
-
-        override fun onMessage(webSocket: WebSocket, text: String) {
-          session?.let { listener.onText(it, text) }
-        }
-
-        override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-          webSocket.close(1000, null)
-        }
-
-        override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-          end("затворена ($code)")
-        }
-
-        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-          end(t.message ?: t.javaClass.simpleName)
-        }
-
-        private fun end(reason: String) {
-          if (!ended.compareAndSet(false, true)) return
-          ready.complete(null)
-          session?.let {
-            it.closed = true
-            listener.onClosed(it, reason)
-          }
-        }
-      })
-      val session = withTimeoutOrNull(openTimeoutMs) { ready.await() }
+      val opening = Opening(addr, listener)
+      val ws = http.newWebSocket(request, opening)
+      val session = withTimeoutOrNull(openTimeoutMs) { opening.ready.await() }
       if (session == null) ws.cancel()
       return session
+    }
+  }
+
+  /**
+   * Сокетът към един адрес: [ready] получава сесията при upgrade или `null`, ако адресът падне
+   * преди него. После кадрите и затварянето отиват в [listener].
+   */
+  private class Opening(private val addr: String, private val listener: Listener) : WebSocketListener() {
+    val ready = CompletableDeferred<LanSession?>()
+    private var session: LanSession? = null
+    private val ended = AtomicBoolean(false)
+
+    override fun onOpen(webSocket: WebSocket, response: Response) {
+      val ok = LanSession(webSocket, addr)
+      session = ok
+      ready.complete(ok)
+    }
+
+    override fun onMessage(webSocket: WebSocket, text: String) {
+      session?.let { listener.onText(it, text) }
+    }
+
+    override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+      webSocket.close(1000, null)
+    }
+
+    override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+      end("затворена ($code)")
+    }
+
+    override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+      end(t.message ?: t.javaClass.simpleName)
+    }
+
+    private fun end(reason: String) {
+      if (!ended.compareAndSet(false, true)) return
+      ready.complete(null)
+      session?.let {
+        it.closed = true
+        listener.onClosed(it, reason)
+      }
     }
   }
 }
