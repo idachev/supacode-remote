@@ -121,28 +121,28 @@ class WorktreeActions(
       return
     }
     val wait = deletes.remove(id) ?: return
-    wait.timer.cancel()
-    _deleting.value = _deleting.value - wait.worktreeId.orEmpty()
-    if (error.code == ErrorReply.WORKTREE_TIMEOUT) {
-      notices.show(DELETE_UNKNOWN)
-    } else {
-      // `worktree_dirty` изброява файловете; текстът е на Mac-а.
-      notices.show("Не изтрих „${wait.name}“: ${error.message.ifBlank { "грешка от Mac-а" }}")
-    }
+    if (error.code == ErrorReply.WORKTREE_TIMEOUT) return lostDelete(wait)
+    stopWaiting(wait)
+    // `worktree_dirty` изброява файловете; текстът е на Mac-а.
+    notices.show("Не изтрих „${wait.name}“: ${error.message.ifBlank { "грешка от Mac-а" }}")
   }
 
   private fun deleted(wait: Wait, worktreeId: String) {
-    wait.timer.cancel()
-    _deleting.value = _deleting.value - wait.worktreeId.orEmpty()
+    stopWaiting(wait)
     notices.show("Изтрих „${wait.name}“")
     refreshList()
     _deleted.tryEmit(worktreeId)
   }
 
   private fun lostDelete(wait: Wait) {
+    stopWaiting(wait)
+    notices.show(DELETE_UNKNOWN)
+  }
+
+  /** Изтриването вече не чака отговор: таймерът спира, а редът губи „Изтривам…“. */
+  private fun stopWaiting(wait: Wait) {
     wait.timer.cancel()
     _deleting.value = _deleting.value - wait.worktreeId.orEmpty()
-    notices.show(DELETE_UNKNOWN)
   }
 
   private fun finishRefresh(text: String?) {

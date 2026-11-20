@@ -39,31 +39,29 @@ class AwaitingTracker {
   fun reset(): List<String> = awaiting.keys.toList().also { awaiting = emptyMap() }
 
   fun update(repos: List<Repository>): Changes {
-    val now = buildMap {
-      repos.forEach { repo ->
-        repo.worktrees.forEach { wt ->
-          wt.tabs.forEach { tab ->
-            val agent = tab.agents.firstOrNull { AgentActivity.of(it.activity) == AgentActivity.AWAITING_INPUT }
-            if (agent != null) {
-              put(
-                tab.contentId,
-                AwaitingTab(
-                  contentId = tab.contentId,
-                  repositoryId = repo.id,
-                  worktreeId = wt.id,
-                  worktreeName = wt.displayName,
-                  tabTitle = tab.title?.ifBlank { null } ?: "Таб",
-                  agent = agent.agent,
-                ),
-              )
-            }
-          }
-        }
-      }
-    }
+    val now = awaitingTabs(repos).associateBy { it.contentId }
     val started = now.values.filter { it.contentId !in awaiting }
     val ended = awaiting.keys.filter { it !in now }
     awaiting = now
     return Changes(started, ended)
   }
+
+  /** Табовете с агент в `awaitingInput`, в реда на списъка. */
+  private fun awaitingTabs(repos: List<Repository>): List<AwaitingTab> =
+    repos.flatMap { repo ->
+      repo.worktrees.flatMap { wt ->
+        wt.tabs.mapNotNull { tab ->
+          val agent = tab.agents.firstOrNull { AgentActivity.of(it.activity) == AgentActivity.AWAITING_INPUT }
+            ?: return@mapNotNull null
+          AwaitingTab(
+            contentId = tab.contentId,
+            repositoryId = repo.id,
+            worktreeId = wt.id,
+            worktreeName = wt.displayName,
+            tabTitle = tab.title?.ifBlank { null } ?: "Таб",
+            agent = agent.agent,
+          )
+        }
+      }
+    }
 }

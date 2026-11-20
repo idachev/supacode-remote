@@ -111,44 +111,59 @@ object SessionGroups {
     sections: List<SidebarSection>,
     collapsed: Map<String, Boolean>,
     query: String,
-  ): List<SessionRow> {
-    val searching = query.isNotEmpty()
-    val repos = filter(allRepos, query)
-    val repoById = repos.associateBy { it.id }
-    val owner = repos.flatMap { r -> r.worktrees.map { it.id to r } }.toMap()
-    return buildList {
+  ): List<SessionRow> = SectionRows(filter(allRepos, query), collapsed, query).build(sections)
+
+  /**
+   * Редовете по `sections` за вече филтрираните [repos]. Id-тата носят индекса на секцията,
+   * защото две групи може да имат едно и също заглавие.
+   */
+  private class SectionRows(
+    repos: List<Repository>,
+    private val collapsed: Map<String, Boolean>,
+    private val query: String,
+  ) {
+    private val searching = query.isNotEmpty()
+    private val repoById = repos.associateBy { it.id }
+    private val owner = repos.flatMap { r -> r.worktrees.map { it.id to r } }.toMap()
+
+    fun build(sections: List<SidebarSection>): List<SessionRow> = buildList {
       sections.forEachIndexed { index, section ->
         when (section.kind) {
-          SidebarSection.ACTIVE, SidebarSection.PINNED -> {
-            val id = "$index:${section.kind}"
-            val rows = section.worktreeIds.mapNotNull { wtId ->
-              val repo = owner[wtId] ?: return@mapNotNull null
-              val wt = repo.worktrees.first { it.id == wtId }
-              SessionRow.WorktreeRow(repo.id, wt, repositoryName = repo.name, section = id)
-            }
-            if (rows.isNotEmpty()) {
-              val title = section.title?.ifBlank { null }
-                ?: if (section.kind == SidebarSection.ACTIVE) "Active" else "Pinned"
-              add(SessionRow.SectionHeader(id, section.kind, title))
-              addAll(rows)
-            }
-          }
-          SidebarSection.GROUP -> {
-            val id = "$index:${section.title.orEmpty()}"
-            val groupRepos = section.repositoryIds.mapNotNull(repoById::get)
-              .filter { !searching || it.shownWhileSearching(query) }
-            if (searching && groupRepos.isEmpty()) return@forEachIndexed
-            val isCollapsed = !searching && (collapsed[id] ?: section.collapsed)
-            add(SessionRow.SidebarGroupHeader(id, section.title?.ifBlank { null } ?: "Група", isCollapsed))
-            if (!isCollapsed) groupRepos.forEach { addRepository(it, "$index") }
-          }
-          SidebarSection.REPOSITORY -> section.repositoryId?.let(repoById::get)
-            ?.takeIf { !searching || it.shownWhileSearching(query) }
+          SidebarSection.ACTIVE, SidebarSection.PINNED -> addWorktreeSection(index, section)
+          SidebarSection.GROUP -> addGroup(index, section)
+          SidebarSection.REPOSITORY -> section.repositoryId?.let(repoById::get)?.takeIf(::shown)
             ?.let { addRepository(it, "$index") }
           else -> Unit
         }
       }
     }
+
+    /** „Active“ / „Pinned“: редове от различни repository-та; без редове секцията не се вижда. */
+    private fun MutableList<SessionRow>.addWorktreeSection(index: Int, section: SidebarSection) {
+      val id = "$index:${section.kind}"
+      val rows = section.worktreeIds.mapNotNull { wtId ->
+        val repo = owner[wtId] ?: return@mapNotNull null
+        val wt = repo.worktrees.first { it.id == wtId }
+        SessionRow.WorktreeRow(repo.id, wt, repositoryName = repo.name, section = id)
+      }
+      if (rows.isEmpty()) return
+      val title = section.title?.ifBlank { null }
+        ?: if (section.kind == SidebarSection.ACTIVE) "Active" else "Pinned"
+      add(SessionRow.SectionHeader(id, section.kind, title))
+      addAll(rows)
+    }
+
+    /** Група: при търсене без намерено изчезва със заглавието си и не се сгъва (виж [rows]). */
+    private fun MutableList<SessionRow>.addGroup(index: Int, section: SidebarSection) {
+      val id = "$index:${section.title.orEmpty()}"
+      val groupRepos = section.repositoryIds.mapNotNull(repoById::get).filter(::shown)
+      if (searching && groupRepos.isEmpty()) return
+      val isCollapsed = !searching && (collapsed[id] ?: section.collapsed)
+      add(SessionRow.SidebarGroupHeader(id, section.title?.ifBlank { null } ?: "Група", isCollapsed))
+      if (!isCollapsed) groupRepos.forEach { addRepository(it, "$index") }
+    }
+
+    private fun shown(repo: Repository): Boolean = !searching || repo.shownWhileSearching(query)
   }
 
   /** Repository и редовете под него: `rowIds` по ред, а без тях — всичките му worktree-та. */
@@ -197,21 +212,25 @@ object SessionGroups {
           add(SessionRow.SidebarGroupHeader(id, groupName, isCollapsed))
           if (isCollapsed) return@buildList
         }
-        of(groupRepos).forEach { g ->
-          val repoId = g.repository.id
-          add(SessionRow.RepositoryHeader(g.repository))
-          g.main.forEach { add(SessionRow.WorktreeRow(repoId, it)) }
-          if (g.pinned.isNotEmpty()) {
-            add(SessionRow.GroupHeader(repoId, WorktreeStatus.PINNED))
-            g.pinned.forEach { add(SessionRow.WorktreeRow(repoId, it)) }
-          }
-          if (g.active.isNotEmpty()) {
-            add(SessionRow.GroupHeader(repoId, WorktreeStatus.UNPINNED))
-            g.active.forEach { add(SessionRow.WorktreeRow(repoId, it)) }
-          }
-        }
+        of(groupRepos).forEach { addStatusGroups(it) }
       }
     }
+
+  /** Repository без `sections`: основният веднага под името, после „Закачени“ и „Активни“. */
+  private fun MutableList<SessionRow>.addStatusGroups(groups: RepositoryGroups) {
+    val repoId = groups.repository.id
+    add(SessionRow.RepositoryHeader(groups.repository))
+    groups.main.forEach { add(SessionRow.WorktreeRow(repoId, it)) }
+    addStatusGroup(repoId, WorktreeStatus.PINNED, groups.pinned)
+    addStatusGroup(repoId, WorktreeStatus.UNPINNED, groups.active)
+  }
+
+  /** Заглавие само над непразна група. */
+  private fun MutableList<SessionRow>.addStatusGroup(repoId: String, status: WorktreeStatus, worktrees: List<Worktree>) {
+    if (worktrees.isEmpty()) return
+    add(SessionRow.GroupHeader(repoId, status))
+    worktrees.forEach { add(SessionRow.WorktreeRow(repoId, it)) }
+  }
 
   /** Празно или само интервали име на група е „без група“. */
   private val Repository.sidebarGroup: String? get() = group?.trim()?.ifEmpty { null }

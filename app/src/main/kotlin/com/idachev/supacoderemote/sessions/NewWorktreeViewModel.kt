@@ -137,15 +137,7 @@ class NewWorktreeViewModel(
       is ErrorReply -> message.id
       else -> null
     } ?: return
-    if (quiet.remove(id)) {
-      if (message is WorktreeNewReply) {
-        refresh()
-        notices.show("Worktree-то „${message.name}“ е създадено")
-      } else if (message is ErrorReply) {
-        notices.show(errorText(message))
-      }
-      return
-    }
+    if (quiet.remove(id)) return onQuietReply(message)
     if (id != pendingId) return
     when (message) {
       is WorktreeNewReply -> {
@@ -155,6 +147,18 @@ class NewWorktreeViewModel(
         if (visible) _created.value = message
       }
       is ErrorReply -> fail(errorText(message))
+      else -> Unit
+    }
+  }
+
+  /** Отговор след затворен диалог: няма къде да се покаже, затова отива в snackbar-а. */
+  private fun onQuietReply(message: ServerMessage) {
+    when (message) {
+      is WorktreeNewReply -> {
+        refresh()
+        notices.show("Worktree-то „${message.name}“ е създадено")
+      }
+      is ErrorReply -> notices.show(errorText(message))
       else -> Unit
     }
   }
