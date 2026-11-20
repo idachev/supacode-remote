@@ -480,4 +480,35 @@ class ProtocolCodecTest {
     assertEquals("w", reply!!.repos.single().worktrees.single().id)
     assertEquals(emptyList<String>(), skipped)
   }
+
+  // КЛ7: същото за масивите в `hello` и `relay` (като `elements` в Mac клиента).
+
+  private fun decodeWithSkips(text: String): Pair<ServerMessage?, List<String>> {
+    val skipped = mutableListOf<String>()
+    return ProtocolCodec.decode(text) { skipped += it } to skipped
+  }
+
+  @Test
+  fun `hello с лош елемент в caps и lan addrs пропуска само тях`() {
+    val (reply, skipped) = decodeWithSkips(
+      """{"t":"hello","v":1,"caps":["watch",5,"attach.keep"],
+        "lan":{"addrs":["10.0.0.2",{}],"port":8788,"fp":"ab","fpMac":"cd"}}""",
+    )
+    reply as HelloReply
+    assertEquals(listOf("watch", "attach.keep"), reply.caps)
+    assertEquals(listOf("10.0.0.2"), reply.lan!!.addrs)
+    assertEquals(listOf("caps[1]", "lan.addrs[1]"), skipped)
+  }
+
+  @Test
+  fun `relay с Mac без id пропуска само него`() {
+    val (reply, skipped) = decodeWithSkips("""{"t":"relay","hostOnline":true,"hosts":[{"id":"a"},{"name":"no id"}]}""")
+    assertEquals(RelayStatus(true, hosts = listOf(HostInfo("a"))), reply)
+    assertEquals(listOf("hosts[1]"), skipped)
+  }
+
+  @Test
+  fun `caps, което не е масив, отхвърля hello`() {
+    assertNull(decodeWithSkips("""{"t":"hello","v":1,"caps":"watch"}""").first)
+  }
 }

@@ -379,16 +379,17 @@ object ProtocolCodec {
   /**
    * Връща `null` за `pong`, за непознат тип и за счупен JSON: нищо от relay-а не бива
    * да спира връзката. Типът се чете ръчно, защото `list`, `watch`, `suggest` и `tab.new` имат едно
-   * и също `t` в двете посоки. Пропуснат елемент на `list` отива в [onSkip] с пътя си.
+   * и също `t` в двете посоки. Пропуснат елемент на масив (`list`, `hello`, `relay`) отива в
+   * [onSkip] с пътя си.
    */
   fun decode(text: String, onSkip: (String) -> Unit = {}): ServerMessage? {
     if (text == PONG || text == PING) return null
     return try {
       val obj: JsonObject = json.parseToJsonElement(text).jsonObject
       val serializer = when (obj["t"]?.jsonPrimitive?.contentOrNull) {
-        "relay" -> RelayStatus.serializer()
-        "hello" -> HelloReply.serializer()
-        "list" -> return decodeList(obj, onSkip)
+        "relay" -> return decodeLossy(obj, RelayStatus.serializer(), relayArrays, onSkip)
+        "hello" -> return decodeLossy(obj, HelloReply.serializer(), helloArrays, onSkip)
+        "list" -> return decodeLossy(obj, ListReply.serializer(), listArrays, onSkip)
         "watch" -> WatchReply.serializer()
         "attached" -> Attached.serializer()
         "out" -> Output.serializer()
@@ -409,11 +410,21 @@ object ProtocolCodec {
     }
   }
 
-  /** Масив в `list`, който се чете елемент по елемент; [nested] са масивите вътре в елемента. */
+  /**
+   * Масив, който се чете елемент по елемент; [nested] са масивите вътре в елемента. С
+   * [serializer] `null` полето е обект (`lan` в `hello`): само масивите в него се четат така.
+   */
   private class LossyArray(
     val key: String,
-    val serializer: KSerializer<*>,
+    val serializer: KSerializer<*>?,
     val nested: List<LossyArray> = emptyList(),
+  )
+
+  private val relayArrays = listOf(LossyArray("hosts", HostInfo.serializer()))
+
+  private val helloArrays = listOf(
+    LossyArray("caps", String.serializer()),
+    LossyArray("lan", null, listOf(LossyArray("addrs", String.serializer()))),
   )
 
   private val listArrays = listOf(
@@ -438,16 +449,22 @@ object ProtocolCodec {
   )
 
   /**
-   * `list` първо се чете цял, както всяко съобщение. Ако не става, се чете наново елемент по
-   * елемент (КЛ3, R31 на Mac клиента): лош елемент на масив се пропуска, а не губи целия списък —
-   * един таб с непознат вид не бива да скрие всички Mac-ове и табове. Поле, което изобщо не е
-   * масив, прави собственика си лош елемент, а на най-горното ниво — целия кадър.
+   * Съобщението първо се чете цяло. Ако не става, се чете наново елемент по елемент (КЛ3 / КЛ7,
+   * R31 на Mac клиента): лош елемент на масив се пропуска, а не губи целия кадър — един таб с
+   * непознат вид не бива да скрие всички табове, а една непозната стойност в `caps` — целия
+   * `hello`. Поле, което изобщо не е масив, прави собственика си лош елемент, а на най-горното
+   * ниво — целия кадър.
    */
-  private fun decodeList(obj: JsonObject, onSkip: (String) -> Unit): ListReply =
+  private fun <T : ServerMessage> decodeLossy(
+    obj: JsonObject,
+    serializer: KSerializer<T>,
+    arrays: List<LossyArray>,
+    onSkip: (String) -> Unit,
+  ): T =
     try {
-      json.decodeFromJsonElement(ListReply.serializer(), obj)
+      json.decodeFromJsonElement(serializer, obj)
     } catch (_: SerializationException) {
-      json.decodeFromJsonElement(ListReply.serializer(), readableArrays(obj, listArrays, "", onSkip))
+      json.decodeFromJsonElement(serializer, readableArrays(obj, arrays, "", onSkip))
     }
 
   /** Копие на [obj], в което масивите от [arrays] държат само елементите, които се четат. */
@@ -461,8 +478,13 @@ object ProtocolCodec {
     for (array in arrays) {
       val value = obj[array.key]
       if (value == null || value is JsonNull) continue
-      val items = value as? JsonArray ?: throw SerializationException("${array.key} не е масив")
       val arrayPath = if (path.isEmpty()) array.key else "$path.${array.key}"
+      if (array.serializer == null) {
+        // Обект с масиви вътре; друг тип тук оставя строгото четене да откаже кадъра.
+        if (value is JsonObject) out[array.key] = readableArrays(value, array.nested, arrayPath, onSkip)
+        continue
+      }
+      val items = value as? JsonArray ?: throw SerializationException("${array.key} не е масив")
       out[array.key] = JsonArray(items.mapIndexedNotNull { index, item -> readable(item, array, "$arrayPath[$index]", onSkip) })
     }
     return JsonObject(out)
@@ -474,10 +496,11 @@ object ProtocolCodec {
    * докладва: пропуска се целият елемент.
    */
   private fun readable(item: JsonElement, array: LossyArray, path: String, onSkip: (String) -> Unit): JsonElement? {
+    val serializer = array.serializer ?: return item
     val inner = mutableListOf<String>()
     return try {
       val clean = if (array.nested.isNotEmpty() && item is JsonObject) readableArrays(item, array.nested, path, inner::add) else item
-      json.decodeFromJsonElement(array.serializer, clean)
+      json.decodeFromJsonElement(serializer, clean)
       inner.forEach(onSkip)
       clean
     } catch (_: RuntimeException) {
