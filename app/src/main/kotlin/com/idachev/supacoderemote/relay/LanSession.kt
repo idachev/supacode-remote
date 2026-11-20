@@ -1,8 +1,8 @@
 package com.idachev.supacoderemote.relay
 
+import com.idachev.supacoderemote.protocol.LanInfo
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.serialization.Serializable
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -10,18 +10,6 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import java.time.Duration
 import java.util.concurrent.atomic.AtomicBoolean
-
-/**
- * `lan` в отговора на `hello`: къде слуша Mac-ът в локалната мрежа, отпечатъкът на
- * сертификата му (`fp`) и HMAC-ът на отпечатъка с клиентския ключ (`fpMac`).
- */
-@Serializable
-data class LanInfo(
-  val addrs: List<String> = emptyList(),
-  val port: Int,
-  val fp: String = "",
-  val fpMac: String = "",
-)
 
 /**
  * Една отворена LAN връзка (`wss://<addr>:<port>/lan`, TLS 1.3, заковани сертификат).

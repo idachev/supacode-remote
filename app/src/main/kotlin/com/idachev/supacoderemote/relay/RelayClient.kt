@@ -6,6 +6,7 @@ import com.idachev.supacoderemote.protocol.DetachRequest
 import com.idachev.supacoderemote.protocol.HelloReply
 import com.idachev.supacoderemote.protocol.HelloRequest
 import com.idachev.supacoderemote.protocol.HostInfo
+import com.idachev.supacoderemote.protocol.LanInfo
 import com.idachev.supacoderemote.protocol.PING
 import com.idachev.supacoderemote.protocol.ProtocolCodec
 import com.idachev.supacoderemote.protocol.RelayStatus
