@@ -104,7 +104,8 @@ const STRING_ITEM = { scalar: isStr };
 const AGENT = { required: { agent: isStr, activity: isStr } };
 const TAB = {
   required: { id: isStr, contentId: isStr },
-  optional: { title: isStr, focused: isBool, working: isBool, readOnly: isBool },
+  // `busy` (КЛ13): затварянето на таба би прекъснало програма на Mac-а; стар host го изпуска.
+  optional: { title: isStr, focused: isBool, working: isBool, readOnly: isBool, busy: isBool },
   arrays: { agents: AGENT },
 };
 const WORKTREE = {

@@ -511,4 +511,15 @@ class ProtocolCodecTest {
   fun `caps, което не е масив, отхвърля hello`() {
     assertNull(decodeWithSkips("""{"t":"hello","v":1,"caps":"watch"}""").first)
   }
+
+  /** КЛ13: `busy` казва, че затварянето на таба би прекъснало програма; стар host го изпуска. */
+  @Test
+  fun `busy на таба се чете, а без него е null`() {
+    val (reply, skipped) = decodeList(
+      """{"t":"list","repos":[{"id":"r","name":"repo","worktrees":[{"id":"w","name":"main","tabs":[
+        {"id":"t1","contentId":"c1","busy":true},{"id":"t2","contentId":"c2"},{"id":"t3","contentId":"c3","busy":"yes"}]}]}]}""",
+    )
+    assertEquals(listOf(true, null), reply!!.repos.single().worktrees.single().tabs.map { it.busy })
+    assertEquals(listOf("repos[0].worktrees[0].tabs[2]"), skipped)
+  }
 }

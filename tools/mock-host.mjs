@@ -64,7 +64,8 @@
 // „pane-а на Mac-а“ (120 × 40, или 100 × 30 след `mock-resize`) и всички закачени получават `size`.
 // `mock-resize` по време на задържане сменя само размера на Mac-а, не PTY-то.
 // `exit` в shell-а затваря таба, както на Mac-а. Строго поле от грешен тип (`keep`, `on`, `hold`,
-// `tabId`, `paneId`) спира кадъра без отговор.
+// `tabId`, `paneId`) спира кадъра без отговор. Всеки таб носи `busy`: зает е таб с агент или
+// `working`, чист shell — не (mock-ът не следи процесите в shell-а).
 // Старият host (MOCK_LEGACY) не знае нищо от това.
 //
 // LAN пътят (раздел „LAN shortcut“ в протокола): wss://127.0.0.1:LAN_PORT/lan (8788), от
@@ -168,6 +169,16 @@ const officeHost = hosts.get('0f1ce0ff1ce0ff1c');
  * ЗД13: какво може новият host — изтриване на всеки worktree освен основния и такива, които се
  * трият сега, „Опресни“ и repository-тата, които „не се четат“. Старият host (`default`) не праща нищо.
  */
+/**
+ * `busy` на всеки таб (КЛ13, 974aeeb1 във fork-а): затварянето би прекъснало програма. Mock-ът не
+ * следи процесите в shell-а: зает е таб с агент или `working`, чист shell — не. Старият host го изпуска.
+ */
+function withBusyTabs(host, repo) {
+  if (host.id === 'default') return repo;
+  const busy = (tab) => tab.agents.length > 0 || tab.working === true;
+  return { ...repo, worktrees: repo.worktrees.map((w) => ({ ...w, tabs: w.tabs.map((tab) => ({ ...tab, busy: busy(tab) })) })) };
+}
+
 function withDeleteFlags(host, repo) {
   if (host.id === 'default') return repo;
   const deletable = (w) => repo.canCreateWorktree === true && w.status !== 'main' && !host.deletingWorktrees?.has(w.id);
@@ -199,7 +210,7 @@ function listMessage(host, id) {
     canRefreshWorktrees: true,
     ...(host.loadFailure ? { loadFailures: [host.loadFailure] } : {}),
   };
-  const repos = host.repos.map((r) => withLayouts(host, withDeleteFlags(host, r)));
+  const repos = host.repos.map((r) => withLayouts(host, withBusyTabs(host, withDeleteFlags(host, r))));
   if (!withSections || !host.sections) return { t: 'list', id, repos, ...extra };
   return { t: 'list', id, repos: repos.map((r) => ({ ...r, rowIds: host.rowIds[r.id] })), sections: host.sections, ...extra };
 }

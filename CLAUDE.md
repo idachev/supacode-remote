@@ -225,7 +225,8 @@ Navigation 3. compileSdk и targetSdk са 36 (template-ът иска 37, но p
   fork-а): `caps`, `attach keep` (16, `attach_limit`), `layout` (минимален модел в
   `tools/mock-layout.mjs`), `watch`, `tab.close`, `pane.split`, `pane.close`, `tab.new paneId`,
   `resize hold` (срокът без собственик — `MOCK_HOLD_GRACE_MS`, по подразбиране 30 s;
-  таванът на attach-овете с `keep` — `MOCK_ATTACH_LIMIT`, по подразбиране 16). Тестове:
+  таванът на attach-овете с `keep` — `MOCK_ATTACH_LIMIT`, по подразбиране 16) и `busy` на табовете
+  (зает е таб с агент или `working`, КЛ13). Тестове:
   `web/test/mock-remote-client.test.mjs`, `web/test/mock-hold.test.mjs`.
 - `adb shell input text` не пише кирилица: в emulator-а има добавена българска подредба на
   Gboard (БДС фонетична); кирилицата се проверява с тап по клавишите и с hex-а в лога на mock-а.

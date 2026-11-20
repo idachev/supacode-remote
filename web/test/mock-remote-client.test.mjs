@@ -283,3 +283,23 @@ test('старият host пренебрегва paneId от грешен тип
   const reply = await c.request({ t: 'tab.new', worktreeId: worktree.id, paneId: 7 });
   assert.equal(reply.t, 'tab.new');
 });
+
+// КЛ13 (974aeeb1 във fork-а): всеки таб носи `busy` — затварянето му би прекъснало програма. В
+// mock-а: таб с агент или `working` е зает, чист shell — не. Старият host го изпуска.
+test('табовете носят busy: с агент е зает, чист shell — не', async (t) => {
+  const c = await connect();
+  t.after(() => c.close());
+  const tabs = allWorktrees(await c.request({ t: 'list' })).flatMap((w) => w.tabs);
+  assert.ok(tabs.every((tab) => typeof tab.busy === 'boolean'), 'busy на всеки таб');
+  assert.ok(tabs.some((tab) => tab.agents.length > 0), 'има таб с агент');
+  for (const tab of tabs) assert.equal(tab.busy, tab.agents.length > 0 || tab.working, tab.title);
+});
+
+test('старият host не праща busy', async (t) => {
+  const legacy = await startMock({ lan: false, env: { MOCK_SINGLE_HOST: '0', MOCK_OLD_RELAY: '0', MOCK_LEGACY: '1' } });
+  t.after(() => legacy.stop());
+  const c = await connect(legacy, 'default');
+  t.after(() => c.close());
+  const tabs = allWorktrees(await c.request({ t: 'list' })).flatMap((w) => w.tabs);
+  assert.ok(tabs.length > 0 && tabs.every((tab) => !Object.hasOwn(tab, 'busy')));
+});

@@ -229,3 +229,13 @@ test('здрав list не докладва пропуснати и пази н�
   assert.deepEqual(reply.repos[0].worktrees[0].layout, { x: 1 });
   assert.deepEqual(skipped, []);
 });
+
+// КЛ13: `busy` на таба минава до екрана; стар host го изпуска, а грешен тип прави таба лош.
+test('busy на таба се чете, с грешен тип табът се пропуска', () => {
+  const { reply, skipped } = decodeList(`{"t":"list","repos":[{"id":"r","name":"repo","worktrees":[{"id":"w","name":"main","tabs":[
+    {"id":"t1","contentId":"c1","busy":true},{"id":"t2","contentId":"c2"},{"id":"t3","contentId":"c3","busy":"yes"}]}]}]}`);
+  const tabs = reply.repos[0].worktrees[0].tabs;
+  assert.deepEqual(tabs.map((tab) => [tab.id, tab.busy]), [['t1', true], ['t2', undefined]]);
+  assert.deepEqual(skipped, ['repos[0].worktrees[0].tabs[2]']);
+});
+

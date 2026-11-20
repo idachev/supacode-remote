@@ -327,6 +327,11 @@ data class Tab(
   val working: Boolean = false,
   val readOnly: Boolean = false,
   val agents: List<AgentBadge> = emptyList(),
+  /**
+   * Затварянето на таба би прекъснало програма на Mac-а (правилото на Mac-а за въпрос преди Close
+   * Tab, КЛ13). `null` при стар host: тогава зает е таб, който е `working` или има агент.
+   */
+  val busy: Boolean? = null,
 )
 
 /** Агент в таб. И двете полета са суровите стойности от Supacode (`claude`, `busy` …). */
