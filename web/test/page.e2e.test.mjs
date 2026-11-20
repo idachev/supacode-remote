@@ -19,7 +19,11 @@ let page;
 
 before(async () => {
   mock = await startMock();
-  app = createServer({ port: 0, configDir: await mkdtemp(join(tmpdir(), 'supacode-web-e2e-')) });
+  app = createServer({
+    port: 0,
+    configDir: await mkdtemp(join(tmpdir(), 'supacode-web-e2e-')),
+    build: { sha: 'e2e1234', dirty: false, startedAt: '2026-11-20T05:04:23.000Z' },
+  });
   base = `http://localhost:${await app.listen()}`;
   try {
     browser = await chromium.launch({ channel: 'chrome', headless: true });
@@ -65,6 +69,14 @@ test('„Настройка“ с ключа, списъкът и LAN чипът
   await page.locator('.row-wt', { hasText: 'Remote access' }).waitFor();
   await waitFor(async () => (await page.locator('#path-chip').textContent()) === 'LAN', 'LAN чип');
   assert.equal(await page.locator('#host-name').textContent(), 'Mock Mac');
+});
+
+test('„Настройка“ показва кой код върти уеб app-ът (УА14)', async (t) => {
+  if (!browser) return t.skip('няма Google Chrome');
+  await page.locator('#setup-button').click();
+  assert.equal(await page.locator('#setup-version').textContent(), 'Уеб app e2e1234 · пуснат 2026-11-20 05:04 UTC');
+  await page.locator('#setup-cancel').click();
+  await page.locator('#setup').waitFor({ state: 'hidden' });
 });
 
 test('таб: клавишите стигат точно, xterm.js не отговаря на програмата', async (t) => {

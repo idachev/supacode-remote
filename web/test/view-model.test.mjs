@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { countAwaiting } from '../public/session-groups.js';
-import { bannerFor, boundHost, hostLabel, nextWorktree, pageTitle, terminalStatusFor } from '../public/view-model.js';
+import { bannerFor, boundHost, buildLabel, hostLabel, nextWorktree, pageTitle, terminalStatusFor } from '../public/view-model.js';
 
 const connected = { configured: true, connection: 'connected', path: 'lan', hosts: null };
 
@@ -59,4 +59,13 @@ test('следващият worktree прескача тези без табов�
   assert.equal(nextWorktree(order, null, -1).id, 'c');
   assert.equal(nextWorktree([row('x', 0)], null, 1), null);
   assert.equal(nextWorktree([row('only', 1)], 'only', -1).id, 'only');
+});
+
+// УА14: кой код върти уеб app-ът, както „Версия … · SHA · време“ в „Настройка“ на телефона.
+test('кодът на уеб app-а в „Настройка“', () => {
+  const startedAt = '2026-11-20T05:04:23.000Z';
+  assert.equal(buildLabel({ sha: 'abc1234', dirty: false, startedAt }), 'Уеб app abc1234 · пуснат 2026-11-20 05:04 UTC');
+  assert.equal(buildLabel({ sha: 'abc1234', dirty: true, startedAt }), 'Уеб app abc1234 (с промени) · пуснат 2026-11-20 05:04 UTC');
+  assert.equal(buildLabel({ sha: null, dirty: false, startedAt }), 'Уеб app без git · пуснат 2026-11-20 05:04 UTC');
+  assert.equal(buildLabel(null), '');
 });

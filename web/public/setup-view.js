@@ -4,6 +4,7 @@
 import { $, writeStorage } from './dom.js';
 import { syncNotifySetting } from './notify-view.js';
 import { FONT_KEY, newTabFont, ui } from './ui-state.js';
+import { buildLabel } from './view-model.js';
 
 let sendKey = () => {};
 let onClose = () => {};
@@ -24,6 +25,7 @@ export function showSetup() {
   $('setup-current').textContent = label ? `Записан: ${label}/••••••••` : '';
   $('setup-key').placeholder = label ? `${label}/••••••••` : 'Relay и ключ, разделени с „/“';
   $('setup-cancel').hidden = !ui.state?.configured;
+  $('setup-version').textContent = buildLabel(ui.state?.build);
   $('setup').hidden = false;
   $('setup-key').focus();
 }

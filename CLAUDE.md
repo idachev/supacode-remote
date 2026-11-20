@@ -242,6 +242,9 @@ Navigation 3. compileSdk и targetSdk са 36 (template-ът иска 37, но p
 - Логът на сървъра е един JSON ред на събитие (`src/log.mjs`, `LOG_LEVEL`); конзолата на
   браузъра е четим текст (`public/log.js`). Двата ползват един форматер (`public/log-format.js`).
   Не се логват ключът, адресът на relay-а и имена на Mac-ове.
+- Кой код върти сървърът (УА14): при пускане `src/build-info.mjs` чете SHA на checkout-а и дали има
+  промени в проследените файлове; „Настройка“ показва „Уеб app <sha> · пуснат … UTC“, а
+  `server.started` в лога носи `sha` и `dirty`.
 - Ключът е в `~/.config/supacode-remote-web/config.json` (0600) и никога не отива към браузъра.
   WebSocket-ът `/ws` иска `Host` и `Origin` от `localhost` / `127.0.0.1`.
 - Логиката е пренесена от Android с имената от `docs/CONTEXT.md` (`RelayClient`,

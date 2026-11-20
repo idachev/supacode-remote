@@ -17,7 +17,7 @@ let configDir;
 before(async () => {
   mock = await startMock();
   configDir = await mkdtemp(join(tmpdir(), 'supacode-web-'));
-  app = createServer({ port: 0, configDir });
+  app = createServer({ port: 0, configDir, build: { sha: 'abc1234', dirty: false, startedAt: '2026-11-20T05:04:23.000Z' } });
   port = await app.listen();
 });
 after(async () => {
@@ -182,3 +182,13 @@ test('отказан ред се връща на страницата с тек�
   assert.equal(refused.contentId, 'content-shell-main');
   p.ws.close();
 });
+
+// УА14: страницата знае кой код върти сървърът.
+test('state носи SHA на кода', async () => {
+  const p = page();
+  await p.opened;
+  await waitFor(() => p.last('state'), 'state');
+  assert.deepEqual(p.last('state').build, { sha: 'abc1234', dirty: false, startedAt: '2026-11-20T05:04:23.000Z' });
+  p.ws.close();
+});
+

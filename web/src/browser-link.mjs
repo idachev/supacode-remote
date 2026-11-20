@@ -29,8 +29,10 @@ const LINE_REFUSED = 'Терминалът не е свързан — редът
 const BAD_KEY = 'Ключът е „relay/ключ“, напр. relay.example.com/abcde-fghij-…';
 
 export class BrowserLink {
-  constructor({ relay, host, config, log = silentLogger }) {
+  constructor({ relay, host, config, log = silentLogger, build = null }) {
     this.log = log;
+    /** Кой код върти сървърът (УА14); `null` в тестове без него. */
+    this.build = build;
     this.relay = relay;
     this.host = host;
     this.config = config;
@@ -86,6 +88,7 @@ export class BrowserLink {
     return {
       t: 'state',
       bootId: this.bootId,
+      build: this.build,
       configured: this.settings != null,
       relayLabel: this.settings ? relayLabel(this.settings.baseUrl) : null,
       ...this.relay.state,

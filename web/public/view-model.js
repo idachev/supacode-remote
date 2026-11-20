@@ -62,3 +62,15 @@ export function nextWorktree(order, currentId, step) {
   }
   return null;
 }
+
+/**
+ * Кой код върти уеб app-ът (УА14), за „Настройка“: SHA, промени извън commit-а и кога е пуснат
+ * сървърът, в UTC като на телефона. Празно, докато сървърът не е казал.
+ */
+export function buildLabel(build) {
+  if (!build) return '';
+  const code = build.sha ? `${build.sha}${build.dirty ? ' (с промени)' : ''}` : 'без git';
+  const started = String(build.startedAt ?? '').slice(0, 16).replace('T', ' ');
+  return `Уеб app ${code} · пуснат ${started} UTC`;
+}
+

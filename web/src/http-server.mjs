@@ -98,15 +98,16 @@ function pageUpgrade({ wss, guard, link, log }) {
 }
 
 /** Клиентът към Mac-а: relay връзката, логиката на табовете и връзката със страницата. */
-function createClient({ configDir, relayTiming, log }) {
+function createClient({ configDir, relayTiming, log, build }) {
   const relay = new RelayClient({ timing: relayTiming, log });
   const host = new HostController(relay, { log });
-  const link = new BrowserLink({ relay, host, config: new ConfigStore(configDir), log });
+  const link = new BrowserLink({ relay, host, config: new ConfigStore(configDir), log, build });
   return { relay, host, link };
 }
 
-export function createServer({ port = 8790, configDir, relayTiming, log = silentLogger } = {}) {
-  const { relay, host, link } = createClient({ configDir, relayTiming, log });
+/** `build` — кой код върти сървърът (`readBuildInfo`, УА14); страницата го показва в „Настройка“. */
+export function createServer({ port = 8790, configDir, relayTiming, log = silentLogger, build = null } = {}) {
+  const { relay, host, link } = createClient({ configDir, relayTiming, log, build });
   let boundPort = port;
   const guard = localGuard(() => boundPort);
   const server = createHttpServer((req, res) => (guard.host(req) ? serveStatic(req, res) : res.writeHead(403).end('forbidden')));
