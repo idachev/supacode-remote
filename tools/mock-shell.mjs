@@ -32,17 +32,22 @@ export const shellKind = () => (pty ? 'node-pty' : 'script');
 
 export function spawnShell(cols, rows) {
   const env = { ...process.env, TERM: 'xterm-256color', PS1: 'mock %~ %# ' };
-  if (pty) {
-    const proc = pty.spawn('/bin/zsh', ['-f', '-i'], { name: 'xterm-256color', cols, rows, cwd: process.env.HOME, env });
-    return {
-      onData: (cb) => proc.onData((d) => cb(Buffer.from(d, 'utf8'))),
-      onExit: (cb) => proc.onExit(cb),
-      write: (buf) => proc.write(buf.toString('utf8')),
-      resize: (c, r) => proc.resize(c, r),
-      kill: () => proc.kill(),
-    };
-  }
-  // Резервният път: `script` дава PTY, а stty задава размера отвътре.
+  return pty ? ptyShell(cols, rows, env) : scriptShell(cols, rows, env);
+}
+
+function ptyShell(cols, rows, env) {
+  const proc = pty.spawn('/bin/zsh', ['-f', '-i'], { name: 'xterm-256color', cols, rows, cwd: process.env.HOME, env });
+  return {
+    onData: (cb) => proc.onData((d) => cb(Buffer.from(d, 'utf8'))),
+    onExit: (cb) => proc.onExit(cb),
+    write: (buf) => proc.write(buf.toString('utf8')),
+    resize: (c, r) => proc.resize(c, r),
+    kill: () => proc.kill(),
+  };
+}
+
+/** Резервният път: `script` дава PTY, а stty задава размера отвътре. */
+function scriptShell(cols, rows, env) {
   const { spawn } = require('node:child_process');
   const proc = spawn('script', ['-q', '/dev/null', '/bin/zsh', '-c', `stty cols ${cols} rows ${rows}; exec /bin/zsh -f -i`],
     { env, cwd: process.env.HOME });

@@ -40,17 +40,19 @@ function startLan() {
   }));
 }
 
+/** Затваря и LAN връзките: иначе телефонът би продължил по LAN, който вече „няма“. */
+function stopLan() {
+  for (const c of clients) if (c.lan) c.ws.terminate();
+  lanServer?.close();
+  lanServer = null;
+}
+
 export function setLan(on) {
   if (on === lanOn) return;
   lanOn = on;
   log('lan endpoint switched', { on });
-  if (on) {
-    startLan();
-  } else {
-    for (const c of clients) if (c.lan) c.ws.terminate();
-    lanServer?.close();
-    lanServer = null;
-  }
+  if (on) startLan();
+  else stopLan();
 }
 
 /** Пуска endpoint-а при старт, ако не е изключен с LAN=0. */

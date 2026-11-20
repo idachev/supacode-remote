@@ -1,6 +1,6 @@
 // `list` на Mac-а, както го праща новият и старият host, и `watch`: `list` с `id:null` при промяна.
 
-import { UNKNOWN_TYPE, clients, send } from './mock-clients.mjs';
+import { replyUnknownType, clients, send } from './mock-clients.mjs';
 import { WITH_SECTIONS } from './mock-config.mjs';
 import { hosts } from './mock-hosts.mjs';
 import { layoutMessage, syncLayout } from './mock-layout.mjs';
@@ -92,7 +92,7 @@ function watchTick() {
 }
 
 export function watch(c, host, msg) {
-  if (host.id === 'default') return UNKNOWN_TYPE(c, msg);
+  if (host.id === 'default') return replyUnknownType(c, msg);
   // `on` е незадължително: без него `watch` пуска гледането (протоколът, „watch“).
   c.watching = msg.on !== false;
   log('watch', { host: host.id, client: c.id, on: c.watching });

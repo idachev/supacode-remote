@@ -1,11 +1,11 @@
 // Табовете и pane-овете на worktree-тата: `tab.new`, `tab.close`, `pane.split` и `pane.close`.
 
-import { UNKNOWN_TYPE, send } from './mock-clients.mjs';
+import { replyUnknownType, send } from './mock-clients.mjs';
 import { COLS, ROWS } from './mock-config.mjs';
 import { addTabToPane, splitPane } from './mock-layout.mjs';
 import { layoutOf } from './mock-list.mjs';
 import { log } from './mock-log.mjs';
-import { clamp, session, stopSession } from './mock-sessions.mjs';
+import { requestedSize, session, stopSession } from './mock-sessions.mjs';
 
 let newTabCounter = 0;
 
@@ -16,7 +16,7 @@ export function createTab(host, worktree, { cols = COLS, rows = ROWS, focused = 
   const tabId = `tab-new-${newTabCounter}`;
   worktree.tabs.push({ id: tabId, contentId, title: 'zsh', focused, working: false, readOnly: false, agents: [] });
   host.knownContent.add(contentId);
-  session(host, contentId, cols, rows);
+  session(host, contentId, { cols, rows });
   return { tabId, contentId };
 }
 
@@ -31,9 +31,7 @@ export function newTab(c, host, msg) {
     send(c, { t: 'error', id: msg.id ?? null, message: `unknown worktree ${msg.worktreeId}` });
     return;
   }
-  const sized = Number.isInteger(msg.cols) && Number.isInteger(msg.rows);
-  const cols = sized ? clamp(msg.cols, 20, 500) : COLS;
-  const rows = sized ? clamp(msg.rows, 5, 200) : ROWS;
+  const { cols, rows } = requestedSize(msg) ?? { cols: COLS, rows: ROWS };
   const { tabId, contentId } = createTab(host, worktree, { cols, rows });
   const state = host.id === 'default' ? null : layoutOf(host, worktree);
   if (state && state.panes.some((p) => p.id === msg.paneId)) addTabToPane(state, msg.paneId, tabId);
@@ -69,39 +67,39 @@ function closeTab(host, worktree, tab) {
 }
 
 /** Грешка на layout действие: винаги с `id` и `code` (раздел „tab.close“ в протокола). */
-function layoutError(c, msg, code, message) {
+function layoutError(c, msg, [code, message]) {
   log(`${msg.t} failed`, { code, client: c.id });
   send(c, { t: 'error', id: msg.id ?? null, message, code });
 }
 
 export function tabClose(c, host, msg) {
-  if (host.id === 'default') return UNKNOWN_TYPE(c, msg);
-  if (typeof msg.tabId !== 'string' || !msg.tabId) return layoutError(c, msg, 'tab_invalid', 'tab.close needs a tabId');
+  if (host.id === 'default') return replyUnknownType(c, msg);
+  if (typeof msg.tabId !== 'string' || !msg.tabId) return layoutError(c, msg, ['tab_invalid', 'tab.close needs a tabId']);
   const found = findTab(host, msg.tabId);
-  if (!found) return layoutError(c, msg, 'tab_invalid', 'no such tab');
+  if (!found) return layoutError(c, msg, ['tab_invalid', 'no such tab']);
   closeTab(host, found.worktree, found.tab);
   return send(c, { t: 'tab.close', id: msg.id ?? null, tabId: msg.tabId, worktreeId: found.worktree.id });
 }
 
 export function paneSplit(c, host, msg) {
-  if (host.id === 'default') return UNKNOWN_TYPE(c, msg);
-  if (typeof msg.paneId !== 'string' || !msg.paneId) return layoutError(c, msg, 'pane_invalid', 'pane.split needs a paneId');
+  if (host.id === 'default') return replyUnknownType(c, msg);
+  if (typeof msg.paneId !== 'string' || !msg.paneId) return layoutError(c, msg, ['pane_invalid', 'pane.split needs a paneId']);
   const found = findPane(host, msg.paneId);
-  if (!found) return layoutError(c, msg, 'pane_invalid', 'no such pane');
+  if (!found) return layoutError(c, msg, ['pane_invalid', 'no such pane']);
   if (msg.direction !== 'horizontal' && msg.direction !== 'vertical') {
-    return layoutError(c, msg, 'pane_invalid', 'direction must be horizontal or vertical');
+    return layoutError(c, msg, ['pane_invalid', 'direction must be horizontal or vertical']);
   }
   const { tabId, contentId } = createTab(host, found.worktree);
-  const paneId = splitPane(found.state, msg.paneId, msg.direction, tabId);
+  const paneId = splitPane(found.state, msg, tabId);
   log('pane split', { host: host.id, worktree: found.worktree.id, pane: paneId, content: contentId, direction: msg.direction });
   return send(c, { t: 'pane.split', id: msg.id ?? null, worktreeId: found.worktree.id, paneId, tabId, contentId });
 }
 
 export function paneClose(c, host, msg) {
-  if (host.id === 'default') return UNKNOWN_TYPE(c, msg);
-  if (typeof msg.paneId !== 'string' || !msg.paneId) return layoutError(c, msg, 'pane_invalid', 'pane.close needs a paneId');
+  if (host.id === 'default') return replyUnknownType(c, msg);
+  if (typeof msg.paneId !== 'string' || !msg.paneId) return layoutError(c, msg, ['pane_invalid', 'pane.close needs a paneId']);
   const found = findPane(host, msg.paneId);
-  if (!found) return layoutError(c, msg, 'pane_invalid', 'no such pane');
+  if (!found) return layoutError(c, msg, ['pane_invalid', 'no such pane']);
   const pane = found.state.panes.find((p) => p.id === msg.paneId);
   for (const tabId of [...pane.tabIds]) {
     const tab = found.worktree.tabs.find((t) => t.id === tabId);

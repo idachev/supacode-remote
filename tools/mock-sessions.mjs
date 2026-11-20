@@ -13,7 +13,7 @@ const SCREEN_BUFFER_BYTES = 64 * 1024;
  * Сесиите са по Mac (`host.sessions`): contentId → { host, contentId, proc, cols, rows, screen,
  * screenBytes, line }. Сесията знае своя Mac и таб, за да ги ползват командите на реда.
  */
-export function session(host, contentId, cols = COLS, rows = ROWS) {
+export function session(host, contentId, { cols, rows } = { cols: COLS, rows: ROWS }) {
   let s = host.sessions.get(contentId);
   if (s) return s;
   // `mac` е размерът на pane-а на Mac-а: към него се връща таб, чието задържане свършва.
@@ -103,14 +103,18 @@ function releaseHolds(c, host, contentIds) {
 
 /** Връзката на собственика падна: задържането остава без собственик за `HOLD_GRACE_MS`. */
 export function orphanHolds(c) {
-  for (const host of hosts.values()) {
-    for (const s of host.sessions.values()) {
-      if (s.hold?.owner !== c) continue;
-      s.hold.owner = null;
-      log('hold orphaned', { host: host.id, content: s.contentId, grace_ms: HOLD_GRACE_MS });
-      s.hold.graceTimer = setTimeout(() => endHold(s, { restore: true }), HOLD_GRACE_MS);
-    }
+  const owned = [...hosts.values()].flatMap((host) => [...host.sessions.values()]).filter((s) => s.hold?.owner === c);
+  for (const s of owned) {
+    s.hold.owner = null;
+    log('hold orphaned', { host: s.host.id, content: s.contentId, grace_ms: HOLD_GRACE_MS });
+    s.hold.graceTimer = setTimeout(() => endHold(s, { restore: true }), HOLD_GRACE_MS);
   }
+}
+
+/** Тази връзка става собственик на размера; таймерът без собственик (ако тече) спира. */
+function takeHold(s, c) {
+  clearTimeout(s.hold?.graceTimer);
+  s.hold = { owner: c, graceTimer: null };
 }
 
 /** Само таб с поне един агент в `list`, който не е read-only, получава Ctrl+L след задържан resize. */
@@ -120,20 +124,25 @@ function wantsCtrlL(host, contentId) {
 
 // ---- Съобщенията от клиента към терминала ----
 
-export function attach(c, host, msg) {
+/** Старият host не знае `keep`: всеки attach откача другите, както преди. */
+const keepsOthers = (host, msg) => msg.keep === true && host.id !== 'default';
+
+/** Непознат таб или таванът на attach-овете с `keep`: грешката тръгва към клиента и връща `true`. */
+function refuseAttach(c, host, msg) {
   if (!host.knownContent.has(msg.contentId)) {
     send(c, { t: 'error', id: msg.id ?? null, message: `unknown content ${msg.contentId}` });
-    return;
+    return true;
   }
-  // Старият host не знае `keep`: всеки attach откача другите, както преди.
-  const keep = msg.keep === true && host.id !== 'default';
-  if (keep && !c.attachments.has(msg.contentId) && c.attachments.size >= ATTACH_LIMIT) {
-    log('attach refused', { host: host.id, content: msg.contentId, client: c.id, attached: c.attachments.size });
-    send(c, { t: 'error', id: msg.id ?? null, code: 'attach_limit', contentId: msg.contentId, message: 'too many attached terminals' });
-    return;
-  }
+  if (!keepsOthers(host, msg) || c.attachments.has(msg.contentId) || c.attachments.size < ATTACH_LIMIT) return false;
+  log('attach refused', { host: host.id, content: msg.contentId, client: c.id, attached: c.attachments.size });
+  send(c, { t: 'error', id: msg.id ?? null, code: 'attach_limit', contentId: msg.contentId, message: 'too many attached terminals' });
+  return true;
+}
+
+export function attach(c, host, msg) {
+  if (refuseAttach(c, host, msg)) return;
   const s = session(host, msg.contentId);
-  if (!keep) {
+  if (!keepsOthers(host, msg)) {
     // Повторен attach на същия таб пази задържането му; другите табове на връзката се освобождават.
     releaseHolds(c, host, [...c.attachments].filter((id) => id !== msg.contentId));
     c.attachments.clear();
@@ -149,7 +158,28 @@ export function detach(c, host, msg) {
   c.attachments.delete(msg.contentId);
 }
 
-export const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+const hasSize = (msg) => Number.isInteger(msg.cols) && Number.isInteger(msg.rows);
+
+/** Размерът от заявката, ограничен като на Mac-а (20…500 × 5…200); `null`, ако не е даден в двете посоки. */
+export function requestedSize(msg) {
+  return hasSize(msg) ? { cols: clamp(msg.cols, 20, 500), rows: clamp(msg.rows, 5, 200) } : null;
+}
+
+/** Сесията, чийто размер `resize` може да смени: закачен таб и цели `cols`/`rows`; иначе `null`. */
+function resizeTarget(c, host, msg) {
+  const s = host.sessions.get(msg.contentId);
+  if (s && c.attachments.has(msg.contentId) && hasSize(msg)) return s;
+  log('resize ignored', { host: host.id, content: msg.contentId ?? null, client: c.id });
+  return null;
+}
+
+/** `mock-resize-fail`: грешка само на питащия; тя прекратява и задържането. */
+function failResize(c, s, msg) {
+  log('resize failed', { host: s.host.id, content: msg.contentId, client: c.id });
+  endHold(s, { restore: false });
+  send(c, { t: 'error', id: msg.id ?? null, message: 'terminal did not start', code: 'resize_failed', contentId: msg.contentId });
+}
 
 /**
  * „Размер по този екран“ (ЗД12): само за закачен таб; host-ът ограничава и праща `size` на всички,
@@ -158,30 +188,22 @@ export const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
  * табът има агент; без `hold` задържането свършва, без размерът да се връща.
  */
 export function resize(c, host, msg) {
-  const s = host.sessions.get(msg.contentId);
-  if (!s || !c.attachments.has(msg.contentId) || !Number.isInteger(msg.cols) || !Number.isInteger(msg.rows)) {
-    log('resize ignored', { host: host.id, content: msg.contentId ?? null, client: c.id });
+  const s = resizeTarget(c, host, msg);
+  if (!s) return;
+  if (s.resizeFails) {
+    failResize(c, s, msg);
     return;
   }
   const held = msg.hold === true && host.id !== 'default';
-  if (s.resizeFails) {
-    log('resize failed', { host: host.id, content: msg.contentId, client: c.id });
-    endHold(s, { restore: false });
-    send(c, { t: 'error', id: msg.id ?? null, message: 'terminal did not start', code: 'resize_failed', contentId: msg.contentId });
-    return;
-  }
-  const cols = clamp(msg.cols, 20, 500);
-  const rows = clamp(msg.rows, 5, 200);
-  if (held) {
-    clearTimeout(s.hold?.graceTimer);
-    s.hold = { owner: c, graceTimer: null };
-  } else {
-    endHold(s, { restore: false });
-  }
+  const { cols, rows } = requestedSize(msg);
+  if (held) takeHold(s, c);
+  else endHold(s, { restore: false });
   log('resize applied', { host: host.id, content: msg.contentId, client: c.id, hold: held, cols, rows });
   resizeSession(s, cols, rows);
-  if (held && wantsCtrlL(host, msg.contentId)) {
-    s.proc.write(Buffer.from([0x0c]));
-    log('ctrl-l sent', { content: msg.contentId });
-  }
+  if (held && wantsCtrlL(host, msg.contentId)) sendCtrlL(s);
+}
+
+function sendCtrlL(s) {
+  s.proc.write(Buffer.from([0x0c]));
+  log('ctrl-l sent', { content: s.contentId });
 }

@@ -15,7 +15,7 @@ export function attachedClients(host, contentId) {
   return [...clients].filter((c) => c.hostId === host.id && c.attachments.has(contentId));
 }
 
-export const UNKNOWN_TYPE = (c, msg) => send(c, { t: 'error', id: msg.id ?? null, message: `unknown message type: ${msg.t}` });
+export const replyUnknownType = (c, msg) => send(c, { t: 'error', id: msg.id ?? null, message: `unknown message type: ${msg.t}` });
 
 const STATUS_TEXT = { 400: 'Bad Request', 401: 'Unauthorized', 404: 'Not Found' };
 

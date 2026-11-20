@@ -55,8 +55,11 @@ export function layoutMessage(state) {
   };
 }
 
-/** Нов pane с таба `tabId` веднага след `paneId`; той става фокусираният. Връща id-то му. */
-export function splitPane(state, paneId, direction, tabId) {
+/**
+ * Нов pane с таба `tabId` веднага след `paneId` от заявката `pane.split`; той става фокусираният.
+ * Връща id-то му.
+ */
+export function splitPane(state, { paneId, direction }, tabId) {
   const index = state.panes.findIndex((pane) => pane.id === paneId);
   const pane = { id: newPaneId(), tabIds: [tabId], selectedTabId: tabId, direction };
   state.panes.splice(index + 1, 0, pane);
