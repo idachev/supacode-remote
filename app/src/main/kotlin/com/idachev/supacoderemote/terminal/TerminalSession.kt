@@ -232,39 +232,47 @@ class TerminalSession internal constructor(
 
   private fun onMessage(message: ServerMessage) {
     when (message) {
-      is Attached -> if (message.contentId == contentId) {
-        endPause(OutputPause.EndReason.Reattach)
-        attachId = null
-        limitRetried = false
-        // Init чисти терминала, а с него и маркираното.
-        update { it.copy(phase = AttachPhase.Attached(message.cols, message.rows), selection = null) }
-        command(TerminalCommand.Init(message.cols, message.rows))
-      }
-      is Output -> if (message.contentId == contentId) {
-        if (visible) {
-          showOutput(message.b64)
-        } else if (!needsAttach) {
-          // Над тавана буферът е изхвърлен; при показване екранът идва с нов attach.
-          hidden.offer(message.b64)
-        }
-      }
-      is SizeChanged -> if (message.contentId == contentId) {
-        if (visible) {
-          showSize(message.cols, message.rows)
-        } else {
-          // Заглавието знае размера веднага; страницата — при показване.
-          update { it.copy(phase = it.phase.resized(message.cols, message.rows)) }
-          if (!needsAttach) hidden.size(message.cols, message.rows)
-        }
-      }
-      is Detached -> if (message.contentId == contentId) {
-        attachId = null
-        update { it.copy(phase = AttachPhase.Detached(message.reason?.ifBlank { null } ?: "сесията е спряла")) }
-        if (!visible) events.detachedWhileHidden(this)
-      }
+      is Attached -> if (message.contentId == contentId) onAttached(message)
+      is Output -> if (message.contentId == contentId) onOutput(message)
+      is SizeChanged -> if (message.contentId == contentId) onSizeChanged(message)
+      is Detached -> if (message.contentId == contentId) onDetached(message)
       is ErrorReply -> onError(message)
       else -> Unit
     }
+  }
+
+  private fun onAttached(message: Attached) {
+    endPause(OutputPause.EndReason.Reattach)
+    attachId = null
+    limitRetried = false
+    // Init чисти терминала, а с него и маркираното.
+    update { it.copy(phase = AttachPhase.Attached(message.cols, message.rows), selection = null) }
+    command(TerminalCommand.Init(message.cols, message.rows))
+  }
+
+  private fun onOutput(message: Output) {
+    if (visible) {
+      showOutput(message.b64)
+    } else if (!needsAttach) {
+      // Над тавана буферът е изхвърлен; при показване екранът идва с нов attach.
+      hidden.offer(message.b64)
+    }
+  }
+
+  private fun onSizeChanged(message: SizeChanged) {
+    if (visible) {
+      showSize(message.cols, message.rows)
+      return
+    }
+    // Заглавието знае размера веднага; страницата — при показване.
+    update { it.copy(phase = it.phase.resized(message.cols, message.rows)) }
+    if (!needsAttach) hidden.size(message.cols, message.rows)
+  }
+
+  private fun onDetached(message: Detached) {
+    attachId = null
+    update { it.copy(phase = AttachPhase.Detached(message.reason?.ifBlank { null } ?: "сесията е спряла")) }
+    if (!visible) events.detachedWhileHidden(this)
   }
 
   private fun onError(message: ErrorReply) {
