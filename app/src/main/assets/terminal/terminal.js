@@ -56,7 +56,7 @@
   term.textarea.setAttribute('readonly', 'readonly');
   term.textarea.setAttribute('inputmode', 'none');
 
-  /** Елементът, в който xterm.js рисува клетките; няма го до първото рисуване. */
+  /** Елементът на xterm.js с клетките; по него се мерят клетката, ширината и пръстът. */
   function screenElement() {
     return term.element.querySelector('.xterm-screen');
   }

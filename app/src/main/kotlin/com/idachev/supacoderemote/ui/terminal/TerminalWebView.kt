@@ -97,19 +97,11 @@ class TerminalPageView(private val appContext: Context, private val readyWithout
   var holder by mutableStateOf<Any?>(null)
     private set
 
-  val webView: WebView = WebView(context).apply {
-    configureForTerminal()
-    // Методите на моста идват от нишката на WebView-то, не от main.
-    addJavascriptInterface(createBridge(), "SupaBridge")
-    installSelectionGesture(this)
-    loadUrl("file:///android_asset/terminal/index.html")
-  }
-
   /**
-   * SupaBridge: каквото страницата казва на приложението. Всеки метод минава към main и оттам
-   * към екрана, който показва страницата сега ([callbacks]).
+   * SupaBridge: каквото страницата казва на приложението. Методите идват от нишката на
+   * WebView-то и минават към main. Стои преди [webView], защото той го закача при създаването си.
    */
-  private fun createBridge(): Any = object {
+  private val bridge = object {
     @JavascriptInterface
     fun ready() {
       main.post {
@@ -206,6 +198,13 @@ class TerminalPageView(private val appContext: Context, private val readyWithout
     fun tapUrl(url: String) {
       main.post { openInBrowser(context, url) }
     }
+  }
+
+  val webView: WebView = WebView(context).apply {
+    configureForTerminal()
+    addJavascriptInterface(bridge, "SupaBridge")
+    installSelectionGesture(this)
+    loadUrl("file:///android_asset/terminal/index.html")
   }
 
   /** Екранът [owner] показва страницата: линковете се отварят от неговото Activity. */
