@@ -77,7 +77,7 @@ import com.idachev.supacoderemote.ui.LocalAppContainer
 import com.idachev.supacoderemote.ui.PathChip
 
 /** „Терминал“: живият таб от Mac-а, полето за писане, клавишите и „Предложи“. */
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun TerminalScreen(key: TerminalKey, onBack: () -> Unit) {
   val container = LocalAppContainer.current
