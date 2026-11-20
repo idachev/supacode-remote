@@ -146,8 +146,7 @@ export class HostController extends EventEmitter {
    * байтовете биха изпълнили наполовина написан ред там.
    */
   input(b64, contentId) {
-    if (!this.openContentId || contentId !== this.openContentId) return false;
-    if (!this.#attachedNow(contentId)) return false;
+    if (!this.#isLiveOpenTab(contentId)) return false;
     return this.relay.send({ t: 'input', contentId: this.openContentId, b64 });
   }
 
@@ -161,6 +160,11 @@ export class HostController extends EventEmitter {
     return session != null && this.attachedIn.get(contentId) === session;
   }
 
+  /** Отвореният таб с `attached` в текущата сесия: само към него тръгват вход, ред и `resize`. */
+  #isLiveOpenTab(contentId) {
+    return Boolean(this.openContentId) && contentId === this.openContentId && this.#attachedNow(contentId);
+  }
+
   /**
    * Ред от полето: текстът, после `\r` след 150 ms (Claude Code и Codex вземат бързо дошло
    * парче за paste и `\r` в него става нов ред). Enter тръгва само ако сесията с host-а и
@@ -168,14 +172,14 @@ export class HostController extends EventEmitter {
    * а Enter би изпълнил стария ред в shell-а. Проверката е тук, защото тук се сменя сесията.
    */
   line(text, contentId) {
-    if (!this.openContentId || contentId !== this.openContentId) return false;
-    if (!this.#attachedNow(contentId)) return false;
+    if (!this.#isLiveOpenTab(contentId)) return false;
     const session = this.relay.state.hostSession;
-    if (text && !this.relay.send({ t: 'input', contentId, b64: Buffer.from(text, 'utf8').toString('base64') })) return false;
+    const sendText = (value) => this.relay.send({ t: 'input', contentId, b64: Buffer.from(value, 'utf8').toString('base64') });
+    if (text && !sendText(text)) return false;
     const enter = () => {
       // Откачен таб (`detached`) или нова сесия: Enter би изпълнил ред, който не е стигнал (КЛ8).
-      if (this.openContentId !== contentId || this.relay.state.hostSession !== session || !this.#attachedNow(contentId)) return;
-      this.relay.send({ t: 'input', contentId, b64: Buffer.from('\r').toString('base64') });
+      if (!this.#isLiveOpenTab(contentId) || this.relay.state.hostSession !== session) return;
+      sendText('\r');
     };
     if (text) setTimeout(enter, this.lineEnterDelayMs);
     else enter();
@@ -187,9 +191,8 @@ export class HostController extends EventEmitter {
    * 20…500 × 5…200 и отговаря със `size`; стар host не отговаря нищо.
    */
   resize({ contentId, cols, rows }) {
-    if (!this.openContentId || contentId !== this.openContentId) return false;
     if (!Number.isInteger(cols) || !Number.isInteger(rows)) return false;
-    if (!this.#attachedNow(contentId)) return false;
+    if (!this.#isLiveOpenTab(contentId)) return false;
     return this.relay.send({ t: 'resize', contentId, cols, rows });
   }
 
