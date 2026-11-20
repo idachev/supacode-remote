@@ -25,67 +25,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
-/** Какво трябва да направи xterm.js. Изпълнява се в реда на пристигане. */
-sealed interface TerminalCommand {
-  /** Нов `attached`: терминалът се чисти и става точно [cols] × [rows]. */
-  data class Init(val cols: Int, val rows: Int) : TerminalCommand
-
-  data class Write(val b64: String) : TerminalCommand
-
-  data class Resize(val cols: Int, val rows: Int) : TerminalCommand
-
-  /**
-   * Mac-ът не смени размера (`resize_failed`): поисканият размер вече не чака отговор, иначе
-   * по-късен `size` със същия размер би задържал шрифта, мерен за отказа.
-   */
-  data object ResizeFailed : TerminalCommand
-
-  /** Превърта историята на самия xterm.js с [pages] страници (минус е нагоре). */
-  data class ScrollPages(val pages: Int) : TerminalCommand
-
-  /** Обратно до живия край на терминала. */
-  data object ScrollToBottom : TerminalCommand
-
-  /**
-   * Скрол като от колелото / trackpad-а: страницата праща WheelEvent на xterm.js и той прави
-   * каквото прави за истинско колело — mouse report, ако програмата следи мишката, стрелки
-   * в alternate буфера, иначе превърта историята на телефона. Байтовете идват през `onInput`.
-   *
-   * [lines] е броят събития (0 — колкото за един скрол на колелото в страницата). С
-   * [programOnly] страницата скролира само ако програмата следи мишката; иначе не прави нищо,
-   * за да не тръгнат стрелки към TUI без мишка и да не мърда историята на телефона.
-   */
-  data class Wheel(val up: Boolean, val lines: Int = 0, val programOnly: Boolean = false) : TerminalCommand
-
-  /** Подпис на екрана обратно към приложението: „Най-долу“ гледа има ли нови редове. */
-  data object ReportScreen : TerminalCommand
-
-  /** Целият текст на терминала (историята и екрана) обратно към приложението, за копиране. */
-  data object RequestText : TerminalCommand
-
-  /** Колко колони и реда влизат в мястото на терминала при сегашния шрифт; идва през `onGrid`. */
-  data object MeasureGrid : TerminalCommand
-
-  /** Показва точно този диапазон като маркирано (след ◀ ▶ в лентата за маркиране). */
-  data class Select(val start: Cell, val end: Cell) : TerminalCommand
-
-  /** Маркираното в clipboard-а — точно показаното; отговорът идва през `onCopy`. */
-  data object CopySelection : TerminalCommand
-
-  data object ClearSelection : TerminalCommand
-}
-
-sealed interface AttachPhase {
-  /** Чакаме връзка и онлайн Mac. */
-  data object Waiting : AttachPhase
-
-  data object Attaching : AttachPhase
-
-  data class Attached(val cols: Int, val rows: Int) : AttachPhase
-
-  data class Detached(val reason: String) : AttachPhase
-}
-
 data class TerminalUiState(
   val phase: AttachPhase = AttachPhase.Waiting,
   val ctrlSticky: Boolean = false,
@@ -128,6 +67,9 @@ class TerminalViewModel(
 
   private val _state = MutableStateFlow(TerminalUiState())
   val state: StateFlow<TerminalUiState> = _state.asStateFlow()
+
+  /** Mac-ът държи attach-а на таба: само тогава вход, `resize` и скрол имат къде да отидат. */
+  private val attached: Boolean get() = _state.value.phase is AttachPhase.Attached
 
   /** Пазен от пула; сменя се само ако пулът го е пуснал, докато екранът още е отворен. */
   private val _session = MutableStateFlow(pool.open(contentId, this))
@@ -200,7 +142,7 @@ class TerminalViewModel(
   /** Бутонът „Свържи отново“ след `detached`. */
   fun reattach() {
     if (link.hostSession.value == null) {
-      notices.show("Няма връзка с Mac-а")
+      notices.show(NO_HOST)
       return
     }
     session.attach()
@@ -289,53 +231,51 @@ class TerminalViewModel(
     }
     cancelJump()
     session.command(TerminalCommand.ScrollToBottom)
-    if (_state.value.phase !is AttachPhase.Attached) return
+    if (!attached) return
     val replies = Channel<String>(Channel.UNLIMITED)
     val signatures = Channel<Int>(Channel.UNLIMITED)
     jumpReplies = replies
     jumpSignatures = signatures
     _state.update { it.copy(jumping = true) }
-    jumpJob = viewModelScope.launch {
-      try {
-        withTimeoutOrNull(JUMP_MAX_MS) { scrollProgramDown(replies, signatures) }
-      } finally {
-        // Нов „Най-долу“ може вече да тече; неговото състояние не се пипа.
-        if (jumpReplies === replies) {
-          jumpReplies = null
-          jumpSignatures = null
-          _state.update { it.copy(jumping = false) }
-        }
+    jumpJob = launchJump(replies, signatures)
+  }
+
+  private fun launchJump(replies: Channel<String>, signatures: Channel<Int>): Job = viewModelScope.launch {
+    try {
+      withTimeoutOrNull(JUMP_MAX_MS) { scrollProgramDown(replies, signatures) }
+    } finally {
+      // Нов „Най-долу“ може вече да тече; неговото състояние не се пипа.
+      if (jumpReplies === replies) {
+        jumpReplies = null
+        jumpSignatures = null
+        _state.update { it.copy(jumping = false) }
       }
     }
   }
 
   private suspend fun scrollProgramDown(replies: Channel<String>, signatures: Channel<Int>) {
-    val startedAt = nowMs()
-    var lastChangeAt = startedAt
-    var quietMs = JUMP_FIRST_CHANGE_MS
-    var moved = false
-    var last: Int? = null
+    val bottom = BottomDetector(startedAt = nowMs())
     while (true) {
-      // Отговорите от предишния пакет не бива да минат за отговор на новия.
-      while (replies.tryReceive().isSuccess) Unit
-      session.command(TerminalCommand.Wheel(up = false, lines = JUMP_LINES, programOnly = true))
-      withTimeoutOrNull(JUMP_REPLY_MS) { replies.receive() } ?: return
+      if (!scrollBatchDown(replies)) return
       delay(JUMP_EVERY_MS)
-      while (signatures.tryReceive().isSuccess) Unit
-      session.command(TerminalCommand.ReportScreen)
-      val signature = withTimeoutOrNull(JUMP_REPLY_MS) { signatures.receive() } ?: return
-      val now = nowMs()
-      if (last != null && signature != last) {
-        if (!moved) {
-          moved = true
-          quietMs = ((now - startedAt) * 3).coerceIn(JUMP_QUIET_MIN_MS, JUMP_QUIET_MAX_MS)
-        }
-        lastChangeAt = now
-      } else if (now - lastChangeAt >= quietMs) {
-        return
-      }
-      last = signature
+      val signature = screenSignature(signatures) ?: return
+      if (bottom.atBottom(signature, nowMs())) return
     }
+  }
+
+  /** Един пакет скрол към програмата; `false` — страницата не даде байтове (програмата не следи мишката). */
+  private suspend fun scrollBatchDown(replies: Channel<String>): Boolean {
+    // Отговорите от предишния пакет не бива да минат за отговор на новия.
+    while (replies.tryReceive().isSuccess) Unit
+    session.command(TerminalCommand.Wheel(up = false, lines = JUMP_LINES, programOnly = true))
+    return withTimeoutOrNull(JUMP_REPLY_MS) { replies.receive() } != null
+  }
+
+  /** Подписът на екрана след пакета; `null` — страницата не отговори. */
+  private suspend fun screenSignature(signatures: Channel<Int>): Int? {
+    while (signatures.tryReceive().isSuccess) Unit
+    session.command(TerminalCommand.ReportScreen)
+    return withTimeoutOrNull(JUMP_REPLY_MS) { signatures.receive() }
   }
 
   /** Подписът на екрана от страницата, за „Най-долу“. */
@@ -376,7 +316,7 @@ class TerminalViewModel(
    * `resize_failed`; стар host не отговаря нищо.
    */
   fun onGrid(cols: Int, rows: Int) {
-    if (_state.value.phase !is AttachPhase.Attached) return
+    if (!attached) return
     link.send(ResizeRequest(contentId = contentId, cols = cols, rows = rows))
   }
 
@@ -419,13 +359,13 @@ class TerminalViewModel(
    */
   fun scrollWheel(up: Boolean) {
     cancelJump()
-    if (_state.value.phase !is AttachPhase.Attached) return
+    if (!attached) return
     session.command(TerminalCommand.Wheel(up))
   }
 
   /** Байтовете, които xterm.js е произвел за скрола от [scrollWheel] (mouse report, стрелки). */
   fun onWheelInput(bytes: String) {
-    if (bytes.isEmpty() || _state.value.phase !is AttachPhase.Attached) return
+    if (bytes.isEmpty() || !attached) return
     jumpReplies?.trySend(bytes)
     sendRaw(bytes)
   }
@@ -463,12 +403,12 @@ class TerminalViewModel(
     // Вход към програмата: първо се показва задържаният изход, иначе отговорът ѝ идва
     // след стария екран.
     session.endPause(OutputPause.EndReason.Input)
-    if (_state.value.phase !is AttachPhase.Attached) {
+    if (!attached) {
       notices.show("Терминалът не е свързан")
       return false
     }
     val sent = link.send(InputRequest(contentId = contentId, b64 = TerminalBytes.encodeText(text)))
-    if (!sent) notices.show("Няма връзка — не е изпратено")
+    if (!sent) notices.show(NOT_SENT)
     return sent
   }
 
@@ -476,12 +416,12 @@ class TerminalViewModel(
   fun suggest() {
     if (_state.value.suggesting) return
     if (link.hostSession.value == null) {
-      notices.show("Няма връзка с Mac-а")
+      notices.show(NO_HOST)
       return
     }
     val id = link.nextId()
     if (!link.send(SuggestRequest(id = id, contentId = contentId))) {
-      notices.show("Няма връзка — не е изпратено")
+      notices.show(NOT_SENT)
       return
     }
     suggestId = id
@@ -516,6 +456,9 @@ class TerminalViewModel(
   }
 
   companion object {
+    private const val NO_HOST = "Няма връзка с Mac-а"
+    private const val NOT_SENT = "Няма връзка — не е изпратено"
+
     /** Моделът на Mac-а има до 90 s; малко отгоре за relay-а. */
     const val SUGGEST_TIMEOUT_MS = 100_000L
 
