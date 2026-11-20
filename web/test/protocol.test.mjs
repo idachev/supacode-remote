@@ -166,3 +166,66 @@ test('attach_limit е грешка с contentId', () => {
   assert.equal(ATTACH_LIMIT, 'attach_limit');
   assert.equal(e.contentId, 'c');
 });
+
+// КЛ3 (R31 на Mac клиента): лош елемент на масив в `list` се пропуска сам, не целият кадър.
+// Същите случаи като в `ProtocolCodecTest` на телефона.
+const decodeList = (text) => {
+  const skipped = [];
+  return { reply: decode(text, (path) => skipped.push(path)), skipped };
+};
+
+test('list с таб без contentId пропуска само този таб', () => {
+  const { reply, skipped } = decodeList(`{"t":"list","id":1,"repos":[{"id":"r","name":"repo","worktrees":[{"id":"w","name":"main","tabs":[
+    {"id":"t1","contentId":"c1"},{"id":"t2"},{"id":"t3","contentId":"c3"}]}]}]}`);
+  assert.deepEqual(reply.repos[0].worktrees[0].tabs.map((t) => t.contentId), ['c1', 'c3']);
+  assert.deepEqual(skipped, ['repos[0].worktrees[0].tabs[1]']);
+});
+
+test('лош агент пропуска само агента, табът остава', () => {
+  const { reply, skipped } = decodeList(`{"t":"list","repos":[{"id":"r","name":"repo","worktrees":[{"id":"w","name":"main","tabs":[
+    {"id":"t1","contentId":"c1","agents":[{"agent":"claude"},{"agent":"codex","activity":"idle"}]}]}]}]}`);
+  assert.deepEqual(reply.repos[0].worktrees[0].tabs[0].agents, [{ agent: 'codex', activity: 'idle' }]);
+  assert.deepEqual(skipped, ['repos[0].worktrees[0].tabs[0].agents[0]']);
+});
+
+test('worktree и repository без задължително поле се пропускат, другите остават', () => {
+  const { reply, skipped } = decodeList(`{"t":"list","repos":[
+    {"name":"no id"},
+    {"id":"r","name":"repo","rowIds":["w",{}],"worktrees":[{"id":"x"},{"id":"w","name":"main"}]}]}`);
+  assert.deepEqual(reply.repos.map((r) => r.id), ['r']);
+  assert.deepEqual(reply.repos[0].rowIds, ['w']);
+  assert.deepEqual(reply.repos[0].worktrees.map((w) => w.id), ['w']);
+  assert.deepEqual(skipped, ['repos[0]', 'repos[1].rowIds[1]', 'repos[1].worktrees[0]']);
+});
+
+test('поле, което не е масив, прави собственика лош елемент', () => {
+  const { reply, skipped } = decodeList(`{"t":"list","repos":[{"id":"r","name":"repo","worktrees":[
+    {"id":"bad","name":"bad","tabs":"x"},{"id":"w","name":"main"}]}]}`);
+  assert.deepEqual(reply.repos[0].worktrees.map((w) => w.id), ['w']);
+  assert.deepEqual(skipped, ['repos[0].worktrees[0]']);
+});
+
+test('поле с грешен тип прави елемента лош, както на телефона', () => {
+  const { reply, skipped } = decodeList(`{"t":"list","repos":[{"id":"r","name":"repo","worktrees":[
+    {"id":"w","name":"main","tabs":[{"id":"t1","contentId":"c1","focused":"yes"},{"id":"t2","contentId":"c2","title":null}]}]}]}`);
+  assert.deepEqual(reply.repos[0].worktrees[0].tabs.map((t) => t.id), ['t2']);
+  assert.deepEqual(skipped, ['repos[0].worktrees[0].tabs[0]']);
+});
+
+test('repos, което не е масив, отхвърля целия кадър', () => {
+  assert.equal(decodeList('{"t":"list","repos":{"id":"r"}}').reply, null);
+});
+
+test('секции и loadFailures пропускат лошите елементи', () => {
+  const { reply, skipped } = decodeList(`{"t":"list","repos":[],"sections":[{"title":"no kind"},{"kind":"active","worktreeIds":["a",{},"b"]}],
+    "loadFailures":[{"message":"no id"},{"repositoryId":"r2","message":"boom"}]}`);
+  assert.deepEqual(reply.sections, [{ kind: 'active', worktreeIds: ['a', 'b'] }]);
+  assert.deepEqual(reply.loadFailures, [{ repositoryId: 'r2', message: 'boom' }]);
+  assert.deepEqual(skipped, ['sections[0]', 'sections[1].worktreeIds[1]', 'loadFailures[0]']);
+});
+
+test('здрав list не докладва пропуснати и пази непознатите полета', () => {
+  const { reply, skipped } = decodeList('{"t":"list","repos":[{"id":"r","name":"repo","worktrees":[{"id":"w","name":"main","layout":{"x":1}}]}]}');
+  assert.deepEqual(reply.repos[0].worktrees[0].layout, { x: 1 });
+  assert.deepEqual(skipped, []);
+});

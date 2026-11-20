@@ -363,10 +363,13 @@ export class RelayClient extends EventEmitter {
     this.#set({ connection: 'connected', retryInMs: 0, reason: null });
   }
 
+  /** Само пътят на пропуснатия елемент на `list`, без стойности (КЛ3). */
+  #logSkipped = (path) => this.log.warn('list.element_skipped', { path });
+
   #frame(conn, text) {
     if (!this.#current(conn)) return;
     conn.lastFrameAt = Date.now();
-    const message = decode(text);
+    const message = decode(text, this.#logSkipped);
     if (!message) return;
     if (message.t === 'relay') this.#onRelayStatus(conn.ws, message);
     else if (message.t === 'hello') this.#onRelayHello(conn.ws, message);
@@ -433,7 +436,7 @@ export class RelayClient extends EventEmitter {
   }
 
   #lanText(session, text) {
-    const message = decode(text);
+    const message = decode(text, this.#logSkipped);
     if (!message) return;
     // `lan` в hello по самия LAN не значи нищо ново.
     if (message.t === 'hello') {

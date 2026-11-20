@@ -92,6 +92,92 @@ function lanInfo(lan) {
 
 const terminalSize = (o) => isStr(o.contentId) && isInt(o.cols) && isInt(o.rows);
 
+// КЛ3 (R31 на Mac клиента): `list` се чете елемент по елемент. Лош елемент на масив се пропуска и
+// се докладва с пътя си, а не губи целия списък — един таб с непознат вид не бива да скрие всички
+// табове. Поле, което изобщо не е масив, прави собственика си лош елемент, а на най-горното ниво —
+// целия кадър. Задължителните полета и типовете са тези от `Protocol.kt` на телефона; `null` е като
+// липсващо (host-ът изпуска незадължителното).
+const isBool = (v) => typeof v === 'boolean';
+const isPlainObject = (v) => v != null && typeof v === 'object' && !Array.isArray(v);
+const STRING_ITEM = { scalar: isStr };
+const AGENT = { required: { agent: isStr, activity: isStr } };
+const TAB = {
+  required: { id: isStr, contentId: isStr },
+  optional: { title: isStr, focused: isBool, working: isBool, readOnly: isBool },
+  arrays: { agents: AGENT },
+};
+const WORKTREE = {
+  required: { id: isStr, name: isStr },
+  optional: { branch: isStr, status: isStr, focused: isBool, title: isStr, working: isBool, canDeleteWorktree: isBool },
+  arrays: { tabs: TAB },
+};
+const REPOSITORY = {
+  required: { id: isStr, name: isStr },
+  optional: { group: isStr, canCreateWorktree: isBool },
+  arrays: { rowIds: STRING_ITEM, worktrees: WORKTREE },
+};
+const SECTION = {
+  required: { kind: isStr },
+  optional: { title: isStr, collapsed: isBool, repositoryId: isStr },
+  arrays: { worktreeIds: STRING_ITEM, repositoryIds: STRING_ITEM },
+};
+const LOAD_FAILURE = { required: { repositoryId: isStr }, optional: { message: isStr } };
+const LIST_ARRAYS = { repos: REPOSITORY, sections: SECTION, loadFailures: LOAD_FAILURE };
+
+/** Поле, което трябва да е масив, а не е: собственикът му не се чете. */
+class NotAnArray extends Error {}
+
+/** Копие на `obj`, в което масивите от `arrays` държат само елементите, които се четат. */
+function readableArrays(obj, arrays, path, onSkip) {
+  const out = { ...obj };
+  for (const [key, kind] of Object.entries(arrays)) {
+    const value = obj[key];
+    if (value == null) continue;
+    if (!Array.isArray(value)) throw new NotAnArray(key);
+    const arrayPath = path ? `${path}.${key}` : key;
+    out[key] = value.map((item, index) => readable(item, kind, `${arrayPath}[${index}]`, onSkip)).filter((item) => item !== SKIP);
+  }
+  return out;
+}
+
+const SKIP = Symbol('skip');
+
+/**
+ * Елементът с прочетените вътрешни масиви или `SKIP`. В `onSkip` отиват само имената на полетата
+ * и индексите, никога стойност. Пропуснатото вътре в лош елемент не се докладва: пропуска се целият.
+ */
+function readable(item, kind, path, onSkip) {
+  const skip = () => {
+    onSkip(path);
+    return SKIP;
+  };
+  if (kind.scalar) return kind.scalar(item) ? item : skip();
+  if (!isPlainObject(item)) return skip();
+  for (const [key, check] of Object.entries(kind.required ?? {})) if (!check(item[key])) return skip();
+  for (const [key, check] of Object.entries(kind.optional ?? {})) if (item[key] != null && !check(item[key])) return skip();
+  const inner = [];
+  let clean;
+  try {
+    clean = readableArrays(item, kind.arrays ?? {}, path, (p) => inner.push(p));
+  } catch (e) {
+    if (e instanceof NotAnArray) return skip();
+    throw e;
+  }
+  inner.forEach(onSkip);
+  return clean;
+}
+
+function decodeList(o, onSkip) {
+  let clean;
+  try {
+    clean = readableArrays(o, LIST_ARRAYS, '', onSkip);
+  } catch (e) {
+    if (e instanceof NotAnArray) return null;
+    throw e;
+  }
+  return { ...clean, id: optId(o.id), repos: clean.repos ?? [], sections: clean.sections ?? [] };
+}
+
 /**
  * Декодер за всеки тип съобщение. `null` при липсващо задължително поле; полета, които host-ът
  * може да изпусне, получават стойност по подразбиране.
@@ -116,8 +202,9 @@ const DECODERS = {
   }),
   // Отговорът на `watch`; `on` казва дали връзката още гледа.
   watch: (o) => ({ t: 'watch', id: optId(o.id), on: o.on === true }),
-  // Списъкът минава до екрана почти както е: там непознати стойности се търпят поотделно.
-  list: (o) => ({ ...o, id: optId(o.id), repos: Array.isArray(o.repos) ? o.repos : [], sections: Array.isArray(o.sections) ? o.sections : [] }),
+  // Списъкът минава до екрана почти както е, но без елементите, които не се четат (КЛ3);
+  // непознатите полета (напр. `layout`) остават.
+  list: decodeList,
   attached: (o) => (terminalSize(o) ? { t: 'attached', id: optId(o.id), contentId: o.contentId, cols: o.cols, rows: o.rows } : null),
   out: (o) => (isStr(o.contentId) && isStr(o.b64) ? { t: 'out', contentId: o.contentId, b64: o.b64 } : null),
   size: (o) => (terminalSize(o) ? { t: 'size', contentId: o.contentId, cols: o.cols, rows: o.rows } : null),
@@ -158,13 +245,14 @@ function parseObject(text) {
 
 /**
  * Чете съобщение от relay-а или от host-а. `null` за `ping`/`pong`, счупен JSON, непознат
- * тип или липсващо задължително поле: нищо от relay-а не бива да спира връзката.
+ * тип или липсващо задължително поле: нищо от relay-а не бива да спира връзката. Пропуснат
+ * елемент на `list` отива в `onSkip` с пътя си (`repos[0].worktrees[1]`).
  */
-export function decode(text) {
+export function decode(text, onSkip = () => {}) {
   if (text === PING || text === PONG) return null;
   const o = parseObject(text);
   const decoder = o && Object.hasOwn(DECODERS, o.t) ? DECODERS[o.t] : null;
-  return decoder ? decoder(o) : null;
+  return decoder ? decoder(o, onSkip) : null;
 }
 
 /** Съобщения, които носят потока на терминала (виж TerminalStreamGate). */

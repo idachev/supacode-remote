@@ -391,4 +391,93 @@ class ProtocolCodecTest {
       ProtocolCodec.encode(ResizeRequest(contentId = "c", cols = 64, rows = 38)),
     )
   }
+
+  // КЛ3 (R31 на Mac клиента): лош елемент на масив в `list` се пропуска сам, не целият кадър.
+
+  private fun decodeList(text: String): Pair<ListReply?, List<String>> {
+    val skipped = mutableListOf<String>()
+    val reply = ProtocolCodec.decode(text) { skipped += it } as ListReply?
+    return reply to skipped
+  }
+
+  @Test
+  fun `list с таб без contentId пропуска само този таб`() {
+    val (reply, skipped) = decodeList(
+      """{"t":"list","id":1,"repos":[{"id":"r","name":"repo","worktrees":[{"id":"w","name":"main","tabs":[
+        {"id":"t1","contentId":"c1"},{"id":"t2"},{"id":"t3","contentId":"c3"}]}]}]}""",
+    )
+    assertEquals(listOf("c1", "c3"), reply!!.repos.single().worktrees.single().tabs.map { it.contentId })
+    assertEquals(listOf("repos[0].worktrees[0].tabs[1]"), skipped)
+  }
+
+  @Test
+  fun `лош агент пропуска само агента, табът остава`() {
+    val (reply, skipped) = decodeList(
+      """{"t":"list","repos":[{"id":"r","name":"repo","worktrees":[{"id":"w","name":"main","tabs":[
+        {"id":"t1","contentId":"c1","agents":[{"agent":"claude"},{"agent":"codex","activity":"idle"}]}]}]}]}""",
+    )
+    val tab = reply!!.repos.single().worktrees.single().tabs.single()
+    assertEquals(listOf(AgentBadge("codex", "idle")), tab.agents)
+    assertEquals(listOf("repos[0].worktrees[0].tabs[0].agents[0]"), skipped)
+  }
+
+  @Test
+  fun `worktree и repository без задължително поле се пропускат, другите остават`() {
+    val (reply, skipped) = decodeList(
+      """{"t":"list","repos":[
+        {"name":"no id"},
+        {"id":"r","name":"repo","rowIds":["w",{}],"worktrees":[{"id":"x"},{"id":"w","name":"main"}]}]}""",
+    )
+    val repo = reply!!.repos.single()
+    assertEquals("r", repo.id)
+    assertEquals(listOf("w"), repo.rowIds)
+    assertEquals(listOf("w"), repo.worktrees.map { it.id })
+    assertEquals(listOf("repos[0]", "repos[1].rowIds[1]", "repos[1].worktrees[0]"), skipped)
+  }
+
+  @Test
+  fun `поле, което не е масив, прави собственика лош елемент`() {
+    val (reply, skipped) = decodeList(
+      """{"t":"list","repos":[{"id":"r","name":"repo","worktrees":[
+        {"id":"bad","name":"bad","tabs":"x"},{"id":"w","name":"main"}]}]}""",
+    )
+    assertEquals(listOf("w"), reply!!.repos.single().worktrees.map { it.id })
+    assertEquals(listOf("repos[0].worktrees[0]"), skipped)
+  }
+
+  @Test
+  fun `поле с грешен тип прави елемента лош`() {
+    val (reply, skipped) = decodeList(
+      """{"t":"list","repos":[{"id":"r","name":"repo","worktrees":[
+        {"id":"w","name":"main","tabs":[{"id":"t1","contentId":"c1","focused":"yes"},{"id":"t2","contentId":"c2","title":null}]}]}]}""",
+    )
+    assertEquals(listOf("t2"), reply!!.repos.single().worktrees.single().tabs.map { it.id })
+    assertEquals(listOf("repos[0].worktrees[0].tabs[0]"), skipped)
+  }
+
+  @Test
+  fun `repos, което не е масив, отхвърля целия кадър`() {
+    val (reply, _) = decodeList("""{"t":"list","repos":{"id":"r"}}""")
+    assertNull(reply)
+  }
+
+  @Test
+  fun `секции и loadFailures пропускат лошите елементи`() {
+    val (reply, skipped) = decodeList(
+      """{"t":"list","repos":[],"sections":[{"title":"no kind"},{"kind":"active","worktreeIds":["a",{},"b"]}],
+        "loadFailures":[{"message":"no id"},{"repositoryId":"r2","message":"boom"}]}""",
+    )
+    assertEquals(listOf(SidebarSection(kind = "active", worktreeIds = listOf("a", "b"))), reply!!.sections)
+    assertEquals(listOf(LoadFailure("r2", "boom")), reply.loadFailures)
+    assertEquals(listOf("sections[0]", "sections[1].worktreeIds[1]", "loadFailures[0]"), skipped)
+  }
+
+  @Test
+  fun `здрав list не докладва пропуснати`() {
+    val (reply, skipped) = decodeList(
+      """{"t":"list","repos":[{"id":"r","name":"repo","worktrees":[{"id":"w","name":"main"}]}]}""",
+    )
+    assertEquals("w", reply!!.repos.single().worktrees.single().id)
+    assertEquals(emptyList<String>(), skipped)
+  }
 }

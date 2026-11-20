@@ -1,10 +1,15 @@
 package com.idachev.supacoderemote.protocol
 
 import com.idachev.supacoderemote.relay.LanInfo
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
@@ -374,16 +379,16 @@ object ProtocolCodec {
   /**
    * Връща `null` за `pong`, за непознат тип и за счупен JSON: нищо от relay-а не бива
    * да спира връзката. Типът се чете ръчно, защото `list`, `watch`, `suggest` и `tab.new` имат едно
-   * и също `t` в двете посоки.
+   * и също `t` в двете посоки. Пропуснат елемент на `list` отива в [onSkip] с пътя си.
    */
-  fun decode(text: String): ServerMessage? {
+  fun decode(text: String, onSkip: (String) -> Unit = {}): ServerMessage? {
     if (text == PONG || text == PING) return null
     return try {
       val obj: JsonObject = json.parseToJsonElement(text).jsonObject
       val serializer = when (obj["t"]?.jsonPrimitive?.contentOrNull) {
         "relay" -> RelayStatus.serializer()
         "hello" -> HelloReply.serializer()
-        "list" -> ListReply.serializer()
+        "list" -> return decodeList(obj, onSkip)
         "watch" -> WatchReply.serializer()
         "attached" -> Attached.serializer()
         "out" -> Output.serializer()
@@ -400,6 +405,85 @@ object ProtocolCodec {
     } catch (_: SerializationException) {
       null
     } catch (_: IllegalArgumentException) {
+      null
+    }
+  }
+
+  /** Масив в `list`, който се чете елемент по елемент; [nested] са масивите вътре в елемента. */
+  private class LossyArray(
+    val key: String,
+    val serializer: KSerializer<*>,
+    val nested: List<LossyArray> = emptyList(),
+  )
+
+  private val listArrays = listOf(
+    LossyArray(
+      "repos",
+      Repository.serializer(),
+      listOf(
+        LossyArray("rowIds", String.serializer()),
+        LossyArray(
+          "worktrees",
+          Worktree.serializer(),
+          listOf(LossyArray("tabs", Tab.serializer(), listOf(LossyArray("agents", AgentBadge.serializer())))),
+        ),
+      ),
+    ),
+    LossyArray(
+      "sections",
+      SidebarSection.serializer(),
+      listOf(LossyArray("worktreeIds", String.serializer()), LossyArray("repositoryIds", String.serializer())),
+    ),
+    LossyArray("loadFailures", LoadFailure.serializer()),
+  )
+
+  /**
+   * `list` първо се чете цял, както всяко съобщение. Ако не става, се чете наново елемент по
+   * елемент (КЛ3, R31 на Mac клиента): лош елемент на масив се пропуска, а не губи целия списък —
+   * един таб с непознат вид не бива да скрие всички Mac-ове и табове. Поле, което изобщо не е
+   * масив, прави собственика си лош елемент, а на най-горното ниво — целия кадър.
+   */
+  private fun decodeList(obj: JsonObject, onSkip: (String) -> Unit): ListReply =
+    try {
+      json.decodeFromJsonElement(ListReply.serializer(), obj)
+    } catch (_: SerializationException) {
+      json.decodeFromJsonElement(ListReply.serializer(), readableArrays(obj, listArrays, "", onSkip))
+    }
+
+  /** Копие на [obj], в което масивите от [arrays] държат само елементите, които се четат. */
+  private fun readableArrays(
+    obj: JsonObject,
+    arrays: List<LossyArray>,
+    path: String,
+    onSkip: (String) -> Unit,
+  ): JsonObject {
+    val out = obj.toMutableMap()
+    for (array in arrays) {
+      val value = obj[array.key]
+      if (value == null || value is JsonNull) continue
+      val items = value as? JsonArray ?: throw SerializationException("${array.key} не е масив")
+      val arrayPath = if (path.isEmpty()) array.key else "$path.${array.key}"
+      out[array.key] = JsonArray(items.mapIndexedNotNull { index, item -> readable(item, array, "$arrayPath[$index]", onSkip) })
+    }
+    return JsonObject(out)
+  }
+
+  /**
+   * Елементът с прочетените вътрешни масиви или `null`, ако не се чете. В [onSkip] отиват само
+   * имената на полетата и индексите, никога стойност. Пропуснатото вътре в лош елемент не се
+   * докладва: пропуска се целият елемент.
+   */
+  private fun readable(item: JsonElement, array: LossyArray, path: String, onSkip: (String) -> Unit): JsonElement? {
+    val inner = mutableListOf<String>()
+    return try {
+      val clean = if (array.nested.isNotEmpty() && item is JsonObject) readableArrays(item, array.nested, path, inner::add) else item
+      json.decodeFromJsonElement(array.serializer, clean)
+      inner.forEach(onSkip)
+      clean
+    } catch (_: RuntimeException) {
+      // Освен SerializationException: обект на мястото на низ (`rowIds:[{}]`) kotlinx отказва с
+      // IndexOutOfBoundsException, защото тук елементът се чете сам, а не вътре в обект.
+      onSkip(path)
       null
     }
   }

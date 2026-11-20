@@ -46,7 +46,7 @@ class AppContainer(context: Context) {
     .connectTimeout(Duration.ofSeconds(15))
     .build()
 
-  val relay: RelayClient = RelayClient(http, appScope, selection = settingsStore)
+  val relay: RelayClient = RelayClient(http, appScope, selection = settingsStore, log = { Log.w("RelayClient", it) })
 
   val sessions: SessionsRepository = SessionsRepository(relay, appScope)
 

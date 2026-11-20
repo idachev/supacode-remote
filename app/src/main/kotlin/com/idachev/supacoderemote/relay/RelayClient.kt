@@ -118,6 +118,8 @@ class RelayClient(
   private val scope: CoroutineScope,
   private val timing: Timing = Timing(),
   private val selection: HostSelection = MemoryHostSelection(),
+  /** Предупреждения без стойности (пропуснат елемент на `list`); в приложението — Logcat. */
+  private val log: (String) -> Unit = {},
 ) : HostLink {
 
   /** Паузите са тук, за да може тестът да ги свие. */
@@ -403,6 +405,11 @@ class RelayClient(
     }
   }
 
+  /** Само пътят на пропуснатия елемент (`repos[0].worktrees[1]`), без стойности (КЛ3). */
+  private fun logSkipped(path: String) {
+    log("list: пропуснат елемент, който не се чете: $path")
+  }
+
   /** `hello` от свързания Mac по [source]: неговите caps, ако сокетът още е жив. */
   private fun rememberCaps(source: Any, caps: List<String>) {
     synchronized(lock) {
@@ -519,7 +526,7 @@ class RelayClient(
       override fun onMessage(webSocket: WebSocket, text: String) {
         if (finished.get() || attempt != attempts.get()) return
         lastFrameAt = System.currentTimeMillis()
-        val message = ProtocolCodec.decode(text) ?: return
+        val message = ProtocolCodec.decode(text, ::logSkipped) ?: return
         when (message) {
           is RelayStatus -> if (!onRelayStatus(webSocket, message, attempt)) return
           is HelloReply -> {
@@ -705,7 +712,7 @@ class RelayClient(
       // Затворена сесия (смяна на Mac-а, restart) може да донесе още кадри: те са от стария Mac.
       if (lan !== session) return
       lanLastFrameAt = System.currentTimeMillis()
-      val message = ProtocolCodec.decode(text) ?: return
+      val message = ProtocolCodec.decode(text, ::logSkipped) ?: return
       // `lan` в hello по самия LAN не значи нищо ново.
       if (message is HelloReply) {
         onOwnHello(message)
