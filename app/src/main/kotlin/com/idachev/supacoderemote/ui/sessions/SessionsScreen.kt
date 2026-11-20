@@ -181,17 +181,14 @@ fun SessionsScreen(
     }
   }
   confirmDelete?.let { (worktree, repoName) ->
-    AlertDialog(
-      onDismissRequest = { confirmDelete = null },
-      title = { Text("Изтрий worktree") },
-      text = { Text("Изтрий worktree ${worktree.name} в $repoName? Папката и терминалите му се затварят; branch-ът остава.") },
-      confirmButton = {
-        TextButton(onClick = {
-          confirmDelete = null
-          container.worktreeActions.delete(worktree.id, worktree.name)
-        }) { Text("Изтрий", color = MaterialTheme.colorScheme.error) }
+    DeleteWorktreeDialog(
+      worktree,
+      repoName,
+      onConfirm = {
+        confirmDelete = null
+        container.worktreeActions.delete(worktree.id, worktree.name)
       },
-      dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text("Отказ") } },
+      onDismiss = { confirmDelete = null },
     )
   }
   worktreeDialog?.let { dialog ->
@@ -205,6 +202,20 @@ fun SessionsScreen(
       onDismiss = newWorktree::dismiss,
     )
   }
+}
+
+/** „Изтрий worktree …?“: изтриването маха папката на Mac-а, затова първо се пита. */
+@Composable
+private fun DeleteWorktreeDialog(worktree: Worktree, repoName: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    title = { Text("Изтрий worktree") },
+    text = { Text("Изтрий worktree ${worktree.name} в $repoName? Папката и терминалите му се затварят; branch-ът остава.") },
+    confirmButton = {
+      TextButton(onClick = onConfirm) { Text("Изтрий", color = MaterialTheme.colorScheme.error) }
+    },
+    dismissButton = { TextButton(onClick = onDismiss) { Text("Отказ") } },
+  )
 }
 
 /** „Опресни“ (ЗД13): Mac-ът чете worktree-тата от git наново, напр. след изтриване от терминала. */
