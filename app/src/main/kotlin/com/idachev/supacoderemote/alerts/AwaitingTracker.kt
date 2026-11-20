@@ -2,6 +2,8 @@ package com.idachev.supacoderemote.alerts
 
 import com.idachev.supacoderemote.protocol.AgentActivity
 import com.idachev.supacoderemote.protocol.Repository
+import com.idachev.supacoderemote.protocol.Tab
+import com.idachev.supacoderemote.protocol.Worktree
 
 /** Таб, в който агент чака вход — всичко нужно за известието и за отваряне на терминала. */
 data class AwaitingTab(
@@ -48,20 +50,19 @@ class AwaitingTracker {
 
   /** Табовете с агент в `awaitingInput`, в реда на списъка. */
   private fun awaitingTabs(repos: List<Repository>): List<AwaitingTab> =
-    repos.flatMap { repo ->
-      repo.worktrees.flatMap { wt ->
-        wt.tabs.mapNotNull { tab ->
-          val agent = tab.agents.firstOrNull { AgentActivity.of(it.activity) == AgentActivity.AWAITING_INPUT }
-            ?: return@mapNotNull null
-          AwaitingTab(
-            contentId = tab.contentId,
-            repositoryId = repo.id,
-            worktreeId = wt.id,
-            worktreeName = wt.displayName,
-            tabTitle = tab.title?.ifBlank { null } ?: "Таб",
-            agent = agent.agent,
-          )
-        }
-      }
-    }
+    repos.flatMap { repo -> repo.worktrees.map { repo to it } }
+      .flatMap { (repo, wt) -> wt.tabs.mapNotNull { tab -> awaitingTab(repo, wt, tab) } }
+
+  /** `null`, ако никой агент в таба не чака вход. */
+  private fun awaitingTab(repo: Repository, wt: Worktree, tab: Tab): AwaitingTab? {
+    val agent = tab.agents.firstOrNull { AgentActivity.of(it.activity) == AgentActivity.AWAITING_INPUT } ?: return null
+    return AwaitingTab(
+      contentId = tab.contentId,
+      repositoryId = repo.id,
+      worktreeId = wt.id,
+      worktreeName = wt.displayName,
+      tabTitle = tab.title?.ifBlank { null } ?: "Таб",
+      agent = agent.agent,
+    )
+  }
 }

@@ -55,7 +55,7 @@ class AgentWatchService : Service() {
 
   /**
    * Постоянното известие на foreground service-а. Пуснат със `startForegroundService`, service-ът
-   * трябва да го покаже до няколко секунди, затова е преди всичко друго — и когато веднага спира.
+   * трябва да го покаже до няколко секунди, затова е в началото на [onCreate] — и когато веднага спира.
    */
   private fun startAsForeground() {
     val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -66,7 +66,6 @@ class AgentWatchService : Service() {
     ServiceCompat.startForeground(this, NOTIFICATION_ID, watchNotification(), type)
   }
 
-  /** Докосване отваря приложението там, където е било. */
   private fun watchNotification(): Notification {
     val tapIntent = PendingIntent.getActivity(
       this,

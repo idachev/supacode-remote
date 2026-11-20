@@ -150,11 +150,14 @@ private fun ShowNotices(snackbar: SnackbarHostState) {
 private fun CloseDeletedWorktrees(backStack: MutableList<NavKey>) {
   val container = LocalAppContainer.current
   LaunchedEffect(Unit) {
-    container.worktreeActions.deleted.collect { worktreeId ->
-      val at = backStack.indexOfFirst { it is WorktreeKey && it.worktreeId == worktreeId }
-      if (at > 0) while (backStack.size > at) backStack.removeAt(backStack.lastIndex)
-    }
+    container.worktreeActions.deleted.collect { backStack.closeWorktree(it) }
   }
+}
+
+/** Маха worktree-то [worktreeId] и всичко над него; „Сесии“ на дъното остава. */
+private fun MutableList<NavKey>.closeWorktree(worktreeId: String) {
+  val at = indexOfFirst { it is WorktreeKey && it.worktreeId == worktreeId }
+  if (at > 0) while (size > at) removeAt(lastIndex)
 }
 
 /**

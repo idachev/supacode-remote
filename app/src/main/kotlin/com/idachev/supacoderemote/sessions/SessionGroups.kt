@@ -118,14 +118,17 @@ object SessionGroups {
     private val owner = repos.flatMap { r -> r.worktrees.map { it.id to r } }.toMap()
 
     fun build(sections: List<SidebarSection>): List<SessionRow> = buildList {
-      sections.forEachIndexed { index, section ->
-        when (section.kind) {
-          SidebarSection.ACTIVE, SidebarSection.PINNED -> addWorktreeSection(index, section)
-          SidebarSection.GROUP -> addGroup(index, section)
-          SidebarSection.REPOSITORY -> section.repositoryId?.let(repoById::get)?.takeIf(::shown)
-            ?.let { addRepository(it, "$index") }
-          else -> Unit
-        }
+      sections.forEachIndexed { index, section -> addSection(index, section) }
+    }
+
+    /** Непознат вид секция се прескача (виж [SidebarSection]). */
+    private fun MutableList<SessionRow>.addSection(index: Int, section: SidebarSection) {
+      when (section.kind) {
+        SidebarSection.ACTIVE, SidebarSection.PINNED -> addWorktreeSection(index, section)
+        SidebarSection.GROUP -> addGroup(index, section)
+        SidebarSection.REPOSITORY -> section.repositoryId?.let(repoById::get)?.takeIf(::shown)
+          ?.let { addRepository(it, "$index") }
+        else -> Unit
       }
     }
 
