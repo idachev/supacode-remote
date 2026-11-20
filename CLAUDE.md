@@ -45,7 +45,8 @@ Navigation 3. compileSdk и targetSdk са 36 (template-ът иска 37, но p
 ## Протоколът
 
 - Договорът е `docs/remote-access-protocol.md` в Supacode. Промяна там първо се отразява в
-  `protocol/Protocol.kt` и в `ProtocolCodecTest`, после в екраните.
+  `protocol/Protocol.kt` (моделите) и `protocol/ProtocolCodec.kt` (четенето и писането), с
+  `ProtocolCodecTest`, после в екраните.
 - Незадължителните полета (`group`, `title`) host-ът **изпуска**, а не праща `null`.
   Моделите имат стойност по подразбиране за всяко поле, което може да липсва.
 - `status` и `activity` остават низове в модела; enum-ът е само за показване, с резервна
@@ -215,7 +216,8 @@ Navigation 3. compileSdk и targetSdk са 36 (template-ът иска 37, но p
 ## Проверка
 
 - Твърдение за интерфейса се доказва със **снимка от емулатора**, не по памет.
-- Локален mock на relay + Mac: `cd tools && npm install && node mock-host.mjs`
+- Локален mock на relay + Mac: `cd tools && npm install && node mock-host.mjs` (входът; частите са в
+  `tools/mock-*.mjs` по отговорност)
   (порт 8787, ключ `test-key`). Ключът за връзка от emulator-а е
   `http://10.0.2.2:8787/test-key`.
   Таб-овете са истински shell-ове; в лога на mock-а се вижда всеки вход като текст и hex.

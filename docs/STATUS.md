@@ -5,6 +5,16 @@
 
 ## Направено
 
+- **ЧК. Clean-code преглед на целия код (Android, уеб, mock).** Готово (2026-11-20): само
+  рефакторинг по skill-овете clean-code и architecture-fundamentals, в три паралелни агента.
+  Kotlin: `ProtocolCodec` в свой файл (без цикъл `protocol ↔ relay`), `RelayClient`, `LanSession`,
+  gate, сесиите, известията и навигацията на по-малки функции; `TerminalSession` /
+  `TerminalViewModel` / `TerminalScreen` разделени (`TerminalInputBar.kt`, `BottomDetector`),
+  `terminal.js` без функции над праговете. Уеб: `app.js` 641 → 425 реда (`live-terminals.js`,
+  `worktree-requests.js`), `attach.mjs`, `QueryFilter`, `HostController`; mock-ът е на модули
+  (`tools/mock-*.mjs`), входът и командите са същите. Тестове: Kotlin 300, уеб 290; проба в
+  emulator-а ЕМ1–ЕМ9 (терминал, „Живи клавиши“ с Gboard и кирилица, маркиране, линк, размер,
+  банер, навигация, височина на WebView-то) — всичко минава.
 - **УА14. SHA на уеб app-а.** Готово (2026-11-20): „Настройка“ показва кой код върти сървърът —
   „Уеб app <sha> (с промени) · пуснат … UTC“, както „Версия … · SHA“ на телефона; `server.started`
   в лога носи `sha` и `dirty`. Четенето е веднъж при пускане (`src/build-info.mjs`), без git — „без
