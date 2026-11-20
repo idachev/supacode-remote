@@ -92,17 +92,7 @@ fun ConnectionBanner(modifier: Modifier = Modifier) {
   val offlineText = hostOfflineText()
   // По LAN Mac-ът е там, каквото и да казва relay-ът.
   if (path == LinkPath.LAN) return
-  val text: String = when (val s = state) {
-    ConnectionState.Idle -> return
-    ConnectionState.Connecting -> "Свързване с relay-а…"
-    ConnectionState.Connected -> if (hostOnline) return else offlineText
-    is ConnectionState.Waiting -> buildString {
-      append("Няма връзка")
-      s.reason?.let { append(": ").append(it) }
-      if (s.retryInMs > 0) append(". Нов опит след ${(s.retryInMs + 999) / 1000} s")
-    }
-    ConnectionState.Unauthorized -> "Грешен ключ"
-  }
+  val text = bannerText(state, hostOnline, offlineText) ?: return
   val offline = state == ConnectionState.Connected
   Surface(
     color = if (offline) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.errorContainer,
@@ -118,6 +108,19 @@ fun ConnectionBanner(modifier: Modifier = Modifier) {
       }
     }
   }
+}
+
+/** Текстът на банера за [state]; `null` — при добра връзка банер няма. */
+private fun bannerText(state: ConnectionState, hostOnline: Boolean, offlineText: String): String? = when (state) {
+  ConnectionState.Idle -> null
+  ConnectionState.Connecting -> "Свързване с relay-а…"
+  ConnectionState.Connected -> if (hostOnline) null else offlineText
+  is ConnectionState.Waiting -> buildString {
+    append("Няма връзка")
+    state.reason?.let { append(": ").append(it) }
+    if (state.retryInMs > 0) append(". Нов опит след ${(state.retryInMs + 999) / 1000} s")
+  }
+  ConnectionState.Unauthorized -> "Грешен ключ"
 }
 
 /** По кой път вървят заявките: „LAN“ (пряко до Mac-а) или „Relay“. Без връзка го няма. */
