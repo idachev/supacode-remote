@@ -500,7 +500,7 @@ class RelayClient(
       val message = ProtocolCodec.decode(text, ::logSkipped) ?: return
       when (message) {
         is RelayStatus -> if (!onRelayStatus(webSocket, message, attempt.number)) return
-        is HelloReply -> onHelloViaRelay(webSocket, message)
+        is HelloReply -> onRelayHello(webSocket, message)
         else -> Unit
       }
       deliver(webSocket, message)
@@ -538,13 +538,13 @@ class RelayClient(
     }
   }
 
-  /** `hello` по relay-а: името и caps само от свързания Mac, после евентуалният LAN. */
-  private fun onHelloViaRelay(webSocket: WebSocket, hello: HelloReply) {
+  /** `hello` по relay-а: името и caps само от свързания Mac, после LAN (`#onRelayHello` в уеб app-а). */
+  private fun onRelayHello(webSocket: WebSocket, hello: HelloReply) {
     if (!isForeignHello(hello)) {
       onOwnHello(hello)
       rememberCaps(webSocket, hello.caps)
     }
-    followLanOffer(hello)
+    onLanOffer(hello)
   }
 
   /**
@@ -615,7 +615,7 @@ class RelayClient(
    * бил предложен в тази връзка (напр. Mac-ът го е спрял за малко) — нов `hello` по-късно,
    * с растяща пауза, за да се върнем на LAN, щом пак е там.
    */
-  private fun followLanOffer(hello: HelloReply) {
+  private fun onLanOffer(hello: HelloReply) {
     val info = hello.lan
     synchronized(lock) {
       // `hello` от друг Mac (relay-ят е объркал потоците): без LAN към него, както при грешен fpMac.
