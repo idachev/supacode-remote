@@ -54,7 +54,8 @@ Navigation 3. compileSdk и targetSdk са 36 (template-ът иска 37, но p
   само с пътя си (`repos[0].worktrees[1]`), а не губи целия кадър (КЛ3, R31 на Mac клиента). Поле,
   което изобщо не е масив, прави собственика си лош елемент; на най-горното ниво — целия кадър.
   `ProtocolCodec.decode` и `web/src/protocol.mjs` `decode` с `onSkip`; тестове — същите случаи в
-  `ProtocolCodecTest` и `protocol.test.mjs`.
+  `ProtocolCodecTest` и `protocol.test.mjs`. Същото важи за `caps` и `lan.addrs` в `hello` и за
+  `hosts` в `relay` (КЛ7); уеб там и преди пропускаше лошите елементи, без лог.
 - Към host-а не се праща нищо, докато relay-ът не каже `hostOnline:true` — иначе relay-ът
   отговаря с грешка на всяка заявка. При всеки преход false → true: `hello`, `list` и
   нов `attach` на отворения терминал. Повторно `relay` с `hostOnline:true` (само нов
@@ -131,7 +132,9 @@ Navigation 3. compileSdk и targetSdk са 36 (template-ът иска 37, но p
   изхвърля, без опашка (КЛ2 / КЛ4, R23 на Mac клиента): иначе Enter или `y` биха стигнали до
   prompt, който потребителят още не вижда. На телефона `size` не прави фазата `Attached`, ако тя
   още не е (`TerminalSession`); в уеб app-а проверката е в `HostController` (`input`, `line`,
-  `resize`), затова важи и за `node web/attach.mjs`.
+  `resize`), затова важи и за `node web/attach.mjs`. Enter на реда, чакащ 150 ms, не тръгва и след
+  `detached` (КЛ8). Неизпратен ред остава в полето със съобщение: страницата не праща при таб,
+  който не е на живо, а отказан от Node ред се връща с текста си (`error` с `kind:"line"`, КЛ5).
 - Писането е през полето за ред (по подразбиране), реда с клавиши и „Живи клавиши“.
   Писане направо в xterm.js (onData) е изключено: в emulator-а IME-ът удвояваше буквите,
   а xterm.js отговаря сам на въпросите на програмата, което би вкарало втори отговор в PTY-то.
