@@ -4,7 +4,9 @@
 // Ghostty на Mac-а вече е отговорил на всеки въпрос в PTY-то. Ако въпросът стигне и до
 // локалния Ghostty, той също ще отговори, отговорът ще влезе в stdin на `attach` и оттам като
 // `input` в PTY-то — втори отговор, който програмата чете като въведен текст. Затова въпросите
-// не стигат до локалния терминал. Списъкът е същият като в `public/terminal.js`.
+// не стигат до локалния терминал. Въпросите са същите като в `public/terminal.js`; само тук се
+// маха и OSC 3008 (агентът на Supacode): страницата го пропуска без ефект, а локалният Supacode
+// би го взел за свой. Филтърът е пренесен и в Mac клиента на fork-а (`RemoteQueryFilter.swift`).
 //
 // Последователност може да е разделена между два `out`, затова филтърът пази състояние.
 // 8-битовите C1 (0x9b и др.) не се разпознават: в UTF-8 тези байтове са част от букви.
@@ -19,6 +21,8 @@ const CAN = 0x18;
 const SUB = 0x1a;
 const PREFIXES = new Set(['?', '>', '=', '<']);
 const OSC_QUERIES = new Set(['4', '10', '11', '12']);
+/** Сигналът на Supacode за агент в таба (присъствие); не е въпрос, но не е и за локалния терминал. */
+const PRESENCE_OSC = '3008';
 
 /** CSI въпрос по префикс, междинни байтове и финал. */
 function isCsiQuery(body) {
@@ -39,10 +43,12 @@ function isCsiQuery(body) {
 /**
  * OSC 4/10/11/12 с `?` пита за цвят; със стойност го задава и минава. OSC 52 с данни `?` (след
  * втория `;`) чете clipboard-а — локалният терминал би дал своя clipboard на програмата на Mac-а;
- * с base64 данни го задава и минава.
+ * с base64 данни го задава и минава. OSC 3008 е сигналът на Supacode за агент в таба: махнат е
+ * винаги, иначе локалният Supacode би взел агента на отдалечения Mac за свой.
  */
-function isOscQuery(body) {
+function isDroppedOsc(body) {
   const semi = body.indexOf(';');
+  if ((semi < 0 ? body : body.slice(0, semi)) === PRESENCE_OSC) return true;
   if (semi < 0) return false;
   if (body.slice(0, semi) === '52') {
     const dataSemi = body.indexOf(';', semi + 1);
@@ -88,7 +94,7 @@ export class QueryFilter {
       case 'dcs':
         if (byte === BEL && this.state === 'osc') {
           this.pending.push(byte);
-          return this.#end(out, isOscQuery(this.#body(2, 1)));
+          return this.#end(out, isDroppedOsc(this.#body(2, 1)));
         }
         this.pending.push(byte);
         if (byte === CAN || byte === SUB) return this.#flush(out);
@@ -120,7 +126,7 @@ export class QueryFilter {
     if (byte === 0x5c) {
       this.pending.push(byte);
       const body = this.#body(2, 2);
-      return this.#end(out, kind === 'osc' ? isOscQuery(body) : isDcsQuery(body));
+      return this.#end(out, kind === 'osc' ? isDroppedOsc(body) : isDcsQuery(body));
     }
     // Прекъсната последователност минава; ESC-ът е начало на нова.
     this.pending.pop();

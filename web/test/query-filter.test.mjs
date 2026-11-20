@@ -55,3 +55,13 @@ test('маха се четенето на clipboard-а с OSC 52, записът
 test('маха се DECID (ESC Z), back-tab минава', () => assert.equal(run('a\x1bZb\x1b[Z'), 'ab\x1b[Z'));
 test('въпрос след двоен ESC се маха', () => assert.equal(run('a\x1b\x1b[cb'), 'ab'));
 test('двоен ESC пред обикновена последователност я пуска с един ESC', () => assert.equal(run('\x1b\x1b[31m'), '\x1b[31m'));
+test('OSC 3008 (агентът на Supacode) се маха винаги: с BEL, с ESC \\ и без параметри', () => {
+  assert.equal(run('a\x1b]3008;start=1;agent=claude\x07b'), 'ab');
+  assert.equal(run('a\x1b]3008;end=1\x1b\\b'), 'ab');
+  assert.equal(run('a\x1b]3008\x07b'), 'ab');
+});
+test('OSC 3008, разделен на две парчета, се маха', () => assert.equal(run('a\x1b]30', '08;start=1\x07b'), 'ab'));
+test('OSC 30080 и заглавието минават', () => {
+  assert.equal(run('\x1b]30080;x\x07'), '\x1b]30080;x\x07');
+  assert.equal(run('\x1b]2;3008\x07'), '\x1b]2;3008\x07');
+});
