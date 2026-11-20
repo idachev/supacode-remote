@@ -244,13 +244,17 @@ class TerminalViewModel(
     try {
       withTimeoutOrNull(JUMP_MAX_MS) { scrollProgramDown(replies, signatures) }
     } finally {
-      // Нов „Най-долу“ може вече да тече; неговото състояние не се пипа.
-      if (jumpReplies === replies) {
-        jumpReplies = null
-        jumpSignatures = null
-        _state.update { it.copy(jumping = false) }
-      }
+      finishJump(replies)
     }
+  }
+
+  /** „Най-долу“ с [replies] свърши (дъно, таван или отказ). */
+  private fun finishJump(replies: Channel<String>) {
+    // Нов „Най-долу“ може вече да тече; неговото състояние не се пипа.
+    if (jumpReplies !== replies) return
+    jumpReplies = null
+    jumpSignatures = null
+    _state.update { it.copy(jumping = false) }
   }
 
   private suspend fun scrollProgramDown(replies: Channel<String>, signatures: Channel<Int>) {
