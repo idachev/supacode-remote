@@ -65,21 +65,27 @@ function exitText(reason, message) {
   return `Табът приключи (${reason}).`;
 }
 
-async function main() {
-  if (!process.stdin.isTTY || !process.stdout.isTTY) fail('attach иска терминал (stdin и stdout).');
+/** Ключът за връзка и избраният Mac от config-а на уеб app-а; без ключ няма с какво да се свърже. */
+async function loadSettings() {
   const config = await new ConfigStore().load();
   const settings = config.connectionKey ? parseConnectionKey(config.connectionKey) : null;
   if (!settings) fail('Няма ключ за връзка. Настрой уеб app-а (web/run.sh) и пробвай пак.');
+  return { settings, selectedHostId: config.selectedHostId };
+}
 
+/** Логът е в `attach.log` до config-а: stdout е самият терминал. */
+function openLog() {
   const logFile = createWriteStream(join(defaultConfigDir(), 'attach.log'), { flags: 'a', mode: 0o600 });
   // Логът не бива да спира процеса (пълен диск): без слушател грешката би била uncaught.
   logFile.on('error', () => {});
-  const log = createLogger({ write: (line) => logFile.write(`${line}\n`) });
-  log.info('attach.started', { pid: process.pid });
+  return createLogger({ write: (line) => logFile.write(`${line}\n`) });
+}
 
+/** Своя връзка към Mac-а и първият му `list`; без отговор няма от какво да се избере таб. */
+async function connect({ settings, selectedHostId }, log) {
   const relay = new RelayClient({ log });
   const host = new HostController(relay);
-  relay.configure(settings, config.selectedHostId);
+  relay.configure(settings, selectedHostId);
   host.setActive(true);
   process.stderr.write('Свързване с Mac-а…\n');
   const list = await firstList(host);
@@ -87,18 +93,13 @@ async function main() {
     relay.stop();
     fail('Mac-ът не отговори.');
   }
-  const tab = await chooseTab(listTabs(list), process.argv[2]);
+  return { relay, host, list };
+}
 
-  const session = new AttachSession({
-    host,
-    contentId: tab.contentId,
-    write: (buf) => process.stdout.write(buf),
-    localSize: () => ({ cols: process.stdout.columns, rows: process.stdout.rows }),
-    log,
-  });
-
+/** Изходът, само веднъж: първо локалният терминал се връща, после връзката се затваря. */
+function makeShutdown({ session, relay, log }) {
   let stopping = false;
-  const shutdown = (code, message) => {
+  return (code, message) => {
     if (stopping) return;
     stopping = true;
     session.stop();
@@ -114,19 +115,38 @@ async function main() {
       setTimeout(() => process.exit(code), 100);
     });
   };
+}
+
+/** Сигналите, размерът на прозореца и stdin в raw режим — към сесията. */
+function wireProcess(session, shutdown, log) {
   // Неочаквана грешка след raw режима: терминалът първо се връща, после изход с код 1.
   process.on('uncaughtException', (err) => {
     log.error('attach.crashed', { error: err });
     shutdown(1, `attach: ${err?.message ?? err}`);
   });
-
   session.on('exit', ({ code, reason, message }) => shutdown(code, exitText(reason, message)));
   for (const signal of ['SIGHUP', 'SIGTERM', 'SIGINT']) process.on(signal, () => shutdown(0, null));
   process.stdout.on('resize', () => session.localResized());
-
   process.stdin.setRawMode(true);
   process.stdin.on('data', (bytes) => session.input(bytes));
   process.stdin.resume();
+}
+
+async function main() {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) fail('attach иска терминал (stdin и stdout).');
+  const saved = await loadSettings();
+  const log = openLog();
+  log.info('attach.started', { pid: process.pid });
+  const { relay, host, list } = await connect(saved, log);
+  const tab = await chooseTab(listTabs(list), process.argv[2]);
+  const session = new AttachSession({
+    host,
+    contentId: tab.contentId,
+    write: (buf) => process.stdout.write(buf),
+    localSize: () => ({ cols: process.stdout.columns, rows: process.stdout.rows }),
+    log,
+  });
+  wireProcess(session, makeShutdown({ session, relay, log }), log);
   session.start();
   log.info('attach.opened', { pid: process.pid });
 }

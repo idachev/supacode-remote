@@ -45,8 +45,7 @@ export class EscapeKeys {
   feed(bytes) {
     const text = this.partial + Buffer.from(bytes).toString('latin1');
     this.partial = '';
-    let forward = '';
-    const actions = [];
+    const out = { forward: '', actions: [] };
     let i = 0;
     while (i < text.length) {
       const rest = text.slice(i);
@@ -54,32 +53,38 @@ export class EscapeKeys {
         this.partial = rest;
         break;
       }
-      if (!this.armed) {
-        const escape = startsWithAny(rest, CTRL_RB);
-        if (escape) {
-          this.armed = true;
-          i += escape.length;
-        } else {
-          forward += rest[0];
-          i += 1;
-        }
-        continue;
-      }
-      this.armed = false;
-      const again = startsWithAny(rest, CTRL_RB);
-      const action = startsWithAny(rest, [...ACTIONS.keys()]);
-      if (again) {
-        forward += '\x1d';
-        i += again.length;
-      } else if (action) {
-        actions.push(ACTIONS.get(action));
-        i += action.length;
-        // След изхода нищо не стига до Mac-а: paste след `q` иначе би се изпълнил там.
-        if (ACTIONS.get(action) === 'quit') break;
-      } else {
-        i += keyLength(rest);
-      }
+      i += this.armed ? this.#command(rest, out) : this.#plain(rest, out);
+      // След изхода нищо не стига до Mac-а: paste след `q` иначе би се изпълнил там.
+      if (out.actions.at(-1) === 'quit') break;
     }
-    return { forward: Buffer.from(forward, 'latin1'), actions };
+    return { forward: Buffer.from(out.forward, 'latin1'), actions: out.actions };
+  }
+
+  /** Клавиш без `Ctrl+]` преди него: към Mac-а, а `Ctrl+]` чака команда. Връща изядената дължина. */
+  #plain(rest, out) {
+    const escape = startsWithAny(rest, CTRL_RB);
+    if (escape) {
+      this.armed = true;
+      return escape.length;
+    }
+    out.forward += rest[0];
+    return 1;
+  }
+
+  /**
+   * Клавишът след `Ctrl+]`: втори `Ctrl+]` стига до Mac-а като един 0x1d, `r` и `q` са команди,
+   * друг клавиш се изхвърля цял. Връща изядената дължина.
+   */
+  #command(rest, out) {
+    this.armed = false;
+    const again = startsWithAny(rest, CTRL_RB);
+    if (again) {
+      out.forward += '\x1d';
+      return again.length;
+    }
+    const action = startsWithAny(rest, [...ACTIONS.keys()]);
+    if (!action) return keyLength(rest);
+    out.actions.push(ACTIONS.get(action));
+    return action.length;
   }
 }

@@ -24,20 +24,23 @@ const OSC_QUERIES = new Set(['4', '10', '11', '12']);
 /** Сигналът на Supacode за агент в таба (присъствие); не е въпрос, но не е и за локалния терминал. */
 const PRESENCE_OSC = '3008';
 
+/** CSI въпросите по финал: дали с този префикс и междинни байтове последователността пита терминала. */
+const CSI_QUERIES = {
+  c: (prefix) => prefix === '' || prefix === '>' || prefix === '=',
+  n: (prefix) => prefix === '' || prefix === '?',
+  p: (_prefix, intermediates) => intermediates.includes('$'),
+  q: (prefix) => prefix === '>',
+  t: () => true,
+  u: (prefix) => prefix === '?',
+};
+
 /** CSI въпрос по префикс, междинни байтове и финал. */
 function isCsiQuery(body) {
-  const final = body[body.length - 1];
+  const isQuery = CSI_QUERIES[body[body.length - 1]];
+  if (!isQuery) return false;
   const prefix = PREFIXES.has(body[0]) ? body[0] : '';
   const intermediates = body.slice(prefix.length, -1).replace(/[^\x20-\x2f]/g, '');
-  switch (final) {
-    case 'c': return prefix === '' || prefix === '>' || prefix === '=';
-    case 'n': return prefix === '' || prefix === '?';
-    case 'p': return intermediates.includes('$');
-    case 'q': return prefix === '>';
-    case 't': return true;
-    case 'u': return prefix === '?';
-    default: return false;
-  }
+  return isQuery(prefix, intermediates);
 }
 
 /**
@@ -79,34 +82,37 @@ export class QueryFilter {
 
   #step(byte, out) {
     switch (this.state) {
-      case 'ground':
-        if (byte === ESC) this.#begin(byte);
-        else out.push(byte);
-        return;
-      case 'esc':
-        return this.#afterEsc(byte, out);
-      case 'csi':
-        if (byte === ESC) return this.#restart(byte, out);
-        this.pending.push(byte);
-        if (byte === CAN || byte === SUB) return this.#flush(out);
-        if (byte >= 0x40 && byte <= 0x7e) this.#end(out, isCsiQuery(this.#body(2, 0)));
-        return this.#capped(out);
+      case 'ground': return this.#inGround(byte, out);
+      case 'esc': return this.#afterEsc(byte, out);
+      case 'csi': return this.#inCsi(byte, out);
       case 'osc':
-      case 'dcs':
-        if (byte === BEL && this.state === 'osc') {
-          this.pending.push(byte);
-          return this.#end(out, isDroppedOsc(this.#body(2, 1)));
-        }
-        this.pending.push(byte);
-        if (byte === CAN || byte === SUB) return this.#flush(out);
-        if (byte === ESC) this.state += '-esc';
-        return this.#capped(out);
+      case 'dcs': return this.#inString(byte, out);
       case 'osc-esc':
-      case 'dcs-esc':
-        return this.#afterStringEsc(byte, out);
-      default:
-        return undefined;
+      case 'dcs-esc': return this.#afterStringEsc(byte, out);
+      default: return undefined;
     }
+  }
+
+  #inGround(byte, out) {
+    if (byte === ESC) this.#begin(byte);
+    else out.push(byte);
+  }
+
+  #inCsi(byte, out) {
+    if (byte === ESC) return this.#restart(byte, out);
+    this.pending.push(byte);
+    if (byte === CAN || byte === SUB) return this.#flush(out);
+    if (byte >= 0x40 && byte <= 0x7e) this.#end(out, isCsiQuery(this.#body(2, 0)));
+    return this.#capped(out);
+  }
+
+  /** OSC и DCS: OSC свършва и на BEL, двата — на `ESC \`; CAN и SUB ги прекъсват. */
+  #inString(byte, out) {
+    this.pending.push(byte);
+    if (byte === BEL && this.state === 'osc') return this.#end(out, isDroppedOsc(this.#body(2, 1)));
+    if (byte === CAN || byte === SUB) return this.#flush(out);
+    if (byte === ESC) this.state += '-esc';
+    return this.#capped(out);
   }
 
   #afterEsc(byte, out) {

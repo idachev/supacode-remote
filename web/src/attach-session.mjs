@@ -87,32 +87,33 @@ export class AttachSession extends EventEmitter {
       return;
     }
     if (message.contentId !== this.contentId) return;
-    switch (message.t) {
-      case 'attached':
-        // Нов поток: незавършена последователност от стария не бива да се слепи с новия.
-        this.filter = new QueryFilter();
-        this.macSize = { cols: message.cols, rows: message.rows };
-        this.write(Buffer.from(CLEAR, 'latin1'));
-        this.#writeTitle();
-        this.log.info('attach.attached', { cols: message.cols, rows: message.rows });
-        break;
-      case 'out':
-        this.write(this.filter.push(Buffer.from(message.b64, 'base64')));
-        break;
-      case 'size':
-        this.macSize = { cols: message.cols, rows: message.rows };
-        this.#writeTitle();
-        break;
-      case 'detached':
-        this.log.info('attach.detached', { reason: message.reason ?? '' });
-        this.emit('exit', { code: 0, reason: message.reason ?? 'detached' });
-        break;
-      case 'error':
-        this.log.warn('attach.host_error', { code: message.code ?? '', error_message: message.message ?? '' });
-        break;
-      default:
-        break;
-    }
+    this.#frames.get(message.t)?.(message);
+  }
+
+  /** Кадрите за този таб по типа им; другите типове не засягат сесията. */
+  #frames = new Map([
+    ['attached', (message) => this.#onAttached(message)],
+    ['out', (message) => this.write(this.filter.push(Buffer.from(message.b64, 'base64')))],
+    ['size', (message) => {
+      this.macSize = { cols: message.cols, rows: message.rows };
+      this.#writeTitle();
+    }],
+    ['detached', (message) => {
+      this.log.info('attach.detached', { reason: message.reason ?? '' });
+      this.emit('exit', { code: 0, reason: message.reason ?? 'detached' });
+    }],
+    ['error', (message) => {
+      this.log.warn('attach.host_error', { code: message.code ?? '', error_message: message.message ?? '' });
+    }],
+  ]);
+
+  #onAttached(message) {
+    // Нов поток: незавършена последователност от стария не бива да се слепи с новия.
+    this.filter = new QueryFilter();
+    this.macSize = { cols: message.cols, rows: message.rows };
+    this.write(Buffer.from(CLEAR, 'latin1'));
+    this.#writeTitle();
+    this.log.info('attach.attached', { cols: message.cols, rows: message.rows });
   }
 
   /**
