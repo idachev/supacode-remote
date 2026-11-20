@@ -76,14 +76,19 @@ export class LanPath {
     }
     this.connecting = false;
     if (!session || session.closed) {
-      session?.close();
-      // Кодът на грешката за всеки адрес (ECONNREFUSED, LAN_TIMEOUT …) — иначе от лога не личи
-      // дали Mac-ът не слуша, мрежата не стига или macOS е спрял достъпа до локалната мрежа.
-      this.log.info('lan.failed', { addresses: info.addrs.length, port: info.port, reasons: reasons.join(', ') || (session ? 'LAN_CLOSED_AT_OPEN' : 'unknown') });
-      this.#scheduleRetry();
+      this.#failed(info, session, reasons);
       return;
     }
     this.#adopt(session);
+  }
+
+  /** Нито един адрес не стана, или връзката падна още при отварянето: нов опит по-късно. */
+  #failed(info, session, reasons) {
+    session?.close();
+    // Кодът на грешката за всеки адрес (ECONNREFUSED, LAN_TIMEOUT …) — иначе от лога не личи
+    // дали Mac-ът не слуша, мрежата не стига или macOS е спрял достъпа до локалната мрежа.
+    this.log.info('lan.failed', { addresses: info.addrs.length, port: info.port, reasons: reasons.join(', ') || (session ? 'LAN_CLOSED_AT_OPEN' : 'unknown') });
+    this.#scheduleRetry();
   }
 
   async #connect(info, apiKey, reasons) {

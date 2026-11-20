@@ -40,6 +40,32 @@ const REPLIES = ['suggest', 'tab.new', 'worktree.new', 'worktree.delete', 'error
 export const LINE_ENTER_DELAY_MS = 150;
 
 export class HostController extends EventEmitter {
+  active = false;
+  /** Живите терминали, най-скоро гледаният първи (LRU). */
+  kept = [];
+  /**
+   * Видимият терминал — към него само вървят вход, `resize` и `suggest` (АЦ1). Ако не е
+   * `null`, е `kept[0]`; `null` — страницата не показва таб, а скритите още живеят.
+   */
+  visible = null;
+  /** Терминали от набора, които Mac-ът не държи по текущата сесия: при показване — `attach`. */
+  needsAttach = new Set();
+  /** Терминал → id на последния му `attach`: закъснял `attached` и остарял `detach` се познават по него. */
+  attachIds = new Map();
+  /** Терминал → сесията, в която е дошъл неговият `attached`. */
+  attachedIn = new Map();
+  /** Скрит терминал → в колко поредни `list` го няма (ДЗ12, ревю F4). */
+  missingFromList = new Map();
+  /** id на последния `watch` с `on:true` и сесията му; отговор с друго id не се гледа. */
+  watchId = null;
+  watchSession = null;
+  /** Сесията, в която Mac-ът отказа `watch`: в нея остава таймерът. */
+  watchRefused = null;
+  lastList = null;
+  pollTimer = null;
+  /** id на заявка → {kind, ref, timer} */
+  pending = new Map();
+
   constructor(relay, {
     listIntervalMs = 3_000, tabNewTimeoutMs = TAB_NEW_TIMEOUT_MS, worktreeNewTimeoutMs = WORKTREE_NEW_TIMEOUT_MS,
     worktreeDeleteTimeoutMs = WORKTREE_DELETE_TIMEOUT_MS, worktreesRefreshTimeoutMs = WORKTREES_REFRESH_TIMEOUT_MS,
@@ -47,9 +73,7 @@ export class HostController extends EventEmitter {
   } = {}) {
     super();
     this.timeouts = {
-      'worktree.new': worktreeNewTimeoutMs,
-      'worktree.delete': worktreeDeleteTimeoutMs,
-      'worktrees.refresh': worktreesRefreshTimeoutMs,
+      'worktree.new': worktreeNewTimeoutMs, 'worktree.delete': worktreeDeleteTimeoutMs, 'worktrees.refresh': worktreesRefreshTimeoutMs,
     };
     this.lineEnterDelayMs = lineEnterDelayMs;
     this.relay = relay;
@@ -57,32 +81,7 @@ export class HostController extends EventEmitter {
     this.listIntervalMs = listIntervalMs;
     this.tabNewTimeoutMs = tabNewTimeoutMs;
     this.keptLimit = keptLimit;
-    this.active = false;
-    /** Живите терминали, най-скоро гледаният първи (LRU). */
-    this.kept = [];
-    /**
-     * Видимият терминал — към него само вървят вход, `resize` и `suggest` (АЦ1). Ако не е
-     * `null`, е `kept[0]`; `null` — страницата не показва таб, а скритите още живеят.
-     */
-    this.visible = null;
-    /** Терминали от набора, които Mac-ът не държи по текущата сесия: при показване — `attach`. */
-    this.needsAttach = new Set();
-    /** Терминал → id на последния му `attach`: закъснял `attached` и остарял `detach` се познават по него. */
-    this.attachIds = new Map();
-    /** Терминал → сесията, в която е дошъл неговият `attached`. */
-    this.attachedIn = new Map();
-    /** Скрит терминал → в колко поредни `list` го няма (ДЗ12, ревю F4). */
-    this.missingFromList = new Map();
-    /** id на последния `watch` с `on:true` и сесията му; отговор с друго id не се гледа. */
-    this.watchId = null;
-    this.watchSession = null;
-    /** Сесията, в която Mac-ът отказа `watch`: в нея остава таймерът. */
-    this.watchRefused = null;
-    this.lastList = null;
     this.hostSession = relay.state.hostSession;
-    this.pollTimer = null;
-    /** id на заявка → {kind, ref, timer} */
-    this.pending = new Map();
     relay.on('state', (state) => this.#onState(state));
     relay.on('message', (message) => this.#onMessage(message));
   }
@@ -304,7 +303,7 @@ export class HostController extends EventEmitter {
     this.attachIds.set(contentId, id);
     this.attachedIn.delete(contentId);
     this.needsAttach.delete(contentId);
-    if (!keep) for (const other of this.kept) if (other !== contentId) this.needsAttach.add(other);
+    if (!keep) this.kept.filter((other) => other !== contentId).forEach((other) => this.needsAttach.add(other));
   }
 
   /**
@@ -407,10 +406,7 @@ export class HostController extends EventEmitter {
     // Нова сесия (или никаква): host-ът е забравил всички attach-ове и watch-а.
     for (const contentId of this.kept) this.needsAttach.add(contentId);
     this.attachedIn.clear();
-    if (state.hostSession == null) {
-      this.#syncPoll();
-      return;
-    }
+    if (state.hostSession == null) return this.#syncPoll();
     // Той не е виждал и списъка ни; видимият таб се закача веднага, скритите — при показване.
     this.#startListing();
     if (this.visible) this.#attach(this.visible);

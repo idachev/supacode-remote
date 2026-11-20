@@ -7,17 +7,14 @@ const text = (v, fallback) => (typeof v === 'string' && v ? v : fallback);
 
 /** Табовете в реда на страничната лента на Mac-а, с етикет „repo / worktree / заглавие“. */
 export function listTabs(list) {
-  const tabs = [];
-  for (const repo of arr(list?.repos)) {
-    for (const worktree of arr(repo?.worktrees)) {
-      for (const tab of arr(worktree?.tabs)) {
-        if (typeof tab?.contentId !== 'string') continue;
-        const label = [text(repo.name, '?'), text(worktree.name, '?'), text(tab.title, 'таб')].join(' / ');
-        tabs.push({ contentId: tab.contentId, label });
-      }
-    }
-  }
-  return tabs;
+  return arr(list?.repos).flatMap((repo) => arr(repo?.worktrees).flatMap((worktree) => worktreeTabs(repo, worktree)));
+}
+
+/** Табовете на едно worktree; таб без `contentId` не може да се закачи и се прескача. */
+function worktreeTabs(repo, worktree) {
+  return arr(worktree?.tabs)
+    .filter((tab) => typeof tab?.contentId === 'string')
+    .map((tab) => ({ contentId: tab.contentId, label: [text(repo.name, '?'), text(worktree.name, '?'), text(tab.title, 'таб')].join(' / ') }));
 }
 
 /** Точно `contentId`, иначе единственият таб, чийто етикет съдържа текста. */
