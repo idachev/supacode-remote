@@ -678,7 +678,8 @@ function watchTick() {
 
 function watch(c, host, msg) {
   if (host.id === 'default') return UNKNOWN_TYPE(c, msg);
-  c.watching = msg.on === true;
+  // `on` е незадължително: без него `watch` пуска гледането (протоколът, „watch“).
+  c.watching = msg.on !== false;
   log('watch', { host: host.id, client: c.id, on: c.watching });
   send(c, { t: 'watch', id: msg.id ?? null, on: c.watching });
   if (c.watching && !watchTimer) watchTimer = setInterval(watchTick, WATCH_INTERVAL_MS);

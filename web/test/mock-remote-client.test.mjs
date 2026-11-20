@@ -188,6 +188,15 @@ test('watch праща list с id null при промяна, а watch off сп�
   assert.equal(pushed().length, count, 'след watch off няма list');
 });
 
+// КЛ6: по протокола `watch` без `on` значи `on:true`; отговорът винаги носи `on`.
+test('watch без on пуска гледането', async (t) => {
+  const c = await connect();
+  t.after(() => c.close());
+  await c.request({ t: 'list' });
+  const reply = await c.request({ t: 'watch' });
+  assert.deepEqual([reply.t, reply.on], ['watch', true]);
+});
+
 test('без промяна watch не праща нищо', async (t) => {
   const c = await connect();
   t.after(() => c.close());
