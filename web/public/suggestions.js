@@ -3,9 +3,7 @@
 
 import { $, el, toast } from './dom.js';
 import { nextRef, ui } from './ui-state.js';
-
-/** Редът не тръгна: табът не е на живо. Същият текст праща и Node при отказ (`browser-link.mjs`). */
-export const LINE_NOT_SENT = 'Терминалът не е свързан — редът не е изпратен';
+import { LINE_NOT_SENT } from './line-not-sent.js';
 
 let link = null;
 let terminal = null;
